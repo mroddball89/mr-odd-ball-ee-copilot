@@ -62,7 +62,7 @@ do_install() {
     # Fail loudly here rather than at 3am on a boot nobody is watching.
     for f in "$REPO/config/$UNIT" "$REPO/config/$DESKTOP" \
              "$REPO/venv/bin/python" "$REPO/orchestrator/run_wake.py" \
-             "$REPO/tools/spike_gtk_face.py"; do
+             "$REPO/hud/float.py"; do
         [ -e "$f" ] || { echo "missing: $f" >&2; exit 1; }
     done
 

@@ -224,7 +224,7 @@ def launch(arm: str, url: str, env: dict[str, str]) -> subprocess.Popen:
         # would be measuring a browser LB never uses.
         cmd = ["chromium", "--kiosk", "--ozone-platform=wayland", url]
     else:
-        cmd = [sys.executable, str(REPO / "tools" / "spike_gtk_face.py"),
+        cmd = [sys.executable, str(REPO / "hud" / "float.py"),
                "--url", url, "--fullscreen", f"--marker={ARMS['gtk']}"]
     return subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL, start_new_session=True)

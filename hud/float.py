@@ -1,16 +1,25 @@
 #!/usr/bin/env python3
 """
-Module:  spike_gtk_face.py
-Purpose: Host the character rig in a native GTK4 window, to find out what it costs.
+Module:  float.py
+Purpose: Mr Odd Ball's window — the character, floating on the Pi's desktop.
 Author:  LB
-Date:    2026-08-13
+Date:    2026-08-13 (was tools/spike_gtk_face.py; promoted 2026-08-19)
 
-**This is a spike, not the application.** Its only job is to answer one question before any
-chat UI is designed around it: does rendering `hud/face-preview.html` inside a native
-GTK4 + WebKitGTK window cost meaningfully less than a Chromium kiosk?
+**This was a spike and is now the application.** It was written to answer one question before
+any chat UI was designed around it — does rendering `hud/face-preview.html` inside a native
+GTK4 + WebKitGTK window cost meaningfully less than a Chromium kiosk? — and the answer was
+yes, so it shipped, and `config/oddball-face.desktop` has been running it on the Pi since
+2026-08-13 (D41).
 
-It deliberately does nothing else. No chat pane, no transcript, no composer, no input path.
-Adding those would make the measurement describe a different program than the one under test.
+The chat UI now exists, and nothing in this file had to change to host it. That is the point
+of `?chat=1` being a mode of the same rig rather than a second page: the window loads a URL
+and composites it, and the URL decides whether that is him alone or him beside a transcript.
+
+    python hud/float.py --url 'http://127.0.0.1:8765/?chat=1'         --transparent --undecorated --width 1100 --height 620
+
+The rename is not cosmetic. `config/oddball-face.desktop` carried a note saying this Exec line
+was the one thing that would have to change when the chat application existed; leaving a file
+called "spike" as the shipped entry point is how the note stays true forever.
 
 What it proves, if the number is good:
 
@@ -27,10 +36,10 @@ also what will let him sit above a chat transcript later and look embedded rathe
 
 Run it against a stage (`tools/face_stage.py`) or against the live orchestrator:
 
-    python tools/spike_gtk_face.py --url http://127.0.0.1:8766/ --fullscreen
+    python hud/float.py --url http://127.0.0.1:8766/ --fullscreen
 
     # how he runs on the Pi — just the character, on the desktop
-    python tools/spike_gtk_face.py --url 'http://127.0.0.1:8765/?solo=1' \
+    python hud/float.py --url 'http://127.0.0.1:8765/?solo=1' \
         --transparent --undecorated --width 600 --height 600
 
 Needs, from apt rather than pip — PyGObject is a system package on Debian and building it
