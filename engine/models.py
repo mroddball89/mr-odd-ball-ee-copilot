@@ -54,8 +54,40 @@ The real fixes, in the order LB should consider them:
 from __future__ import annotations
 
 import os
+import warnings
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 __all__ = ["ROUTER_MODEL", "AGENT_MODEL", "PERSONA_MODEL", "FREE_TIER_DAILY_LIMIT"]
+
+# Loaded HERE, and this is the only place it should be.
+#
+# `router.py` builds its LangChain chain at import time, and ChatGoogleGenerativeAI validates
+# the key in its constructor — so the key must be in the environment before `import router`
+# happens, not before `main()` runs. `main.py` called `load_dotenv()` at the top and that was
+# enough for `python main.py`, and enough for nothing else: `python -m engine.run_voice` and
+# every harness that imports the engine went straight past it and died in Pydantic validation.
+#
+# models.py is imported by router.py before the chain is built, so putting it here fixes every
+# entry point at once, including ones not written yet.
+#
+# The path is explicit rather than `load_dotenv()` bare: the no-argument form finds the file by
+# walking up from the CALLER's frame, which fails outright under `python -` and finds the wrong
+# thing under a systemd unit whose working directory is not the repo.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(REPO_ROOT / ".env")
+
+# The lite models use fixed sampling and warn, on EVERY call, that `temperature` was ignored.
+# It is true and it is not actionable — routing wants temperature 0 and gets deterministic
+# behaviour regardless — so it is noise printed once per question, in the middle of the answer.
+#
+# Filtered narrowly by message and category rather than with a blanket
+# `warnings.filterwarnings("ignore")`, which is what the original main.py did: a global ignore
+# also hides the deprecation warnings that are the only notice LangChain gives before an
+# import moves, and this project is pinned across two LangChain 1.x minors.
+warnings.filterwarnings("ignore", message=r".*uses fixed sampling defaults.*",
+                        category=UserWarning)
 
 # Measured, not documented — from the 429 body on 2026-08-19. Here so that any code reporting
 # quota exhaustion can name the real number instead of guessing.
