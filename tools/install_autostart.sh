@@ -61,14 +61,32 @@ remove() {
 do_install() {
     # Fail loudly here rather than at 3am on a boot nobody is watching.
     for f in "$REPO/config/$UNIT" "$REPO/config/$DESKTOP" \
-             "$REPO/venv/bin/python" "$REPO/orchestrator/run_wake.py" \
+             "$REPO/venv/bin/python" "$REPO/main.py" \
              "$REPO/hud/float.py"; do
         [ -e "$f" ] || { echo "missing: $f" >&2; exit 1; }
     done
 
+    # float.py needs system PyGObject, which a plain venv does not have. Checked here rather
+    # than discovered on the next reboot, when nobody is watching and the face simply does not
+    # appear.
+    /usr/bin/python3 -c 'import gi' 2>/dev/null || {
+        echo "missing: python3-gi (his face needs it)" >&2
+        echo "  sudo apt install gir1.2-gtk-4.0 gir1.2-webkit-6.0 libwebkitgtk-6.0-4 python3-gi" >&2
+        exit 1
+    }
+
     mkdir -p "$UNIT_DIR" "$AUTOSTART_DIR"
-    command install -m 0644 "$REPO/config/$UNIT" "$UNIT_DIR/$UNIT"
-    command install -m 0644 "$REPO/config/$DESKTOP" "$AUTOSTART_DIR/$DESKTOP"
+
+    # The committed files carry the default paths so they read as working examples. They are
+    # REWRITTEN to wherever this checkout actually lives, so relocating or renaming the repo
+    # cannot leave a unit pointing at a directory that is no longer there — which is exactly
+    # what happened when the merged copilot landed in ~/mr-odd-ball beside the old ~/oddball
+    # and the installed unit still named the old one.
+    REPO_REL="${REPO#"$HOME"/}"
+    sed "s|%h/mr-odd-ball|%h/$REPO_REL|g" "$REPO/config/$UNIT" > "$UNIT_DIR/$UNIT"
+    sed "s|/home/[^/]*/mr-odd-ball|$REPO|g" "$REPO/config/$DESKTOP" > "$AUTOSTART_DIR/$DESKTOP"
+    chmod 0644 "$UNIT_DIR/$UNIT" "$AUTOSTART_DIR/$DESKTOP"
+    say "paths point at $REPO"
 
     systemctl --user daemon-reload
     systemctl --user enable "$UNIT"
@@ -82,24 +100,30 @@ do_install() {
 
     cat <<'NOTE'
 
-  He will now come up on boot: the assistant as a service, his face on the desktop.
+  He will now come up on boot: the copilot as a service, his face on the desktop.
+
+  He starts ASLEEP, in three places that agree: config/oddball.toml sets
+  wake.resting_state = "sleeping", the bridge replays that to every rig that connects, and the
+  rig's own BOOT constant is "sleeping" — so he is asleep before the socket even opens and
+  stays that way until the wake word fires.
 
   Useful:
     systemctl --user status oddball        is he running
     systemctl --user restart oddball       restart him
-    systemctl --user stop oddball          stop him (takes llama-server down too)
+    systemctl --user stop oddball          stop him
     journalctl --user -u oddball -f        follow his log
 
-  His face is JUST HIM — a 600x600 transparent, undecorated window with no backdrop, so
-  he sits on the desktop rather than covering it (D41). Wayland places it, not us.
+  His face is a 560x900 transparent, undecorated window: him at the top, the chat box under
+  him at 50% opacity. Wayland places it, not us.
     Super+drag  move him (there is no title bar to grab)
     Escape      close him
     Ctrl+Q      quit
-  Both keys need focus, so click him first. Start him again with:
-    ~/.config/autostart/oddball-face.desktop      (or re-run its Exec line)
-  For the old fullscreen-on-a-backdrop look, edit that file's Exec line: drop
-  --transparent --undecorated --width 600 --height 600, add --fullscreen, and remove
-  ?solo=1 from the URL to get the development page with all its buttons back.
+  Both keys need focus, so click him first. Start him again with the Exec line in
+    ~/.config/autostart/oddball-face.desktop
+
+  For him ALONE with no chat box — the look before the merge — change ?chat=1 to ?solo=1 in
+  that file and use --width 600 --height 600. For the development page and all its buttons,
+  drop the query string entirely.
 
 NOTE
 }

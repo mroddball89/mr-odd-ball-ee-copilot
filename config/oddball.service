@@ -15,13 +15,13 @@
 # separate autostart entry (config/oddball-face.desktop) and either can be running without the
 # other.
 Description=Mr Odd Ball — voice assistant
-Documentation=file:%h/oddball/docs/PLAN.md
+Documentation=file:%h/mr-odd-ball/docs/DEPLOY.md
 After=pipewire.service pipewire-pulse.service wireplumber.service
 Wants=pipewire.service wireplumber.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/oddball
+WorkingDirectory=%h/mr-odd-ball
 # --save-captures is ON, added 2026-08-14 while chasing false wakes.
 #
 # The flag has existed since 2026-08-13 and had never been used, so every misheard question
@@ -32,7 +32,7 @@ WorkingDirectory=%h/oddball
 #
 # Cost: a 16kHz mono WAV per captured utterance, ~50KB for 1.6s. At the observed 0.45 wakes a
 # minute that is ~2MB/hour against 97GB free. `captures/` is gitignored.
-ExecStart=%h/oddball/venv/bin/python main.py --voice --log %h/oddball/oddball.log --save-captures %h/oddball/captures
+ExecStart=%h/mr-odd-ball/venv/bin/python main.py --voice --log %h/mr-odd-ball/oddball.log --save-captures %h/mr-odd-ball/captures
 
 # ExecStart was orchestrator/run_wake.py until 2026-08-19. It is main.py --voice now: the
 # assistant and the EE copilot are one program, and main.py is its entry point. The flags are
