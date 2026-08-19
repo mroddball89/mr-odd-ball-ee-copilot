@@ -304,6 +304,7 @@ class Turn:
         The whole of the old Tier 0 / classify / brains branch collapses into `Engine.ask()`.
         That is the merge: one dispatcher, and this file goes back to being about audio.
         """
+        self._show_line("you", heard)
         response = self._engine.ask(heard)
         t.intent = response.route
         t.extras.extend(self._engine.last.extras)
@@ -318,7 +319,9 @@ class Turn:
         # silence resolves it too — as a no.
         if response.pending is not None:
             t.extras.append(f"gate {response.pending.kind}")
+            self._quiet(lambda: self._bridge.ask_approval(response.pending))
             self._bridge.set_state("listening")
+
             capture = self._capture()
             answer = ""
             if capture is not None and capture.outcome is not Outcome.SILENT:
@@ -329,20 +332,42 @@ class Turn:
             else:
                 t.extras.append("no answer to the gate")
 
+            # A click on Approve or Deny beats what was heard, because it is unambiguous and
+            # a transcript never is. Checked AFTER the capture rather than instead of it, so
+            # LB can answer with his voice OR the mouse and neither has to win a race.
+            for msg in self._quiet(lambda: self._bridge.drain_inbound()) or []:
+                if msg.get("type") == "approve":
+                    answer = "yes" if msg.get("value") else "no"
+                    t.extras.append(f"gate answered by click: {answer}")
+
+            self._quiet(self._bridge.clear_pending)
             # Empty string is deliberate and load-bearing: Engine.ask("") declines the pending
             # action AND closes the gate. Anything short of a clear yes is a no.
             outcome = self._engine.ask(answer)
             self._show(outcome)
             self._say(outcome.speech, t)
 
-    def _show(self, response) -> None:
-        """Push a Response's visual half to the rig, and never its spoken half twice."""
+        self._quiet(lambda: self._bridge.set_mode(self._engine.mode))
+
+    def _quiet(self, fn):
+        """Run a rig call, swallowing anything it throws.
+
+        A rig that is not connected, or a browser that has just been closed, must never cost
+        him his voice. The HUD is the second channel; the answer is the first, and it is
+        already synthesised and waiting by the time any of these are called.
+        """
         try:
-            if response.route:
-                self._bridge.broadcast_threadsafe({"type": "route", "value": response.route})
-            for card in response.cards:
-                self._bridge.broadcast_threadsafe({"type": "card", "value": card.to_dict()})
+            return fn()
         except Exception:                                              # noqa: BLE001
-            # A rig that is not connected must never cost him his voice. The HUD is the
-            # second channel, not the answer.
-            LOG.exception("could not push cards to the rig")
+            LOG.exception("rig call failed — carrying on without the screen")
+            return None
+
+    def _show_line(self, role: str, text: str) -> None:
+        self._quiet(lambda: self._bridge.say_line(role, text))
+
+    def _show(self, response) -> None:
+        """Push a Response's visual half to the rig."""
+        self._quiet(lambda: self._bridge.set_route(response.route))
+        self._show_line("oddball", response.speech)
+        for card in response.cards:
+            self._quiet(lambda c=card: self._bridge.show_card(c))

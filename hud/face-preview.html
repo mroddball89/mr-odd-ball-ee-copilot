@@ -87,6 +87,157 @@
   :root[data-solo="on"] .stage { padding: 0; min-height: 100vh; }
   :root[data-solo="on"] .rig-wrap { width: min(96vh, 96vw, 560px); }
 
+  /* ---------- chat: him, and what he cannot say out loud ----------
+     Opted into with ?chat=1. The THIRD mode, and the one the merged copilot runs.
+
+     ?solo=1 is him alone on the desktop, which is right until an answer contains a C
+     snippet or an IPC-2221 table. D32 measured Piper at ~160 wpm, so 40 words is about
+     15 seconds of audio and a register dump is unreadable aloud — engine/split.py sends
+     the sentence to his mouth and everything else here.
+
+     Like solo, the dev chrome is HIDDEN rather than removed: tools/verify-rig.mjs looks
+     up every id the script touches, so deleting the panel would take the rig checks down
+     with it. And like solo, the background is transparent so the GTK window can composite
+     him onto the desktop — but the chat column paints its own, because unreadable text
+     over a wallpaper is not a feature. */
+  :root[data-chat="on"] body { background: transparent; }
+  :root[data-chat="on"] header,
+  :root[data-chat="on"] .caption,
+  :root[data-chat="on"] .panel,
+  :root[data-chat="on"] .paper-grid { display: none; }
+  :root[data-chat="on"] .stage { padding: 0; min-height: 100vh; }
+
+  /* He shares the viewport now, so he shrinks. Column-wise on a narrow window: a Pi
+     screen in portrait, or the float window docked to one side. */
+  :root[data-chat="on"] .shell { display: flex; gap: 0; height: 100vh; align-items: stretch; }
+  :root[data-chat="on"] .stage { flex: 0 0 42%; display: flex; align-items: center; }
+  :root[data-chat="on"] .rig-wrap { width: min(88vh, 40vw, 420px); }
+  :root[data-chat="on"] #chat { display: flex; }
+
+  @media (max-width: 900px) {
+    :root[data-chat="on"] .shell { flex-direction: column; }
+    :root[data-chat="on"] .stage { flex: 0 0 34vh; }
+  }
+
+  /* Hidden entirely unless ?chat=1. A dev session opening the rig should see the rig. */
+  #chat { display: none; }
+
+  #chat {
+    flex: 1 1 auto;
+    min-width: 0;                 /* or a wide <pre> forces the whole flex row to scroll */
+    flex-direction: column;
+    background: rgba(16, 20, 28, 0.86);
+    backdrop-filter: blur(8px);
+    border-left: 1px solid rgba(255,255,255,0.09);
+    font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: #E6EAF2;
+  }
+
+  #chatHead {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.09);
+    font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase;
+    color: #8FA0BC;
+  }
+  #chatRoute {
+    margin-left: auto;
+    padding: 2px 8px; border-radius: 999px;
+    background: rgba(79,195,232,0.16); color: #7FD4EE;
+    font-size: 11px; letter-spacing: 0.06em;
+  }
+  #chatMode {
+    padding: 2px 8px; border-radius: 999px;
+    background: rgba(232,163,61,0.18); color: #EFC07A;
+    font-size: 11px; letter-spacing: 0.04em; text-transform: none;
+  }
+  #chatMode[hidden] { display: none; }
+
+  #chatLog { flex: 1 1 auto; overflow-y: auto; padding: 12px 14px; }
+  #chatLog > * + * { margin-top: 10px; }
+
+  .msg { display: flex; }
+  .msg .bubble {
+    max-width: 88%; padding: 7px 11px; border-radius: 12px;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+  }
+  .msg.you { justify-content: flex-end; }
+  .msg.you .bubble { background: rgba(76,127,224,0.22); border: 1px solid rgba(76,127,224,0.32); }
+  .msg.oddball .bubble { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.09); }
+
+  /* Cards. A code card is the reason this panel exists, so it gets the most care:
+     monospace, its own scroll, and a copy button — LB is going to paste this into an
+     editor, and selecting text out of a floating window with the mouse is miserable. */
+  .card {
+    border: 1px solid rgba(255,255,255,0.11); border-radius: 10px;
+    background: rgba(0,0,0,0.28); overflow: hidden;
+  }
+  .card > header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; background: rgba(255,255,255,0.05);
+    font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: #93A3BE;
+  }
+  .card .copy {
+    margin-left: auto; cursor: pointer;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+    color: #C8D2E2; border-radius: 6px; padding: 2px 8px; font-size: 11px;
+  }
+  .card .copy:hover { background: rgba(255,255,255,0.16); }
+  .card pre {
+    margin: 0; padding: 10px 12px; overflow-x: auto;    /* the card scrolls, never the page */
+    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: #DCE6F5;
+  }
+  .card.error { border-color: rgba(232,90,90,0.45); }
+  .card.error > header { background: rgba(232,90,90,0.18); color: #F0A6A6; }
+  .card .prose { padding: 9px 12px; }
+
+  .card table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .card th, .card td {
+    border: 1px solid rgba(255,255,255,0.12); padding: 5px 9px; text-align: left;
+  }
+  .card th { background: rgba(255,255,255,0.06); }
+  .card .tablewrap { overflow-x: auto; }
+
+  /* The permission gate. Deliberately loud: this is the moment something is about to run
+     on the Pi, and it must not look like another message. */
+  #chatPending {
+    margin: 10px 14px; padding: 11px 12px;
+    border: 1px solid rgba(232,163,61,0.5); border-radius: 10px;
+    background: rgba(232,163,61,0.12);
+  }
+  #chatPending[hidden] { display: none; }
+  #chatPending .q { margin-bottom: 9px; }
+  #chatPending pre {
+    margin: 0 0 10px; padding: 8px 10px; overflow-x: auto;
+    background: rgba(0,0,0,0.35); border-radius: 7px;
+    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: #FFD9A0;
+  }
+  #chatPending button {
+    cursor: pointer; border-radius: 7px; padding: 5px 14px; font-size: 13px;
+    border: 1px solid rgba(255,255,255,0.16); margin-right: 8px;
+  }
+  #btnApprove { background: rgba(95,217,164,0.22); color: #A8ECCD; }
+  #btnDeny    { background: rgba(255,255,255,0.08); color: #D6DEEB; }
+
+  #chatForm {
+    display: flex; gap: 8px; padding: 10px 12px;
+    border-top: 1px solid rgba(255,255,255,0.09);
+  }
+  #chatInput {
+    flex: 1 1 auto; min-width: 0;
+    background: rgba(255,255,255,0.06); color: #E6EAF2;
+    border: 1px solid rgba(255,255,255,0.13); border-radius: 8px;
+    padding: 8px 11px; font: inherit;
+  }
+  #chatInput:focus { outline: none; border-color: rgba(79,195,232,0.55); }
+  #chatSend {
+    cursor: pointer; border-radius: 8px; padding: 8px 15px; font: inherit;
+    background: rgba(79,195,232,0.2); color: #9FDFF3;
+    border: 1px solid rgba(79,195,232,0.34);
+  }
+
   * { box-sizing: border-box; }
 
   body {
@@ -233,6 +384,7 @@
   <span class="sub">character rig · v0.1 · procedural SVG</span>
 </header>
 
+<div class="shell">
 <main class="stage">
   <div class="rig-wrap">
     <div id="rimglow" aria-hidden="true"></div>
@@ -508,6 +660,32 @@
   </div>
 </main>
 
+<!-- The chat column. Hidden unless ?chat=1 — see the CSS block above for why this is a
+     third mode rather than a change to ?solo=1. Every id here is written by the WebSocket
+     handler at the bottom of this file. -->
+<aside id="chat">
+  <div id="chatHead">
+    <span>Mr Odd Ball</span>
+    <span id="chatMode" hidden></span>
+    <span id="chatRoute">—</span>
+  </div>
+
+  <div id="chatLog" aria-live="polite"></div>
+
+  <div id="chatPending" hidden>
+    <div class="q" id="pendingQ"></div>
+    <pre id="pendingCmd"></pre>
+    <button id="btnApprove">Approve</button>
+    <button id="btnDeny">Deny</button>
+  </div>
+
+  <form id="chatForm" autocomplete="off">
+    <input id="chatInput" placeholder="Ask him something…" aria-label="Ask Mr Odd Ball">
+    <button id="chatSend" type="submit">Send</button>
+  </form>
+</aside>
+</div>
+
 <p class="caption" id="caption" aria-live="polite"></p>
 
 <section class="panel">
@@ -566,9 +744,19 @@
   // theme attributes already live on :root and the CSS keys off the same place.
   // `?solo=0` is honoured as OFF — a flag that cannot be turned off by setting it to zero
   // is the kind of thing that wastes an evening on a machine you are SSH'd into.
+  const flagOn = (name) => {
+    const v = new URLSearchParams(location.search).get(name);
+    return v !== null && v !== "0" && v !== "false";
+  };
+
   const soloParam = new URLSearchParams(location.search).get("solo");
   if (soloParam !== null && soloParam !== "0" && soloParam !== "false")
     document.documentElement.dataset.solo = "on";
+
+  // ---- chat mode. `?chat=1` is him PLUS the panel that holds what he cannot say aloud.
+  // Same mechanism as solo and for the same reason: one file, two behaviours, no kiosk copy
+  // drifting away from the rig everything is verified against.
+  if (flagOn("chat")) document.documentElement.dataset.chat = "on";
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -1170,16 +1358,160 @@
     (location.protocol.startsWith("http") ? location.host : "127.0.0.1:8765");
   const LINK_URL = `ws://${LINK_HOST}`, LINK_RETRY_MS = 2000;
 
+  // ---------------------------------------------------------------------------------
+  // The chat channel. Everything below drives the ?chat=1 panel and nothing else — his
+  // face does not depend on any of it, which is why it is bolted on at the end rather
+  // than threaded through the rig.
+  // ---------------------------------------------------------------------------------
+
+  const CHAT_TYPES = new Set(["transcript", "card", "route", "mode", "pending"]);
+  const chatHandles = (t) => CHAT_TYPES.has(t);
+
+  // Text goes in through textContent, NEVER innerHTML. This panel renders model output and
+  // shell output verbatim, so a datasheet containing markup must render AS markup text and
+  // never as nodes. (Spelling the tag out here would trip verify-rig.mjs, which counts
+  // script blocks by scanning the file as text — a check that punishes documenting the
+  // rule is a check that gets deleted, so the comment gives way, not the check.)
+  const mk = (tag, cls, text) => {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  };
+
+  const atBottom = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+
+  function append(node) {
+    const log = $("chatLog");
+    if (!log) return;
+    // Only auto-scroll if LB was already at the bottom. Yanking the view down while he is
+    // reading a table three answers back is how a log becomes unusable.
+    const stick = atBottom(log);
+    log.appendChild(node);
+    if (stick) log.scrollTop = log.scrollHeight;
+  }
+
+  function renderTable(md) {
+    // A markdown pipe table -> a real <table>. Falls back to a <pre> when the shape is not
+    // what was promised, because a mangled table is worse than an honest monospace one.
+    const rows = md.trim().split("\n").map((r) => r.trim())
+      .filter((r) => r.startsWith("|"))
+      .map((r) => r.replace(/^\||\|$/g, "").split("|").map((c) => c.trim()));
+    const body = rows.filter((r) => !r.every((c) => /^:?-{2,}:?$/.test(c) || c === ""));
+    if (body.length < 2) return mk("pre", null, md);
+
+    const wrap = mk("div", "tablewrap"), table = document.createElement("table");
+    body.forEach((cells, i) => {
+      const tr = document.createElement("tr");
+      cells.forEach((c) => tr.appendChild(mk(i === 0 ? "th" : "td", null, c)));
+      table.appendChild(tr);
+    });
+    wrap.appendChild(table);
+    return wrap;
+  }
+
+  function renderCard(card) {
+    const kind = card.kind || "markdown";
+    const box = mk("div", "card" + (kind === "error" ? " error" : ""));
+
+    const head = mk("header");
+    head.appendChild(mk("span", null, card.title || kind));
+    if (kind === "code" || kind === "log") {
+      // Copy, because selecting text with the mouse out of a frameless always-on-top
+      // window is miserable, and this content exists to be pasted into an editor.
+      const btn = mk("button", "copy", "copy");
+      btn.type = "button";
+      btn.addEventListener("click", () => {
+        navigator.clipboard?.writeText(card.body || "").then(
+          () => { btn.textContent = "copied"; setTimeout(() => { btn.textContent = "copy"; }, 1200); },
+          () => { btn.textContent = "failed"; });
+      });
+      head.appendChild(btn);
+    }
+    box.appendChild(head);
+
+    if (kind === "table") box.appendChild(renderTable(card.body || ""));
+    else if (kind === "markdown") box.appendChild(mk("div", "prose", card.body || ""));
+    else box.appendChild(mk("pre", null, card.body || ""));
+    return box;
+  }
+
+  function chatMessage(m, ws) {
+    if (m.type === "transcript") {
+      const row = mk("div", "msg " + (m.role === "you" ? "you" : "oddball"));
+      row.appendChild(mk("div", "bubble", m.value || ""));
+      append(row);
+
+    } else if (m.type === "card") {
+      if (m.value) append(renderCard(m.value));
+
+    } else if (m.type === "route") {
+      const chip = $("chatRoute");
+      if (chip) chip.textContent = m.value || "—";
+
+    } else if (m.type === "mode") {
+      // A mode you cannot see is a mode you get stuck in (D5), and the exit phrase is
+      // printed ON the chip so the way out is never something to remember.
+      const chip = $("chatMode");
+      if (!chip) return;
+      const quiz = m.value === "quiz";
+      chip.hidden = !quiz;
+      chip.textContent = quiz ? "QUIZ MODE — say “exit quiz” to stop" : "";
+
+    } else if (m.type === "pending") {
+      const box = $("chatPending");
+      if (!box) return;
+      if (!m.value) { box.hidden = true; return; }
+      $("pendingQ").textContent = m.value.spoken || "Run this?";
+      $("pendingCmd").textContent = m.value.shown || "";
+      box.hidden = false;
+      // Scrolled into view rather than left to be noticed: this is the one message that
+      // asks for a decision, and it appears while he is already speaking the question.
+      box.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function wireChat(ws) {
+    const send = (msg) => { try { ws.send(JSON.stringify(msg)); } catch {} };
+
+    const form = $("chatForm");
+    if (form && !form.dataset.wired) {
+      form.dataset.wired = "1";
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const input = $("chatInput");
+        const text = (input.value || "").trim();
+        if (!text) return;
+        input.value = "";
+        // Echoed locally so typing feels immediate. The engine echoes the SPOKEN transcript
+        // for voice turns; a typed one never goes through STT, so this is its only echo.
+        chatMessage({ type: "transcript", role: "you", value: text });
+        send({ type: "text", value: text });
+      });
+    }
+
+    for (const [id, value] of [["btnApprove", true], ["btnDeny", false]]) {
+      const btn = $(id);
+      if (!btn || btn.dataset.wired) continue;
+      btn.dataset.wired = "1";
+      btn.addEventListener("click", () => {
+        $("chatPending").hidden = true;
+        send({ type: "approve", value });
+      });
+    }
+  }
+
   (function connect() {
     let ws;
     try { ws = new WebSocket(LINK_URL); }
     catch { return void setTimeout(connect, LINK_RETRY_MS); }
 
-    ws.onopen = () => { $("rLink").textContent = "live"; };
+    ws.onopen = () => { $("rLink").textContent = "live"; wireChat(ws); };
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m && m.type === "state") setState(m.value);
       else if (m && m.type === "gesture") playGesture(m.value);
+      else if (m && chatHandles(m.type)) chatMessage(m, ws);
       else if (m && m.type === "mouth") {
         // Clamped at ingest, not at use. An out-of-range value would drive mouthEff past
         // JAW.maxSy and push his mouth back through the silhouette — the exact bug
