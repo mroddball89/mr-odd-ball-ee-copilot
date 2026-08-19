@@ -105,7 +105,10 @@
   :root[data-chat="on"] .caption,
   :root[data-chat="on"] .panel,
   :root[data-chat="on"] .paper-grid { display: none; }
-  :root[data-chat="on"] .stage { padding: 0; min-height: 100vh; }
+  /* NOTE: no `.stage` rule here. The solo block above sets `min-height: 100vh` on it, which
+     is right when he is alone in the window and catastrophic when he is not — inside a 100vh
+     column shell it makes the face eat the whole window and squeezes the chat panel to zero
+     height. The single consolidated `.stage` override lives below, after `.shell`. */
 
   /* He sits ON TOP, the box sits UNDER him. LB asked for it that way, and it is the right
      shape for a floating window on a desktop: a tall narrow strip in a corner reads as an
@@ -117,8 +120,25 @@
     display: flex; flex-direction: column;
     height: 100vh; gap: 10px; padding: 10px;
   }
-  :root[data-chat="on"] .stage { flex: 0 0 auto; display: flex; justify-content: center; }
-  :root[data-chat="on"] .rig-wrap { width: min(42vh, 78vw, 360px); }
+
+  /* Every one of these overrides a base `.stage` property, and all of them are load-bearing.
+     The base rule is written for a page where the stage IS the layout:
+
+         .stage { flex: 1; display: grid; place-items: center; min-height: 46vh; padding: … }
+
+     `flex: 1` would make it grow and take the panel's space. `min-height: 46vh` would hold a
+     floor under it on a short window. Both have to go, and `min-height` in particular has to
+     be reset explicitly — a later rule that simply omits it does not undo it, which is how
+     the solo block's `100vh` survived into chat mode and squeezed the panel to nothing. */
+  :root[data-chat="on"] .stage {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 0;
+    padding: 0;
+  }
+  :root[data-chat="on"] .rig-wrap { width: min(38vh, 74vw, 320px); }
   :root[data-chat="on"] #chat { display: flex; }
 
   /* Hidden entirely unless ?chat=1. A dev session opening the rig should see the rig. */
