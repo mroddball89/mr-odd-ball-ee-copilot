@@ -21,6 +21,16 @@ langchain-text-splitters>=1.1        # RecursiveCharacterTextSplitter
 
 # --- Math agent ------------------------------------------------------------------------
 langchain-experimental>=0.4          # PythonREPLTool
+#
+# The REPL runs in THIS interpreter, so "available to the agent" and "installed here" are the
+# same statement. MATH_PROMPT_TEMPLATE invites it to solve filter and physics problems, and a
+# library the prompt implies but the venv lacks does not degrade — it comes back as a spoken
+# "ModuleNotFoundError", which is what the Pi actually said on 2026-08-19 when asked for a
+# derivative. tools/verify_agents.py now checks each of these can be imported FROM the sandbox.
+#
+# numpy and scipy are already pulled in by the audio stack below; sympy is not, and symbolic
+# work (derivatives, solving, simplification) is exactly what an EE student asks for.
+sympy>=1.13
 
 # --- Web agent -------------------------------------------------------------------------
 duckduckgo-search>=8.1
