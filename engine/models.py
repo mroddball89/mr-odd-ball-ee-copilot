@@ -97,15 +97,49 @@ if not os.environ.get("GOOGLE_API_KEY") and os.environ.get("GEMINI_API_KEY"):
 # constructor. Without this guard a missing key surfaces as a twenty-line Pydantic traceback
 # from inside LangChain — which, under a systemd unit on a headless Pi, is a journal entry
 # nobody can act on. The message names the file to create and the page to get a key from.
-if not os.environ.get("GOOGLE_API_KEY"):
+def _key_problem(key: str) -> str | None:
+    """Why this key cannot be real, or None if it looks plausible.
+
+    Checked at import so a bad key fails at STARTUP, next to the file that holds it, instead
+    of at question time as a spoken "my API key isn't working" with the reason buried in a log.
+
+    That is not hypothetical. On 2026-08-19 the Pi ran for twenty minutes answering every
+    question with that line, because `.env` on both boxes contained the literal string
+    `PASTE_NEW_KEY_HERE` — the placeholder out of the setup instructions, pasted verbatim. Every
+    layer behaved correctly and none of them could say the useful thing.
+
+    Deliberately NOT a format regex beyond a length floor. Google has changed its key shape at
+    least once (this project has seen both `AIza…` and `AQ.Ab8…`), and a validator that rejects
+    the next valid format is worse than no validator: it fails closed on a working key, and the
+    error tells you to fix the one thing that is not wrong.
+    """
+    if not key:
+        return "is not set"
+    lowered = key.lower()
+    for placeholder in ("paste", "your-key", "your_key", "here", "xxx", "<", ">", "example"):
+        if placeholder in lowered:
+            return f"is still the placeholder text ({key[:24]}…)" if len(key) > 24 else \
+                   f"is still the placeholder text ({key})"
+    if len(key) < 20:
+        return f"is only {len(key)} characters — real keys are around 39"
+    if any(c.isspace() for c in key):
+        return "contains whitespace, so it was probably wrapped or partly pasted"
+    return None
+
+
+_problem = _key_problem(os.environ.get("GOOGLE_API_KEY", "").strip())
+if _problem:
     raise SystemExit(
-        f"\nNo Gemini API key.\n\n"
-        f"  Create:  {ENV_FILE}\n"
-        f"  Content: GOOGLE_API_KEY=your-key-here\n\n"
-        f"Get a key from https://aistudio.google.com/apikey — the free tier is "
-        f"{FREE_TIER_DAILY_LIMIT} requests per model per day.\n"
-        f"`.env` is gitignored and is excluded from the deploy, so it is created once on each "
-        f"machine and never syncs.\n"
+        f"\nThe Gemini API key {_problem}.\n\n"
+        f"  File:    {ENV_FILE}\n"
+        f"  Content: GOOGLE_API_KEY=AIza...        <- the actual key, not this text\n\n"
+        f"Get one from https://aistudio.google.com/apikey — the free tier is "
+        f"{FREE_TIER_DAILY_LIMIT} requests per model per day.\n\n"
+        f"On the Pi, avoid retyping it — pipe it in so nothing can be truncated:\n"
+        f"  read -rs KEY && printf 'GOOGLE_API_KEY=%s\\n' \"$KEY\" > {ENV_FILE} "
+        f"&& chmod 600 {ENV_FILE}\n\n"
+        f"`.env` is gitignored and excluded from the deploy, so it is created once per machine "
+        f"and never syncs.\n"
     )
 
 # The lite models use fixed sampling and warn, on EVERY call, that `temperature` was ignored.
