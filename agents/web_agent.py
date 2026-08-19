@@ -2,6 +2,8 @@ import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from tools.web_search import perform_web_search
+from engine.llm_text import extract_text_content
+from engine.split import SPOKEN_INSTRUCTION
 from tools.memory_manager import format_memory_for_llm
 
 WEB_PROMPT_TEMPLATE = """
@@ -19,21 +21,14 @@ Result: Web Search Result: The 4GB model is $60 and the 8GB model is $80.
 AI: Based on current web results, the Raspberry Pi 5 is priced around $60 for the 4GB model and $80 for the 8GB model.
 
 User Question: {question}
-"""
+""" + SPOKEN_INSTRUCTION
 
-def extract_text_content(content) -> str:
-    """Extracts clean text from LLM response objects, removing API metadata and signatures."""
-    if isinstance(content, str):
-        return content
-    elif isinstance(content, list):
-        text_parts = []
-        for block in content:
-            if isinstance(block, str):
-                text_parts.append(block)
-            elif isinstance(block, dict) and "text" in block:
-                text_parts.append(block["text"])
-        return "\n".join(text_parts)
-    return str(content)
+# extract_text_content used to live here. It was the right idea in the wrong place — the
+# hardware and math agents needed it too and did not have it, so their answers came back as
+# stringified block lists with kilobytes of base64 signature inside. It now lives in
+# engine/llm_text.py and is imported above, so there is one copy and the next agent added
+# cannot forget it.
+
 
 def run_web_agent(query: str) -> str:
     llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.1)
@@ -61,10 +56,18 @@ def run_web_agent(query: str) -> str:
             print("   Searching...", flush=True)
             result = perform_web_search.invoke(tool_args)
             
-            # Feed search results back into LLM
-            summary_prompt = f"The user asked: {query}\nThe web search returned: {result}\nSummarize the answer clearly in plain text."
+            # Feed search results back into LLM. This is the path that actually produces the
+            # answer LB hears, so it needs the SPOKEN contract too — without it the summary
+            # arrives with URLs in it, and a URL read aloud is "h t t p s colon slash slash".
+            summary_prompt = (
+                f"The user asked: {query}\n"
+                f"The web search returned: {result}\n"
+                "Summarize the answer clearly in plain text. Where a claim came from a "
+                "particular source, name the source at the end under a 'Sources:' heading so "
+                "it can be shown on screen rather than spoken."
+            ) + SPOKEN_INSTRUCTION
             final_summary = llm.invoke(summary_prompt)
-            
+
             # Cleanly extract text only
             return extract_text_content(final_summary.content)
         else:

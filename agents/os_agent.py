@@ -2,6 +2,8 @@ import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from tools.os_controller import execute_terminal_command
+from engine.llm_text import extract_text_content
+from engine.split import SPOKEN_INSTRUCTION
 from tools.memory_manager import format_memory_for_llm
 
 OS_PROMPT_TEMPLATE = """
@@ -18,7 +20,7 @@ Result: Terminal Output: 45000
 AI: The current CPU temperature of the Raspberry Pi is 45.0°C.
 
 User Question: {question}
-"""
+""" + SPOKEN_INSTRUCTION
 
 def run_os_agent(query: str) -> str:
     llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.1)
@@ -46,5 +48,5 @@ def run_os_agent(query: str) -> str:
             return f"OS Execution Result:\n{result}"
         else:
             return "Action aborted by the user. No terminal commands were executed."
-            
-    return response.content
+
+    return extract_text_content(response.content)

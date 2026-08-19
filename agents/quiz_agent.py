@@ -1,5 +1,6 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
+from engine.llm_text import extract_text_content
 
 EVALUATION_PROMPT = """
 You are an expert Engineering Tutor.
@@ -27,4 +28,4 @@ def evaluate_quiz_answer(question: str, correct_answer: str, user_answer: str) -
     
     # 3. Execute the evaluation
     response = llm.invoke(prompt)
-    return response.content
+    return extract_text_content(response.content)
