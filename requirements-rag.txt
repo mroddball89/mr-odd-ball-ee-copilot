@@ -1,0 +1,35 @@
+# Mr Odd Ball — the datasheet RAG pipeline. OPTIONAL, and separated on purpose.
+#
+#   pip install -r requirements-rag.txt
+#
+# Everything here exists to answer ONE thing: firmware questions grounded in LB's own
+# datasheet PDFs. Without it the copilot is complete — `tools/vector_db.get_retriever()`
+# returns None, `agents/firmware_agent.py` answers ungrounded and says so, and every other
+# route is unaffected.
+#
+# ## Why it is not in requirements.txt
+#
+# `sentence-transformers` pulls **torch**, which on aarch64 is a multi-gigabyte wheel and a
+# slow install on an SD card. Measured 2026-08-19: importing `agents/firmware_agent.py` pulled
+# torch and transformers into memory before this split, for a retriever that returns None
+# until PDFs have been ingested — paying the whole cost for none of the benefit.
+#
+# Neither `langchain-google-genai` nor `langchain-huggingface` DECLARES torch (huggingface only
+# under its `[full]` extra), so a venv without this file never sees it. The imports in
+# tools/vector_db.py are inside the functions that use them for the same reason.
+#
+# ## Order of operations on the Pi
+#
+#   1. Get him talking on requirements.txt alone.
+#   2. Put datasheet PDFs under data/ (subdirectories are fine, the loader recurses).
+#   3. pip install -r requirements-rag.txt
+#   4. python tools/vector_db.py        # builds chroma_db/, once
+#
+# The embedding model itself is ~90MB and downloads on first use, then runs locally forever.
+# Nothing here talks to a paid API.
+
+langchain-huggingface~=1.2           # HuggingFaceEmbeddings (all-MiniLM-L6-v2)
+langchain-chroma~=1.1                # the persisted vector store
+chromadb~=1.5
+pypdf~=6.16                          # what PyPDFDirectoryLoader actually reads with
+sentence-transformers~=5.7           # pulls torch; the embedding model runs locally
