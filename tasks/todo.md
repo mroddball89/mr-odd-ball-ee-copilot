@@ -24,35 +24,35 @@ selector — the tier system (`classify.py`, `tiers.py`, `brains/`) is **not** c
 
 ## Stage 1 — Bring the assistant across
 
-- [ ] Copy `audio/` (wake, listen, stt, say, gate) from `~/oddball`
-- [ ] Copy `orchestrator/hud_bridge.py`, `settings.py`, `formulas.py`, `memory/speakable.py`
-- [ ] Copy `hud/face-preview.html`, `assets/`, `models/hey_mr_odd_ball.onnx`, `config/oddball.toml`
-- [ ] Copy the `tools/verify_*.py` harnesses for what came across
-- [ ] Merge `requirements.txt` from both; note `--no-deps openwakeword` and the two apt packages
-- [ ] Prove the voice path still passes after the move
+- [x] Copy `audio/` (wake, listen, stt, say, gate) from `~/oddball`
+- [x] Copy `orchestrator/hud_bridge.py`, `settings.py`, `formulas.py`, `memory/speakable.py`
+- [x] Copy `hud/face-preview.html`, `assets/`, `models/hey_mr_odd_ball.onnx`, `config/oddball.toml`
+- [x] Copy the `tools/verify_*.py` harnesses for what came across
+- [x] Merge `requirements.txt` from both; note `--no-deps openwakeword` and the two apt packages
+- [x] Prove the voice path still passes after the move
 
 ## Stage 2 — The response envelope (speech vs. visual)
 
-- [ ] `engine/response.py` — `Response(speech, cards, route, pending)` + `Card(kind, title, body, lang)`
-- [ ] `SPOKEN:` line appended to every agent prompt template
-- [ ] `engine/split.py` — fences → code cards, tables → table cards, terminal output → log cards
-- [ ] Fall back to `speakable.extract()` at `MAX_WORDS = 40` when no `SPOKEN:` line arrives
-- [ ] Hard filter: never speak code, tables, URLs, paths, hex literals, tracebacks
-- [ ] Second LLM pass in `math_agent` and `hardware_agent` — they return raw tool output today
+- [x] `engine/response.py` — `Response(speech, cards, route, pending)` + `Card(kind, title, body, lang)`
+- [x] `SPOKEN:` line appended to every agent prompt template
+- [x] `engine/split.py` — fences → code cards, tables → table cards, terminal output → log cards
+- [x] Fall back to `speakable.extract()` at `MAX_WORDS = 40` when no `SPOKEN:` line arrives
+- [x] Hard filter: never speak code, tables, URLs, paths, hex literals, tracebacks
+- [x] Second LLM pass in `math_agent` and `hardware_agent` — they return raw tool output today
 
 ## Stage 3 — Router as the only dispatcher
 
-- [ ] Add `PERSONA` (chit-chat, jokes, identity) and `UTILITY` (time, date, convert, constants)
-- [ ] Fix `ROUTER_PROMPT` — it documents 5 of 7 routes; `OS` and `QUIZ` are missing
-- [ ] `engine/core.py` — `Engine.ask(text) -> Response`, no `print()`, no `input()`
+- [x] Add `PERSONA` (chit-chat, jokes, identity) and `UTILITY` (time, date, convert, constants)
+- [x] Fix `ROUTER_PROMPT` — it documents 5 of 7 routes; `OS` and `QUIZ` are missing
+- [x] `engine/core.py` — `Engine.ask(text) -> Response`, no `print()`, no `input()`
 
 ## Stage 3b — Wire the RAG pipeline into the firmware agent
 
-- [ ] Fix `CHROMA_PATH`/`DATA_PATH` — currently cwd-relative, writes outside the repo
-- [ ] `get_retriever(k=4)`, opened once at import, returns `None` when unbuilt
-- [ ] `{datasheet_context}` in `FIRMWARE_PROMPT_TEMPLATE`; prefer retrieval over model memory
-- [ ] Sources card from Chroma's `source` / `page` metadata
-- [ ] `glob="**/*.pdf"` so the `data/` subdirectories are recursed
+- [x] Fix `CHROMA_PATH`/`DATA_PATH` — currently cwd-relative, writes outside the repo
+- [x] `get_retriever(k=4)`, opened once at import, returns `None` when unbuilt
+- [x] `{datasheet_context}` in `FIRMWARE_PROMPT_TEMPLATE`; prefer retrieval over model memory
+- [x] Sources card from Chroma's `source` / `page` metadata
+- [x] `glob="**/*.pdf"` so the `data/` subdirectories are recursed
 
 ## Stage 4 — The voice loop
 
@@ -62,11 +62,11 @@ selector — the tier system (`classify.py`, `tiers.py`, `brains/`) is **not** c
 
 ## Stage 5 — Gates and the quiz lock over voice
 
-- [ ] Split `os_agent` / `web_agent` into `propose()` / `resume(approved)`
-- [ ] `Pending` carries a spoken paraphrase AND the exact command; card renders first
-- [ ] Copy `is_yes()`; silence, mumble, timeout and refusal all mean no
+- [x] Split `os_agent` / `web_agent` into `propose()` / `resume(approved)`
+- [x] `Pending` carries a spoken paraphrase AND the exact command; card renders first
+- [x] Copy `is_yes()`; silence, mumble, timeout and refusal all mean no
 - [ ] Extend the `forbidden_commands` blocklist (no `dd`, `shutdown`, `> /dev/sd*`, `chmod -R 777 /`)
-- [ ] Quiz lock: exit-phrase family, wake-word escape, visible QUIZ MODE chip
+- [x] Quiz lock: exit-phrase family, wake-word escape, visible QUIZ MODE chip
 
 ## Stage 6 — HUD chat panel
 
@@ -91,8 +91,8 @@ him running on the Pi desktop transparently today:
 
 ## Stage 8 — Verification
 
-- [ ] `verify_split.py` — **and prove it bites**: plant a fenced C++ block in the prose path
-- [ ] `verify_gates.py` — nothing executes without an explicit yes
+- [x] `verify_split.py` — **and prove it bites**: plant a fenced C++ block in the prose path
+- [x] `verify_engine.py` (gates + quiz + failure lines, 97 checks, probe bites) — nothing executes without an explicit yes
 - [ ] `verify_router.py` — all 9 routes reachable, `PERSONA`/`UTILITY` don't swallow EE questions
 - [ ] `verify_quiz.py`, `verify_rag.py`
 - [ ] End-to-end on the Pi, six scenarios
