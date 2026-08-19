@@ -20,6 +20,10 @@ quiz_data.json
 raw_downloads/
 data/**/*.pdf
 
-# Models and voices are re-downloadable and large (~63MB a voice).
-models/
+# Piper voices are ~63MB each and re-downloadable in seconds:
+#   python -m piper.download_voices en_US-joe-medium --data-dir voices
 voices/
+
+# Whisper models are downloaded on first run. The wake model is NOT ignored — it was trained
+# on Colab from training/hey_mr_odd_ball.ipynb and losing it means retraining.
+models/whisper/

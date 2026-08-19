@@ -1,0 +1,18 @@
+# This repo is edited on Windows and runs on a Raspberry Pi. Everything textual is stored
+# and checked out with LF, because CRLF is not cosmetic here:
+#
+#   - a shell script with CRLF fails on the Pi with "bad interpreter: /usr/bin/env bash^M"
+#   - a systemd unit with CRLF has trailing ^M inside ExecStart
+#   - .desktop entries are parsed strictly enough to care
+#
+# The two boxes drifting apart on line endings is exactly the class of problem docs/PI.md
+# already warns about for install procedures.
+
+* text=auto eol=lf
+
+# Binary — never touched, never diffed as text.
+*.onnx      binary
+*.wav       binary
+*.png       binary
+*.pdf       binary
+*.ipynb     binary
