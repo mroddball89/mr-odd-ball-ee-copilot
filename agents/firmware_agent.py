@@ -1,6 +1,8 @@
 import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
+from engine.llm_text import extract_text_content
+from engine.split import SPOKEN_INSTRUCTION
 from tools.memory_manager import format_memory_for_llm
 
 FIRMWARE_PROMPT_TEMPLATE = """
@@ -18,7 +20,7 @@ Here is the C code snippet:
 REG_WRITE(GPIO_ENABLE_REG, BIT13);
 
 User Question: {question}
-"""
+""" + SPOKEN_INSTRUCTION
 
 def run_firmware_agent(query: str) -> str:
     # 1. Initialize the LLM
@@ -33,5 +35,5 @@ def run_firmware_agent(query: str) -> str:
     
     # 4. Execute the agent and return the text response
     response = llm.invoke(prompt)
-    
-    return response.content
+
+    return extract_text_content(response.content)
