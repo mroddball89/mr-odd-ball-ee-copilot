@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""
+Module:  models.py
+Purpose: Which Gemini model does which job, and why. One place, not seven.
+Author:  LB
+Date:    2026-08-19
+
+## The measurement that made this file necessary
+
+**The free tier is 20 requests per day, per model, per project — not ~1,500.**
+
+Measured 2026-08-19 against this project's own key, from the 429 body:
+
+    quotaId:     GenerateRequestsPerDayPerProjectPerModel-FreeTier
+    quotaMetric: generativelanguage.googleapis.com/generate_content_free_tier_requests
+    quotaValue:  20
+    model:       gemini-3.5-flash
+
+`~/oddball/CLAUDE.md` records the assumption "a *free* Gemini API key from AI Studio is
+available separately (~1,500 req/day)". For **gemini-3.5-flash that is wrong by a factor of
+75**, and the whole architecture rests on it: a merged turn costs a router call plus one or
+two agent calls, so 20/day is roughly **seven to ten questions before he goes quiet for the
+rest of the day**. The first end-to-end smoke test of `Engine.ask()` exhausted it in five.
+
+## What the quota being PER MODEL buys
+
+Each model name has its own daily bucket. So splitting jobs across models is not a trick —
+it multiplies the usable budget, and it happens to be the right engineering call anyway:
+
+    ROUTER   a 9-way classification with a fixed schema. No reasoning, no long output.
+             `flash-lite` does it correctly in ~890ms and leaves `flash`'s bucket alone.
+    AGENT    register values, IPC-2221 numbers, physics. Where accuracy is worth paying for.
+    PERSONA  jokes and chit-chat. Wrong is cheap here, so it runs on lite as well.
+
+Measured 2026-08-19, same routing prompt, same question:
+
+    gemini-3.5-flash-lite      890ms   -> hardware   (correct)
+    gemini-3.1-flash-lite    25469ms   -> hardware   (correct, but unusable on the turn path)
+
+## If he goes quiet
+
+A 429 is not a bug and must not be reported as one. `engine/core.py` catches it and says so.
+The real fixes, in the order LB should consider them:
+
+1. Ask fewer questions per turn — the UTILITY route already costs nothing, and widening it is
+   free capacity.
+2. Enable billing on the API project. LB's standing decision is no card, so this is his call
+   and nobody else's.
+3. Put Tier 1 back for PERSONA — `brains/local.py` in the standalone assistant ran a local
+   LFM2.5 on the Pi with no quota at all. It was deliberately not carried over in the merge,
+   and jokes are exactly the traffic it was good at.
+"""
+
+from __future__ import annotations
+
+import os
+
+__all__ = ["ROUTER_MODEL", "AGENT_MODEL", "PERSONA_MODEL", "FREE_TIER_DAILY_LIMIT"]
+
+# Measured, not documented — from the 429 body on 2026-08-19. Here so that any code reporting
+# quota exhaustion can name the real number instead of guessing.
+FREE_TIER_DAILY_LIMIT = 20
+
+# Overridable from .env so LB can move a job to another model without editing code — which is
+# the whole reason this file exists, since the name used to be hardcoded in seven places.
+ROUTER_MODEL = os.environ.get("ODDBALL_ROUTER_MODEL", "gemini-3.5-flash-lite")
+AGENT_MODEL = os.environ.get("ODDBALL_AGENT_MODEL", "gemini-3.5-flash")
+PERSONA_MODEL = os.environ.get("ODDBALL_PERSONA_MODEL", "gemini-3.5-flash-lite")

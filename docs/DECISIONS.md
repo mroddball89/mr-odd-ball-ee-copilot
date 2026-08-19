@@ -1,0 +1,151 @@
+# Decisions
+
+Numbered so they can be cited from code comments and commit messages. A decision here is one
+somebody could reasonably have made differently — not a fact, and not a preference.
+
+---
+
+## D1 — The EE Copilot is the host, not the assistant
+
+**2026-08-19.** Two working systems had to become one: the terminal EE Copilot and the
+standalone voice assistant at `mroddball89/mr-odd-ball-ai`. Either could have absorbed the
+other.
+
+LB chose the copilot as the host. Mr Odd Ball's wake word, ears, voice, face and personality
+move into it; `router.py` becomes the single dispatcher.
+
+**What this cost.** The assistant's tier system — `orchestrator/classify.py`,
+`orchestrator/tiers.py`, `brains/local.py`, `brains/gemini.py` — is not carried over. That
+includes Tier 1, the local LFM2.5 that answered personality questions on the Pi with no quota
+and no network. See D3, which is the bill for it arriving.
+
+**What survived, and why it is not a tier.** `orchestrator/router.py` came across as
+`orchestrator/instant.py`. It is the lookup tables — time, date, unit conversion, constants,
+definitions, ~9,800 checks' worth — reached as one route among nine rather than as a tier in
+front of everything. Deleting it would have thrown away working, tested code to satisfy a
+naming convention.
+
+---
+
+## D2 — The spoken half comes from the agent, not from a summariser
+
+**2026-08-19.** A reply has to become two things: something short enough to say, and
+everything else. The obvious implementation is to generate the answer and then summarise it
+down to 40 words.
+
+We do the opposite. Every agent prompt ends with a `SPOKEN:` line contract, so the model that
+wrote the answer writes the sentence too.
+
+**Why.** A summariser reading a finished reply has to guess which of three numbers was the
+result and which two were working. It guesses wrong on exactly the replies that matter — the
+ones with intermediate values in them. The model that did the work does not have to guess.
+
+Extraction (`memory/speakable.py`) is the fallback. **Generation never is**: D30 in the
+assistant's own decision log measured local models stating first-year electronics relationships
+fluently and wrongly, and a generated summary of a correct answer can be wrong the same way,
+one step further from anywhere it would be noticed.
+
+Whatever produces the sentence, `engine/split.py:is_speakable()` judges it. Policing the safe
+path identically to the risky one is what stops the safe path drifting.
+
+---
+
+## D3 — The Gemini free tier is 20 requests per day, not ~1,500
+
+**2026-08-19. This corrects a documented assumption, and it is load-bearing.**
+
+`~/oddball/CLAUDE.md` records: *"A free Gemini API key from AI Studio is available separately
+(~1,500 req/day)."* The first end-to-end run of `Engine.ask()` exhausted the quota in **five
+questions**. From the 429 body:
+
+```
+quotaId:     GenerateRequestsPerDayPerProjectPerModel-FreeTier
+quotaMetric: generativelanguage.googleapis.com/generate_content_free_tier_requests
+quotaValue:  20
+model:       gemini-3.5-flash
+```
+
+**Wrong by a factor of 75.** Data: `media/data/2026-08-19-gemini-free-tier-quota.csv`.
+
+This is not a footnote, because the merged architecture spends requests faster than the
+terminal copilot did: a turn costs a router call **plus** one or two agent calls. At 20/day
+that is roughly seven to ten questions before he goes quiet for the rest of the day.
+
+### What was done about it
+
+The quota is **per model, per project, per day** — so each model name has its own bucket.
+Splitting jobs across models multiplies the usable budget, and it is the right engineering
+call independently:
+
+| job | model | why |
+|---|---|---|
+| routing | `gemini-3.5-flash-lite` | 9-way classification against a fixed schema. No reasoning. **890 ms.** |
+| agents | `gemini-3.5-flash` | register values, IPC-2221, physics — where accuracy is worth paying for |
+| persona | `gemini-3.5-flash-lite` | jokes. Being wrong is cheap. |
+
+Latency: `media/data/2026-08-19-router-model-latency.csv`. `gemini-3.1-flash-lite` also routed
+correctly but took **25.5 s** cold, which is unusable on the turn path. `gemini-2.5-flash` and
+`gemini-2.5-flash-lite` return 404 for this key.
+
+`engine/models.py` is now the one place model names live — they were hardcoded in seven files,
+so this was previously a seven-file edit that could be done in six.
+
+### What is still open
+
+The three real fixes, in the order LB should consider them:
+
+1. **Widen UTILITY.** It already costs nothing and answers from lookup tables. Every question
+   it absorbs is a free question.
+2. **Enable billing.** LB's standing decision is no card, so this is his call.
+3. **Put Tier 1 back for PERSONA.** `brains/local.py` ran a local LFM2.5 on the Pi with no
+   quota at all, and chit-chat is exactly the traffic it was good at. D1 dropped it; D3 is the
+   argument for bringing that one piece back.
+
+A 429 is now reported as what it is — *"I've used up my 20 free questions for today"* — and
+not as a crash. Reporting a quota ceiling as a fault sends LB looking for a bug that is not
+there.
+
+---
+
+## D4 — The permission gate speaks a paraphrase and shows the exact command
+
+**2026-08-19.** The gate used to block on `input("Allow execution? (y/n): ")`. A voice turn has
+no stdin, so it had to become a suspended state: `propose_os_action()` returns a `Pending` and
+nothing runs; `resume_os_action()` runs it after approval.
+
+The hard part is what the question sounds like. `cat /sys/class/thermal/thermal_zone0/temp`
+read aloud is *"cat slash sys slash class slash thermal slash thermal underscore zone zero
+slash temp"* — LB cannot judge what he is approving from that. So `Pending` carries two
+strings: a plain description for the ear, and the exact command for the eye.
+
+**The risk is stated rather than solved.** Approving from a paraphrase means trusting the
+paraphrase. What makes it acceptable:
+
+- the exact text is rendered **before** the question is asked, not after
+- the blocklist in `tools/os_controller.py` runs regardless of what was approved
+- `orchestrator/classify_yes.py` treats silence, a mumble, a timeout and a refusal all as no
+- if the model puts the command into its own description, the description is discarded and a
+  fallback that points at the card is used instead
+
+This reverses the Phase 6 note in `~/oddball/docs/STATE.md` — *"he authors the command, the
+model never writes one"*. LB was shown the conflict and chose to keep the copilot's OS agent as
+built. Recorded here so the reversal is deliberate and visible rather than an accident of the
+merge.
+
+---
+
+## D5 — The quiz lock has a loose exit, and an escape that does not depend on hearing
+
+**2026-08-19.** `main.py` left quiz mode on exactly one phrase: `exit quiz`. That is safe to
+type and would not have survived being spoken — `tiny.en` turned *"What is the date?"* into
+*"What is today?"* and *"Set a timer"* into *"at a timer"*.
+
+`engine/core.py:_is_quiz_exit()` matches a family of phrases, plus single words (`exit`,
+`quit`, `enough`, `stop`, `escape`) as **whole words** — loose on purpose, because the failure
+modes are not symmetric. A false positive drops one answer and LB asks to be quizzed again. A
+false negative traps him in a loop that keeps asking questions, with an imperfect transcriber
+standing between him and the exit.
+
+`Engine.leave_quiz()` is the way out that does not depend on being heard at all, and the HUD
+carries a visible `QUIZ MODE` chip with the exit phrase printed on it. A mode you cannot see is
+a mode you get stuck in.

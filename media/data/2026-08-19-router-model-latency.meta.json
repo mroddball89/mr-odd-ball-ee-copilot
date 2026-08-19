@@ -1,0 +1,17 @@
+{
+  "what": "Time for one 9-way structured-output routing decision, per candidate Gemini model.",
+  "why": "The merged copilot pays a router LLM call on every turn, so this number is spent once per question. PLAN.md budgets 2.0s for the whole turn including STT and speech synthesis.",
+  "question": "how wide does a trace need to be for 3 amps on 1oz external copper",
+  "prompt": "router.py ROUTER_PROMPT, 9 routes, Pydantic RouteDecision via with_structured_output",
+  "conditions": {
+    "box": "Windows 11 desktop, not the Pi",
+    "network": "home broadband",
+    "n": 1,
+    "warm": false
+  },
+  "caveats": [
+    "Single sample per model, cold. The 25s for gemini-3.1-flash-lite may be cold-start rather than steady-state.",
+    "Measured off-Pi. The Pi adds nothing to this number itself (it is a network round trip) but its STT and TTS legs are what the 2.0s budget is mostly spent on.",
+    "gemini-2.5-flash and gemini-2.5-flash-lite returned 404 for this key and are not in the table."
+  ]
+}

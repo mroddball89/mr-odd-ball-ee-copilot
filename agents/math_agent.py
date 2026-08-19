@@ -1,6 +1,7 @@
 import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
+from engine.models import AGENT_MODEL
 from engine.llm_text import extract_text_content
 from engine.split import SPOKEN_INSTRUCTION
 from tools.math_sandbox import math_repl_tool
@@ -40,7 +41,7 @@ the unit.
 
 
 def run_math_agent(query: str) -> str:
-    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.0)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.0)
     llm_with_tools = llm.bind_tools([math_repl_tool])
     
     # Retrieve saved history from SD card
