@@ -9,13 +9,19 @@ Categories=Utility;
 # systemd's %h means nothing here and would be passed through as the literal string, so the
 # window would fail to start with a path that does not exist.
 #
+# /usr/bin/python3, NOT the venv. hud/float.py needs PyGObject, which is a SYSTEM package on
+# Debian (python3-gi) and is not pip-installable in a plain venv. The old ~/oddball venv had
+# system site-packages so venv/bin/python worked there; the merged repo's venv does not, and
+# pointing this line at it fails on the next reboot with ModuleNotFoundError: No module named
+# 'gi'. float.py imports nothing from the project, so the system interpreter is enough.
+#
 # The URL is QUOTED, and that is not cosmetic. The Desktop Entry spec lists "?" among the
 # reserved characters an Exec argument may not carry unquoted — an unquoted `?solo=1` is
 # malformed, and a launcher is free to mangle or reject the whole line. It would fail as
 # "his face didn't come up after a reboot", days later, with nothing pointing here.
-Exec=/home/ironi/oddball/venv/bin/python /home/ironi/oddball/hud/float.py --url "http://127.0.0.1:8765/?chat=1" --transparent --undecorated --width 560 --height 900
-Path=/home/ironi/oddball
-Icon=/home/ironi/oddball/assets/mr-odd-ball-reference.png
+Exec=/usr/bin/python3 /home/ironi/mr-odd-ball/hud/float.py --url "http://127.0.0.1:8765/?chat=1" --transparent --undecorated --width 560 --height 900
+Path=/home/ironi/mr-odd-ball
+Icon=/home/ironi/mr-odd-ball/assets/mr-odd-ball-reference.png
 
 Terminal=false
 X-GNOME-Autostart-enabled=true
