@@ -9,14 +9,29 @@ The rig (hud/face-preview.html) is a standalone file that happens to listen. Thi
 broadcasts to whoever is connected and does not care whether anyone is; the assistant must
 work with no screen attached.
 
-Wire format is three message types, matching the rig's mechanisms exactly:
+Wire format — the first three drive his face, the rest drive the chat panel:
 
-    {"type": "state",   "value": "listening"}   -> setState()
-    {"type": "gesture", "value": "startle"}     -> playGesture()
-    {"type": "mouth",   "value": 0.42}          -> live lip-sync while speaking
+    {"type": "state",      "value": "listening"}          -> setState()
+    {"type": "gesture",    "value": "startle"}            -> playGesture()
+    {"type": "mouth",      "value": 0.42}                 -> live lip-sync while speaking
 
-The rig validates the first two against its own tables and ignores anything it does not
+    {"type": "transcript", "role": "you", "value": "..."} -> a line in the chat column
+    {"type": "card",       "value": {kind,title,body,lang}} -> code, table, log, prose
+    {"type": "route",      "value": "hardware"}           -> which agent answered
+    {"type": "mode",       "value": "quiz"}               -> the QUIZ MODE chip
+    {"type": "pending",    "value": {kind,spoken,shown}}  -> Approve / Deny buttons; null clears
+
+The rig validates state and gesture against its own tables and ignores anything it does not
 recognise, so an unknown name here is inert rather than breaking the animation loop.
+
+**And it talks back**, which it did not before 2026-08-19:
+
+    {"type": "text",    "value": "how wide for 3 amps"}   -> a typed question
+    {"type": "approve", "value": true}                    -> a click on a pending action
+
+Both land on `self.inbound` for the turn loop to drain. A typed question and a spoken one
+reach the same `Engine.ask()`; an Approve click and a spoken "yes" are the same event. Two
+ways in, one decision path — which is the point of splitting the terminal out of main.py.
 """
 
 from __future__ import annotations
@@ -24,6 +39,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import queue
+from collections import deque
 from http import HTTPStatus
 from pathlib import Path
 
@@ -41,6 +58,15 @@ SERVED = {
     "/": ("face-preview.html", "text/html; charset=utf-8"),
     "/face-preview.html": ("face-preview.html", "text/html; charset=utf-8"),
 }
+
+# How many chat messages a reconnecting panel gets replayed. Enough to see the exchange you
+# were in the middle of; not a log.
+HISTORY = 40
+
+# Message types that belong to the chat panel and so are worth replaying to a late joiner.
+# `state`, `mouth` and `gesture` are not here: they are momentary, and replaying a mouth
+# position from four minutes ago would leave his face stuck mid-syllable.
+_REPLAYABLE = {"transcript", "card", "route", "mode"}
 
 
 class HudBridge:
@@ -60,6 +86,15 @@ class HudBridge:
         # before the orchestrator's first broadcast was told he was awake — so he woke up on
         # connect and then had nothing left to do when the wake word actually fired.
         self._last_state = {"type": "state", "value": resting_state}
+        # What the rig sends back: {"type":"text","value":"..."} for a typed question, and
+        # {"type":"approve","value":true|false} for a click on a pending action. Drained by
+        # the turn loop. Bounded, because an unbounded queue fed by a browser is a memory leak
+        # with a UI attached.
+        self.inbound: "queue.Queue[dict]" = queue.Queue(maxsize=64)
+        # The last N chat messages, replayed to a client that connects mid-session. Capped:
+        # this is a convenience for a reopened panel, not the conversation log — that lives on
+        # the SD card in tools/memory_manager.py, and having two of them is how they disagree.
+        self._history: "deque[dict]" = deque(maxlen=HISTORY)
 
     @property
     def client_count(self) -> int:
@@ -70,8 +105,37 @@ class HudBridge:
         LOG.info("rig connected (%d attached)", len(self._clients))
         try:
             await ws.send(json.dumps(self._last_state))
-            async for _ in ws:      # the rig never sends; this just parks until it leaves
-                pass
+            # A late-joining panel gets the transcript so far, so opening the HUD mid-session
+            # shows the conversation rather than an empty column that fills only from the next
+            # question onward. Same reasoning as `_last_state`, applied to the chat.
+            for msg in list(self._history):
+                await ws.send(json.dumps(msg))
+
+            # The rig used to be write-only — `async for _ in ws: pass`. It talks back now:
+            # a typed question, or an Approve/Deny click on a pending action. Both arrive here
+            # and go onto `self.inbound`, which the turn loop drains. This is
+            # `broadcast_threadsafe` in reverse, and it is what makes the typed channel and
+            # the spoken channel two ways into the same Engine rather than two code paths.
+            async for raw in ws:
+                try:
+                    msg = json.loads(raw)
+                except (TypeError, ValueError):
+                    LOG.warning("rig sent something that is not JSON: %r", str(raw)[:80])
+                    continue
+                if not isinstance(msg, dict) or "type" not in msg:
+                    continue
+                try:
+                    self.inbound.put_nowait(msg)
+                except queue.Full:
+                    # Dropping the OLDEST is right here: these are user actions, and the most
+                    # recent one is the one still being waited on. A full queue means the turn
+                    # loop is wedged, which is a bug to see rather than to buffer through.
+                    LOG.warning("inbound queue full — dropping the oldest message")
+                    try:
+                        self.inbound.get_nowait()
+                        self.inbound.put_nowait(msg)
+                    except (queue.Empty, queue.Full):
+                        pass
         except Exception:
             pass
         finally:
@@ -128,8 +192,11 @@ class HudBridge:
 
     async def broadcast(self, msg: dict) -> None:
         """Send one message to every connected client, dropping any that have gone away."""
-        if msg.get("type") == "state":
+        kind = msg.get("type")
+        if kind == "state":
             self._last_state = msg
+        elif kind in _REPLAYABLE:
+            self._history.append(msg)
         data = json.dumps(msg)
         for ws in list(self._clients):
             try:
@@ -171,3 +238,56 @@ class HudBridge:
         and no idea what he is doing.
         """
         self.broadcast_threadsafe({"type": "mouth", "value": max(0.0, min(1.0, float(value)))})
+
+    # --- the chat channel ----------------------------------------------------------------
+    #
+    # Added 2026-08-19 for the merged copilot. The rig was a face; it is now a face with a
+    # transcript and a card column beside it, because a firmware answer contains a C snippet
+    # and a register table, and neither of those can be said out loud (engine/split.py).
+
+    def say_line(self, role: str, text: str) -> None:
+        """One line of the transcript. `role` is "you" or "oddball"."""
+        if text and text.strip():
+            self.broadcast_threadsafe({"type": "transcript", "role": role, "value": text})
+
+    def show_card(self, card) -> None:
+        """One card — code, a table, a log, prose. Accepts an engine.response.Card or a dict.
+
+        Takes either because the turn loop has Card objects and the harnesses find plain dicts
+        easier to assert on, and there is no reason for the bridge to care which.
+        """
+        value = card.to_dict() if hasattr(card, "to_dict") else dict(card)
+        self.broadcast_threadsafe({"type": "card", "value": value})
+
+    def set_route(self, route: str) -> None:
+        """Which agent answered. The panel shows it as a chip, so a misroute is visible."""
+        self.broadcast_threadsafe({"type": "route", "value": route})
+
+    def set_mode(self, mode: str) -> None:
+        """"normal" or "quiz". A mode you cannot see is a mode you get stuck in (D5)."""
+        self.broadcast_threadsafe({"type": "mode", "value": mode})
+
+    def ask_approval(self, pending) -> None:
+        """Put a pending action up with Approve and Deny buttons.
+
+        The buttons and a spoken "yes" are the same event: both end up as
+        `{"type":"approve","value":bool}` on `inbound`, and the turn loop feeds either into
+        the same `Engine.ask()`. One decision path, two ways of reaching it.
+        """
+        self.broadcast_threadsafe({
+            "type": "pending",
+            "value": {"kind": pending.kind, "spoken": pending.spoken, "shown": pending.shown},
+        })
+
+    def clear_pending(self) -> None:
+        """Take the buttons away once the action is resolved, however it was resolved."""
+        self.broadcast_threadsafe({"type": "pending", "value": None})
+
+    def drain_inbound(self) -> list[dict]:
+        """Everything the rig has sent since the last call. Never blocks."""
+        out: list[dict] = []
+        while True:
+            try:
+                out.append(self.inbound.get_nowait())
+            except queue.Empty:
+                return out
