@@ -1,0 +1,25 @@
+# Mr Odd Ball — EE Copilot
+# Versions are the ones this ran against on 2026-08-19. LangChain 1.x moved a lot of imports,
+# so these are pinned to minors rather than left open.
+
+# --- LLM and routing -------------------------------------------------------------------
+langchain-core~=1.5
+langchain-google-genai~=4.3          # ChatGoogleGenerativeAI, with_structured_output
+pydantic~=2.13                       # RouteDecision — the router's structured output
+python-dotenv~=1.2                   # GOOGLE_API_KEY out of .env, never out of source
+
+# --- Firmware agent: the datasheet RAG pipeline ----------------------------------------
+langchain-community~=0.4             # PyPDFDirectoryLoader, DuckDuckGoSearchRun
+langchain-text-splitters~=1.1        # RecursiveCharacterTextSplitter
+langchain-huggingface~=1.2           # HuggingFaceEmbeddings (all-MiniLM-L6-v2)
+langchain-chroma~=1.1                # the persisted vector store
+chromadb~=1.5
+pypdf~=6.16                          # what PyPDFDirectoryLoader actually reads with
+sentence-transformers~=5.7           # pulls torch; the embedding model runs locally
+
+# --- Math agent ------------------------------------------------------------------------
+langchain-experimental~=0.4          # PythonREPLTool
+
+# --- Web agent -------------------------------------------------------------------------
+duckduckgo-search~=8.1
+ddgs~=9.15                           # the renamed package DuckDuckGoSearchRun now calls into

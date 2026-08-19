@@ -1,0 +1,25 @@
+# Secrets — never commit. A key in git history cannot be removed without rewriting it.
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+*.egg-info/
+
+# The vector store is a build artifact — rebuild it with `python tools/vector_db.py`.
+chroma_db/
+
+# LB's own data, not source. sd_card_memory.json is the conversation log the 15-day
+# backup clock watches; quiz_data.json is regenerated with defaults if absent.
+sd_card_memory.json
+quiz_data.json
+
+# Datasheet PDFs and scratch downloads — large, and not ours to redistribute.
+raw_downloads/
+data/**/*.pdf
+
+# Models and voices are re-downloadable and large (~63MB a voice).
+models/
+voices/
