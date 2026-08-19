@@ -35,10 +35,18 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from langchain_community.document_loaders import PyPDFDirectoryLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
+# NOTHING heavy is imported at module scope, and that is a deployment decision.
+#
+# `langchain_huggingface` pulls **torch and transformers** the moment it is imported, and
+# `agents/firmware_agent.py` imports this module — so a plain `import` up here would drag
+# multiple gigabytes of wheels onto the Pi and several seconds onto the first firmware
+# question, to support a retriever that returns None until datasheets have been ingested.
+#
+# So the embedding stack is imported inside `get_embeddings()`, which only runs when a store
+# actually exists. A Pi with no PDFs in `data/` never loads torch, and does not need it
+# installed — see the optional block in requirements.txt.
+#
+# langchain_chroma and the loaders are cheap and stay lazy only for consistency with that.
 
 LOG = logging.getLogger("oddball.vector_db")
 
@@ -60,6 +68,9 @@ def get_embeddings():
     """The embedding model, loaded once."""
     global _embeddings
     if _embeddings is None:
+        # Imported here, not at module scope: this line is what pulls torch.
+        from langchain_huggingface import HuggingFaceEmbeddings      # noqa: PLC0415
+
         LOG.info("loading the embedding model (%s)", EMBEDDING_MODEL)
         _embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
     return _embeddings
@@ -85,6 +96,8 @@ def get_retriever(k: int = 4):
 
     if _store is None:
         try:
+            from langchain_chroma import Chroma                      # noqa: PLC0415
+
             _store = Chroma(persist_directory=str(CHROMA_PATH),
                             embedding_function=get_embeddings())
         except Exception:                              # noqa: BLE001
@@ -119,6 +132,10 @@ def format_chunks(docs) -> tuple[str, list[dict]]:
 
 
 def build_vector_database():
+    from langchain_chroma import Chroma                              # noqa: PLC0415
+    from langchain_community.document_loaders import PyPDFDirectoryLoader  # noqa: PLC0415
+    from langchain_text_splitters import RecursiveCharacterTextSplitter    # noqa: PLC0415
+
     print(f"1. Loading PDFs from {DATA_PATH}...")
     # glob is explicit and recursive: data/ has arduino/, espressif/, raspberry_pi/ and
     # sensors/ subdirectories, and the default pattern does not descend into them — so the
