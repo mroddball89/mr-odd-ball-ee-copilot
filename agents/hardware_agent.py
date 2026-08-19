@@ -1,6 +1,7 @@
 import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
+from engine.models import AGENT_MODEL
 from engine.llm_text import extract_text_content
 from engine.split import SPOKEN_INSTRUCTION
 from tools.trace_calculator import calculate_ipc2221_trace_width
@@ -44,7 +45,7 @@ Answer the user's question in one or two short sentences, using those exact numb
 
 
 def run_hardware_agent(query: str) -> str:
-    llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash", temperature=0.1)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1)
     tools = [calculate_ipc2221_trace_width]
     llm_with_tools = llm.bind_tools(tools)
     
