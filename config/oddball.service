@@ -1,5 +1,5 @@
 [Unit]
-# Mr Odd Ball — the assistant itself. Wake word, capture, STT, router, tiers, voice.
+# Mr Odd Ball — the assistant itself. Wake word, capture, STT, the copilot's router, voice.
 #
 # A systemd USER unit, not a system one, and that is not a style choice: he needs the
 # microphone and the speaker, and on this Pi both live behind PipeWire, which is itself a
@@ -32,16 +32,20 @@ WorkingDirectory=%h/oddball
 #
 # Cost: a 16kHz mono WAV per captured utterance, ~50KB for 1.6s. At the observed 0.45 wakes a
 # minute that is ~2MB/hour against 97GB free. `captures/` is gitignored.
-ExecStart=%h/oddball/venv/bin/python orchestrator/run_wake.py --log %h/oddball/oddball.log --save-captures %h/oddball/captures
+ExecStart=%h/oddball/venv/bin/python main.py --voice --log %h/oddball/oddball.log --save-captures %h/oddball/captures
 
-# He brings up llama-server himself (brains/local.py's LlamaServer context manager), so this
-# unit starts one process and gets two. KillMode=control-group is the default and is what makes
-# `systemctl --user stop oddball` take the model down with him rather than orphaning a 698MB
-# server holding port 8080 — an orphan that a health poll would then answer, which has already
-# caused one confusing debugging session on this project.
-
-# A cold model off the SD card can take 20-40s to answer /health, and faster-whisper loads on
-# top of that, so the default 90s start timeout is not generous enough on a cold boot.
+# ExecStart was orchestrator/run_wake.py until 2026-08-19. It is main.py --voice now: the
+# assistant and the EE copilot are one program, and main.py is its entry point. The flags are
+# passed straight through to engine/run_voice.py, which is where run_wake.py ended up.
+#
+# He no longer starts llama-server. The local tier went in the merge (D1), so this unit starts
+# one process and gets one — every brain is a network call now. KillMode=control-group remains
+# the default and is still what makes `systemctl --user stop oddball` clean, it just has less
+# to clean up.
+#
+# TimeoutStartSec was 180 for a cold GGUF off the SD card. faster-whisper is now the only slow
+# load left, so this could come down — left alone until somebody has actually timed a cold boot,
+# because a start timeout that is too tight fails as "he did not come up after a reboot".
 TimeoutStartSec=180
 
 Restart=on-failure
@@ -52,8 +56,9 @@ RestartSec=5
 StartLimitBurst=3
 StartLimitIntervalSec=300
 
-# Audio must not be starved by anything else on a 4-core box, and llama-server takes all four
-# threads when he thinks. This keeps him below interactive work without making him unresponsive.
+# Audio must not be starved by anything else on a 4-core box. This mattered more when
+# llama-server took all four threads to think; the remaining CPU cost is faster-whisper on one
+# utterance at a time, and the priority is cheap to keep.
 Nice=-5
 
 [Install]

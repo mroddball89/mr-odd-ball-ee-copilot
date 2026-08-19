@@ -56,24 +56,24 @@ selector — the tier system (`classify.py`, `tiers.py`, `brains/`) is **not** c
 
 ## Stage 4 — The voice loop
 
-- [ ] `engine/turn.py`, modelled on `~/oddball/orchestrator/turn.py`
-- [ ] Keep: conditional greeting, `Timings`, WAV capture saving, mic gating
-- [ ] `main.py` becomes a launcher: `--voice` (default), `--text`, `--headless`
+- [x] `engine/turn.py`, modelled on `~/oddball/orchestrator/turn.py`
+- [x] Keep: conditional greeting, `Timings`, WAV capture saving, mic gating
+- [x] `main.py` becomes a launcher: `--voice` (default), `--text`, `--headless`
 
 ## Stage 5 — Gates and the quiz lock over voice
 
 - [x] Split `os_agent` / `web_agent` into `propose()` / `resume(approved)`
 - [x] `Pending` carries a spoken paraphrase AND the exact command; card renders first
 - [x] Copy `is_yes()`; silence, mumble, timeout and refusal all mean no
-- [ ] Extend the `forbidden_commands` blocklist (no `dd`, `shutdown`, `> /dev/sd*`, `chmod -R 777 /`)
+- [x] Extend the `forbidden_commands` blocklist (3 -> 19 patterns, 60 checks, probe bites) (no `dd`, `shutdown`, `> /dev/sd*`, `chmod -R 777 /`)
 - [x] Quiz lock: exit-phrase family, wake-word escape, visible QUIZ MODE chip
 
 ## Stage 6 — HUD chat panel
 
-- [ ] Outbound `card` / `transcript` / `mode` / `pending` messages in `hud_bridge.py`
-- [ ] Inbound receive loop: typed `text`, `approve` — `broadcast_threadsafe` in reverse
-- [ ] Chat column in `face-preview.html`; code cards, real tables, scrollable logs
-- [ ] Panel collapses when a turn produces no cards
+- [x] Outbound `card` / `transcript` / `mode` / `pending` messages in `hud_bridge.py`
+- [x] Inbound receive loop: typed `text`, `approve` — `broadcast_threadsafe` in reverse
+- [x] Chat column in `face-preview.html`; code cards, real tables, scrollable logs
+- [x] Panel hidden entirely unless `?chat=1`
 
 ## Stage 7 — Floating on the Pi desktop — **mostly already built**
 
@@ -84,9 +84,9 @@ him running on the Pi desktop transparently today:
 
 - [x] Transparent, undecorated, always-on-top face window — exists, proven on hardware
 - [x] Autostart at boot — `config/oddball.service` + `config/oddball-face.desktop`
-- [ ] Promote `spike_gtk_face.py` to `hud/float.py` — it is the application now, not a spike
-- [ ] A third rig mode: face **+ chat panel**, no rig chrome (`?solo=1` hides the panel today)
-- [ ] Repoint `oddball.service` `ExecStart` at the merged entry point
+- [x] Promote `spike_gtk_face.py` to `hud/float.py` — it is the application now, not a spike
+- [x] A third rig mode: face **+ chat panel**, no rig chrome (`?solo=1` hides the panel today)
+- [x] Repoint `oddball.service` `ExecStart` and the .desktop Exec at the merged entry point
 - [ ] `sudo apt install gir1.2-gtk-4.0 gir1.2-webkit-6.0 libwebkitgtk-6.0-4 python3-gi`
 
 ## Stage 8 — Verification
@@ -94,9 +94,10 @@ him running on the Pi desktop transparently today:
 - [x] `verify_split.py` — **and prove it bites**: plant a fenced C++ block in the prose path
 - [x] `verify_engine.py` (gates + quiz + failure lines, 97 checks, probe bites) — nothing executes without an explicit yes
 - [ ] `verify_router.py` — all 9 routes reachable, `PERSONA`/`UTILITY` don't swallow EE questions
-- [ ] `verify_quiz.py`, `verify_rag.py`
+- [x] quiz covered by `verify_engine.py`; `verify_chat.py` + `verify_os_guard.py` added
+- [ ] `verify_rag.py` — needs datasheet PDFs in `data/` to be meaningful
 - [ ] End-to-end on the Pi, six scenarios
-- [ ] `media/` — turn-latency data, script and chart
+- [x] `media/` — turn-latency data (before/after), script and chart
 
 ---
 
@@ -109,4 +110,34 @@ number on a chart rather than a feeling.
 
 ## Review
 
-_Filled in as stages land._
+**Done: stages 0-7, and most of 8.** 10,717 checks green across 13 harnesses; three of them
+carry a `--probe` that removes the guard and confirms the checks go red.
+
+### What the measurements changed
+
+- **D3 — the free tier is 20 requests/day, not ~1,500.** Found by exhausting it in five
+  questions on the first end-to-end run. Jobs now split across models because the quota is
+  per model: routing on `flash-lite` (~750ms, its own bucket), agents on `flash`.
+- **UTILITY was missing every EE acronym.** `media/scripts/measure_turn.py` timed ten
+  questions; "what does i2c stand for" missed the tables, fell through to the persona agent,
+  and cost 2.20s and one of the twenty. 19 acronym rows later it is 0.73s and free, and
+  0/10 exceed the 2.0s budget instead of 1/10. Chart: `media/charts/turn-latency.svg`.
+- **The RAG pipeline was never connected.** Built, embedded, persisted, and never queried.
+
+### What didn't work
+
+- **PyQt6 for the floating face.** Proposed in the plan and wrong — LB had already shipped
+  GTK4 + WebKitGTK (D41). The spike was promoted rather than replaced.
+- **A probe that asserted a patched lambda returns None.** A tautology dressed as a
+  non-vacuity check. Rewritten to drive the real `split()`; then the gate probe had the same
+  shape and got the same treatment.
+- **Three checks that punished their own documentation.** `verify-rig` counting script tags
+  hit a literal tag in a comment; `verify_chat`'s "never innerHTML" hit the comment promising
+  never to use innerHTML. The comment gives way, never the check.
+
+### Left for LB
+
+- [ ] **Rotate the Gemini key** — it was in plaintext in three files
+- [ ] Ingest datasheet PDFs into `data/`, run `python tools/vector_db.py`, then `verify_rag.py`
+- [ ] Deploy to the Pi and run the six end-to-end scenarios; nothing here has run on hardware
+- [ ] Decide on D3's option 3: put a local model back for PERSONA, which has no quota

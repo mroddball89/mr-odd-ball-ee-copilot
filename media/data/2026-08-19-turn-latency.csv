@@ -1,0 +1,11 @@
+measured_at,question,route,route_s,agent_s,total_s,speech_words,cards,ok,notes
+2026-08-19T13:04:08,what time is it,utility,0.922,0.047,0.985,4,0,yes,instant:time
+2026-08-19T13:04:09,what day is it today,utility,0.766,0.0,0.781,2,0,yes,instant:date
+2026-08-19T13:04:10,what is the date,utility,0.672,0.0,0.687,4,0,yes,instant:date
+2026-08-19T13:04:10,what does mosfet mean,utility,0.734,0.0,0.75,31,0,yes,instant:define
+2026-08-19T13:04:11,what does i2c stand for,utility,0.735,0.0,0.735,30,0,yes,instant:define
+2026-08-19T13:04:12,convert 3.3 volts to millivolts,utility,0.812,0.0,0.812,5,0,yes,instant:convert
+2026-08-19T13:04:13,how many ohms in a kilohm,utility,0.687,0.0,0.703,5,0,yes,instant:convert
+2026-08-19T13:04:13,what is the speed of light,utility,0.656,0.0,0.672,18,0,yes,instant:formula
+2026-08-19T13:04:14,what is planck's constant,utility,0.859,0.0,0.875,21,0,yes,instant:constant
+2026-08-19T13:04:15,what does capacitance mean,utility,0.688,0.0,0.688,22,0,yes,instant:define

@@ -13,7 +13,7 @@ Categories=Utility;
 # reserved characters an Exec argument may not carry unquoted — an unquoted `?solo=1` is
 # malformed, and a launcher is free to mangle or reject the whole line. It would fail as
 # "his face didn't come up after a reboot", days later, with nothing pointing here.
-Exec=/home/ironi/oddball/venv/bin/python /home/ironi/oddball/tools/spike_gtk_face.py --url "http://127.0.0.1:8765/?solo=1" --transparent --undecorated --width 600 --height 600
+Exec=/home/ironi/oddball/venv/bin/python /home/ironi/oddball/hud/float.py --url "http://127.0.0.1:8765/?chat=1" --transparent --undecorated --width 1100 --height 620
 Path=/home/ironi/oddball
 Icon=/home/ironi/oddball/assets/mr-odd-ball-reference.png
 
@@ -24,17 +24,27 @@ X-GNOME-Autostart-enabled=true
 # forever and shows his resting state until it connects, so it does not matter which of the two
 # starts first — and that is a property of the rig worth keeping rather than designing around.
 #
-# He runs as JUST HIMSELF on the desktop (D41). Three flags do that, and all three are
-# required — drop any one and the effect disappears completely rather than degrading:
+# ?chat=1 rather than ?solo=1, since 2026-08-19. He is the EE copilot now, and a firmware
+# answer contains a C snippet and a register table — D32 measured Piper at ~160 wpm, so 40
+# words is about 15 seconds of audio and none of that can be read aloud. engine/split.py sends
+# the sentence to his mouth and everything else to the panel beside him, so the panel has to
+# be on screen or half of every answer is lost.
 #
-#   ?solo=1        the page hides its own chrome and clears its background
+# For him alone with no panel — the look D41 shipped — put ?solo=1 back and use
+# --width 600 --height 600. Nothing else changes; both are modes of the same rig.
+#
+# Three flags make the transparency work, and all three are required — drop any one and the
+# effect disappears completely rather than degrading:
+#
+#   ?chat=1        the page hides its dev chrome and clears its background
 #   --transparent  the window paints no backdrop either
 #   --undecorated  no title bar, which is a backdrop with a name on it
 #
-# 600x600 rather than fullscreen, deliberately. Fullscreen + transparent is an invisible
+# 1100x620 rather than fullscreen, deliberately. Fullscreen + transparent is an invisible
 # window covering the whole display that still swallows every click: the desktop would look
-# reachable and not be. He is 560px in either case (the rig caps him there), so fullscreen
-# would buy nothing and cost the rest of the screen.
+# reachable and not be. It is wider than the old 600x600 because he now shares the window —
+# the rig gives him 42% and the panel the rest, and a chat column under ~600px wraps a
+# register table into nonsense.
 #
 # Wayland lets no client place its own window, so labwc decides where he lands. There is no
 # title bar to drag him by; Super+drag moves him. Anchoring him to a corner needs
@@ -48,6 +58,8 @@ X-GNOME-Autostart-enabled=true
 # 600 --height 600` and add `--fullscreen`. For the development page with all its buttons,
 # drop `?solo=1` too.
 #
-# This runs tools/spike_gtk_face.py, which is still named a spike because that is what it is:
-# the bare face window with no chat UI. When the chat application exists, this Exec line is the
-# one thing that has to change.
+# This ran tools/spike_gtk_face.py until 2026-08-19, and this comment used to say that when
+# the chat application existed, this Exec line was the one thing that would have to change.
+# It existed, and it was — the spike is now hud/float.py and the URL carries ?chat=1. Nothing
+# inside the window needed changing at all, which is what ?chat=1 being a mode of the same rig
+# rather than a second page bought.

@@ -606,4 +606,83 @@ EE_ROWS: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
 
     ('wye_connection', 'power_systems', ('wye connection',),
      'A wye connection is part of a circuit transformation used to simplify network analysis. Its name comes from the shape of the circuit diagram, which looks like the letter.'),
+
+    # ============================================== acronyms and bench vocabulary
+    #
+    # Added 2026-08-19, from a measurement rather than a hunch. media/scripts/measure_turn.py
+    # timed ten UTILITY questions; nine were answered from these tables in 0.61-1.14s and one,
+    # "what does i2c stand for", missed and fell through to the persona agent at 2.20s.
+    #
+    # The table had `mosfet` and `capacitance` and 325 others, and not one of the acronyms an
+    # embedded student says out loud all day. Under D3's 20-requests-per-day ceiling a miss is
+    # not merely slow — it spends one of twenty. This is D3's "widen UTILITY" recommendation
+    # applied to the specific gap that was measured.
+    #
+    # `define.look_up` requires the term to END the question, give or take a trailer, and
+    # "stand for" and "stands for" are already in `_TRAILERS` — so "what does i2c stand for"
+    # was always going to work the moment the row existed.
+
+    ('i2c', 'digital_logic', ('i2c', 'i squared c'),
+     'I2C stands for Inter Integrated Circuit. It is a two wire serial bus, a clock line and a data line, that lets one controller talk to many chips by address.'),
+
+    ('spi', 'digital_logic', ('spi',),
+     'SPI stands for Serial Peripheral Interface. It uses four wires and a separate select line per chip, and it is faster than I2C but needs more pins.'),
+
+    ('uart', 'digital_logic', ('uart',),
+     'UART stands for Universal Asynchronous Receiver Transmitter. It sends bytes over one wire in each direction with no shared clock, so both ends must agree the baud rate in advance.'),
+
+    ('pwm', 'electronics', ('pwm', 'pulse width modulation'),
+     'PWM stands for Pulse Width Modulation. It switches a signal fully on and fully off very fast, and the fraction of time spent on sets the average power delivered.'),
+
+        # 'analog to digital converter' is NOT claimed here — electronics already holds it,
+    # and define._alias_order() refuses the grab at import. The acronym was the gap.
+    ('adc', 'electronics', ('adc',),
+     'ADC stands for Analog to Digital Converter. It samples a continuous voltage and reports it as a number, and its resolution in bits sets how finely it can distinguish two levels.'),
+
+    ('dac', 'electronics', ('dac',),
+     'DAC stands for Digital to Analog Converter. It turns a number into a proportional output voltage or current, doing the opposite job of an analog to digital converter.'),
+
+    ('gpio', 'digital_logic', ('gpio', 'general purpose input output'),
+     'GPIO stands for General Purpose Input Output. It is a pin a program can set as either an input to read or an output to drive, rather than one fixed to a single function.'),
+
+    ('pcb', 'electronics', ('pcb', 'printed circuit board'),
+     'PCB stands for Printed Circuit Board. It is the board that holds the components and connects them with copper traces etched onto insulating layers.'),
+
+    ('led', 'electronics', ('led',),
+     'LED stands for Light Emitting Diode. It only conducts one way and gives off light when it does, and it needs a series resistor to limit the current through it.'),
+
+    ('mcu', 'microelectronics', ('mcu', 'microcontroller'),
+     'MCU stands for Microcontroller Unit. It is a whole small computer on one chip, with the processor, the memory and the peripherals all in the same package.'),
+
+    ('fpga', 'digital_logic', ('fpga',),
+     'FPGA stands for Field Programmable Gate Array. It is a chip full of logic blocks you wire up yourself after manufacture, so the hardware itself is configured rather than programmed.'),
+
+    ('asic', 'microelectronics', ('asic',),
+     'ASIC stands for Application Specific Integrated Circuit. It is a chip designed for one job, which makes it fast and cheap in volume and impossible to change afterwards.'),
+
+    ('rtos', 'digital_logic', ('rtos', 'real time operating system'),
+     'RTOS stands for Real Time Operating System. It schedules tasks so that a deadline is guaranteed to be met, which matters more than raw average speed in control work.'),
+
+    # 'rms' is deliberately absent. formulas.rms already answers "what is the rms", and the
+    # formula table is consulted first — so a glossary row here would be unreachable dead
+    # weight. verify_define.py checks exactly that ("no entry is shadowed by the formula or
+    # constant table") and refused this row on the first try.
+
+    ('esr', 'electronics', ('esr', 'equivalent series resistance'),
+     'ESR stands for Equivalent Series Resistance. It is the small unwanted resistance inside a real capacitor, and a high value is why an old capacitor runs hot and filters poorly.'),
+
+    ('duty_cycle', 'electronics', ('duty cycle',),
+     'Duty cycle is the fraction of one period a signal spends switched on, given as a percentage. Fifty percent is on and off for equal times.'),
+
+    ('decoupling_capacitor', 'electronics', ('decoupling capacitor', 'bypass capacitor'),
+     'A decoupling capacitor sits across the supply pins of a chip and supplies the sudden current the chip demands when it switches. Without one the local supply voltage dips and the chip can misbehave.'),
+
+    ('pull_up_resistor', 'digital_logic', ('pull up resistor',),
+     'A pull up resistor ties a signal line to the supply through a resistance, so the line reads high when nothing is driving it. I2C needs one on each of its two lines.'),
+
+    ('watchdog_timer', 'digital_logic', ('watchdog timer',),
+     'A watchdog timer resets the processor unless the running program keeps clearing it. It is what recovers a device that has locked up with nobody there to unplug it.'),
+
+    ('firmware', 'microelectronics', ('firmware',),
+     'Firmware is the program stored in a device and run by its own processor. It sits between the hardware and any software talking to it, and it is usually updated rarely.'),
 )
