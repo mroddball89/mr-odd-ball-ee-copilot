@@ -1,23 +1,30 @@
 # Mr Odd Ball — EE Copilot
-# Versions are the ones this ran against on 2026-08-19. LangChain 1.x moved a lot of imports,
-# so these are pinned to minors rather than left open.
+# LOWER BOUNDS, NOT PINS — the same convention the assistant half already used.
+#
+# These were `~=` pins copied from a Windows environment where the packages were already
+# installed in a mutually compatible set. On a FRESH aarch64 venv that set is unreachable:
+# pinning langchain-core to ~=1.5 while langchain-community and langchain-google-genai each
+# constrain it from opposite directions gave pip a ResolutionImpossible, and its error named
+# langchain-core, which resolves fine on its own. An hour of the Pi bring-up went into that.
+#
+# A pin that only works on the machine it was captured on is not a pin, it is a snapshot. Let
+# pip solve it, and pin exactly only if the two boxes ever actually disagree.
 
 # --- LLM and routing -------------------------------------------------------------------
-langchain-core~=1.5
-langchain-google-genai~=4.3          # ChatGoogleGenerativeAI, with_structured_output
-pydantic~=2.13                       # RouteDecision — the router's structured output
-python-dotenv~=1.2                   # GOOGLE_API_KEY out of .env, never out of source
+langchain-google-genai>=4.3          # ChatGoogleGenerativeAI, with_structured_output
+pydantic>=2.13                       # RouteDecision — the router's structured output
+python-dotenv>=1.2                   # GOOGLE_API_KEY out of .env, never out of source
 
 # --- Web agent's loaders, and the text splitter -----------------------------------------
-langchain-community~=0.4             # DuckDuckGoSearchRun, PyPDFDirectoryLoader
-langchain-text-splitters~=1.1        # RecursiveCharacterTextSplitter
+langchain-community>=0.4             # DuckDuckGoSearchRun, PyPDFDirectoryLoader
+langchain-text-splitters>=1.1        # RecursiveCharacterTextSplitter
 
 # --- Math agent ------------------------------------------------------------------------
-langchain-experimental~=0.4          # PythonREPLTool
+langchain-experimental>=0.4          # PythonREPLTool
 
 # --- Web agent -------------------------------------------------------------------------
-duckduckgo-search~=8.1
-ddgs~=9.15                           # the renamed package DuckDuckGoSearchRun now calls into
+duckduckgo-search>=8.1
+ddgs>=9.15                           # the renamed package DuckDuckGoSearchRun now calls into
 
 # =======================================================================================
 # The assistant half — wake word, ears, voice, face. Merged from mroddball89/mr-odd-ball-ai.
