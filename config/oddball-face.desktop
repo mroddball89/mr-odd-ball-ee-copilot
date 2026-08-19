@@ -13,7 +13,7 @@ Categories=Utility;
 # reserved characters an Exec argument may not carry unquoted — an unquoted `?solo=1` is
 # malformed, and a launcher is free to mangle or reject the whole line. It would fail as
 # "his face didn't come up after a reboot", days later, with nothing pointing here.
-Exec=/home/ironi/oddball/venv/bin/python /home/ironi/oddball/hud/float.py --url "http://127.0.0.1:8765/?chat=1" --transparent --undecorated --width 1100 --height 620
+Exec=/home/ironi/oddball/venv/bin/python /home/ironi/oddball/hud/float.py --url "http://127.0.0.1:8765/?chat=1" --transparent --undecorated --width 560 --height 900
 Path=/home/ironi/oddball
 Icon=/home/ironi/oddball/assets/mr-odd-ball-reference.png
 
@@ -40,11 +40,17 @@ X-GNOME-Autostart-enabled=true
 #   --transparent  the window paints no backdrop either
 #   --undecorated  no title bar, which is a backdrop with a name on it
 #
-# 1100x620 rather than fullscreen, deliberately. Fullscreen + transparent is an invisible
-# window covering the whole display that still swallows every click: the desktop would look
-# reachable and not be. It is wider than the old 600x600 because he now shares the window —
-# the rig gives him 42% and the panel the rest, and a chat column under ~600px wraps a
-# register table into nonsense.
+# 560x900 — a tall narrow strip, not a slab. He is on top and the chat box is under him, so
+# the window is portrait: 360px of him (the rig caps him there) and the rest for the
+# transcript. A strip in the corner of the desktop reads as an assistant; a wide two-column
+# panel reads as an application that has taken the screen.
+#
+# Not fullscreen, deliberately. Fullscreen + transparent is an invisible window covering the
+# whole display that still swallows every click: the desktop would look reachable and not be.
+#
+# Wide content does not wrap — a register table or a C snippet scrolls sideways inside its own
+# card (the .card pre rule sets overflow-x), so a narrow window costs a horizontal drag on the
+# widest cards and never costs a mangled table.
 #
 # Wayland lets no client place its own window, so labwc decides where he lands. There is no
 # title bar to drag him by; Super+drag moves him. Anchoring him to a corner needs
