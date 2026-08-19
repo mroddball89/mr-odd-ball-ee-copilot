@@ -15,7 +15,7 @@ The chat UI now exists, and nothing in this file had to change to host it. That 
 of `?chat=1` being a mode of the same rig rather than a second page: the window loads a URL
 and composites it, and the URL decides whether that is him alone or him beside a transcript.
 
-    python hud/float.py --url 'http://127.0.0.1:8765/?chat=1'         --transparent --undecorated --width 1100 --height 620
+    python hud/float.py --url 'http://127.0.0.1:8765/?chat=1'         --transparent --undecorated --width 560 --height 900
 
 The rename is not cosmetic. `config/oddball-face.desktop` carried a note saying this Exec line
 was the one thing that would have to change when the chat application existed; leaving a file

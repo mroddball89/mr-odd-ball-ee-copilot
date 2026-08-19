@@ -107,28 +107,41 @@
   :root[data-chat="on"] .paper-grid { display: none; }
   :root[data-chat="on"] .stage { padding: 0; min-height: 100vh; }
 
-  /* He shares the viewport now, so he shrinks. Column-wise on a narrow window: a Pi
-     screen in portrait, or the float window docked to one side. */
-  :root[data-chat="on"] .shell { display: flex; gap: 0; height: 100vh; align-items: stretch; }
-  :root[data-chat="on"] .stage { flex: 0 0 42%; display: flex; align-items: center; }
-  :root[data-chat="on"] .rig-wrap { width: min(88vh, 40vw, 420px); }
-  :root[data-chat="on"] #chat { display: flex; }
+  /* He sits ON TOP, the box sits UNDER him. LB asked for it that way, and it is the right
+     shape for a floating window on a desktop: a tall narrow strip in a corner reads as an
+     assistant, where a wide two-column slab reads as an application taking over the screen.
 
-  @media (max-width: 900px) {
-    :root[data-chat="on"] .shell { flex-direction: column; }
-    :root[data-chat="on"] .stage { flex: 0 0 34vh; }
+     The gap and the padding are what stop the box looking welded to him — he is a character
+     standing above his own transcript, not the left half of a panel. */
+  :root[data-chat="on"] .shell {
+    display: flex; flex-direction: column;
+    height: 100vh; gap: 10px; padding: 10px;
   }
+  :root[data-chat="on"] .stage { flex: 0 0 auto; display: flex; justify-content: center; }
+  :root[data-chat="on"] .rig-wrap { width: min(42vh, 78vw, 360px); }
+  :root[data-chat="on"] #chat { display: flex; }
 
   /* Hidden entirely unless ?chat=1. A dev session opening the rig should see the rig. */
   #chat { display: none; }
 
   #chat {
     flex: 1 1 auto;
-    min-width: 0;                 /* or a wide <pre> forces the whole flex row to scroll */
+    min-width: 0;                 /* or a wide <pre> forces the whole column to scroll */
+    min-height: 0;                /* ...and lets #chatLog actually scroll instead of growing */
     flex-direction: column;
-    background: rgba(16, 20, 28, 0.86);
-    backdrop-filter: blur(8px);
-    border-left: 1px solid rgba(255,255,255,0.09);
+    /* 50% opacity, on the BACKGROUND only — never `opacity: 0.5` on the element.
+       That would fade the text and the code with it, and a half-transparent register value
+       over a wallpaper is unreadable at exactly the moment it matters. The box gets to be
+       see-through; what he is telling you does not. */
+    background: rgba(16, 20, 28, 0.5);
+    /* The blur is what makes 50% survivable. Without it the wallpaper's own contrast shows
+       straight through the text; with it the backdrop is muted to a wash and the foreground
+       stays legible. If the Pi's compositor ever drops backdrop-filter, raise the 0.5. */
+    backdrop-filter: blur(14px);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 14px;
+    overflow: hidden;             /* so children cannot square off the rounded corners */
+    box-shadow: 0 8px 28px rgba(0,0,0,0.28);
     font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     color: #E6EAF2;
   }
