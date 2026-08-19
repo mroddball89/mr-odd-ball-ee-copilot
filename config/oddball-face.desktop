@@ -1,0 +1,53 @@
+[Desktop Entry]
+Type=Application
+Name=Mr Odd Ball
+GenericName=Character face
+Comment=His animated face. Escape leaves fullscreen, Ctrl+Q quits, F11 toggles.
+Categories=Utility;
+
+# Absolute paths, NOT %h. Desktop entries expand %f %F %u %U %i %c %k and nothing else —
+# systemd's %h means nothing here and would be passed through as the literal string, so the
+# window would fail to start with a path that does not exist.
+#
+# The URL is QUOTED, and that is not cosmetic. The Desktop Entry spec lists "?" among the
+# reserved characters an Exec argument may not carry unquoted — an unquoted `?solo=1` is
+# malformed, and a launcher is free to mangle or reject the whole line. It would fail as
+# "his face didn't come up after a reboot", days later, with nothing pointing here.
+Exec=/home/ironi/oddball/venv/bin/python /home/ironi/oddball/tools/spike_gtk_face.py --url "http://127.0.0.1:8765/?solo=1" --transparent --undecorated --width 600 --height 600
+Path=/home/ironi/oddball
+Icon=/home/ironi/oddball/assets/mr-odd-ball-reference.png
+
+Terminal=false
+X-GNOME-Autostart-enabled=true
+
+# No ordering against oddball.service on purpose. The rig retries its WebSocket every 2s
+# forever and shows his resting state until it connects, so it does not matter which of the two
+# starts first — and that is a property of the rig worth keeping rather than designing around.
+#
+# He runs as JUST HIMSELF on the desktop (D41). Three flags do that, and all three are
+# required — drop any one and the effect disappears completely rather than degrading:
+#
+#   ?solo=1        the page hides its own chrome and clears its background
+#   --transparent  the window paints no backdrop either
+#   --undecorated  no title bar, which is a backdrop with a name on it
+#
+# 600x600 rather than fullscreen, deliberately. Fullscreen + transparent is an invisible
+# window covering the whole display that still swallows every click: the desktop would look
+# reachable and not be. He is 560px in either case (the rig caps him there), so fullscreen
+# would buy nothing and cost the rest of the screen.
+#
+# Wayland lets no client place its own window, so labwc decides where he lands. There is no
+# title bar to drag him by; Super+drag moves him. Anchoring him to a corner needs
+# gtk4-layer-shell, which is NOT installed — the Pi has libgtk-layer-shell0 0.9.0-2, the GTK3
+# build, which cannot load into this GTK4 process.
+#
+# THE WAY OUT, since there is no close button: Escape closes a windowed face, Ctrl+Q always
+# quits. Both need keyboard focus — click him first.
+#
+# For the old fullscreen look on a solid backdrop, drop `--transparent --undecorated --width
+# 600 --height 600` and add `--fullscreen`. For the development page with all its buttons,
+# drop `?solo=1` too.
+#
+# This runs tools/spike_gtk_face.py, which is still named a spike because that is what it is:
+# the bare face window with no chat UI. When the chat application exists, this Exec line is the
+# one thing that has to change.

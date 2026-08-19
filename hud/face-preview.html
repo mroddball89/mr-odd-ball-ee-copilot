@@ -1,0 +1,1200 @@
+<title>Mr Odd Ball — Character Rig</title>
+
+<style>
+  :root {
+    /* --- his colors, sampled from the reference art --- */
+    --ball:    #2B5599;
+    --ball-lo: #1E3E75;
+    --ink:     #0A0A0A;
+    --sclera:  #FFFFFF;
+    --pupil:   #141414;
+    --maw:     #1A1A1A;
+    --tongue:  #C4628C;
+
+    /* --- stage (dark): neutrals biased toward his blue --- */
+    --stage:    #0E1016;
+    --stage-2:  #161A24;
+    --line:     #242A38;
+    --txt:      #DDE3EE;
+    --txt-dim:  #7C8AA5;
+    --hot:      #E8A33D;
+
+    /* tier rim-glow */
+    --tier-local:  #4C7FE0;
+    --tier-claude: #E8A33D;
+    --tier-gemini: #4FC3E8;
+    --tier-alert:  #E05A5A;
+
+    --r: 10px;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, "Segoe UI Variable Display", "Segoe UI", Roboto, sans-serif;
+  }
+
+  /* light = animator's model sheet on paper */
+  @media (prefers-color-scheme: light) {
+    :root {
+      --stage:   #EDE7DB;
+      --stage-2: #E2DACA;
+      --line:    #CCC2AE;
+      --txt:     #23201A;
+      --txt-dim: #6E6656;
+      --hot:     #A8631A;
+    }
+  }
+  :root[data-theme="light"] {
+    --stage:   #EDE7DB;
+    --stage-2: #E2DACA;
+    --line:    #CCC2AE;
+    --txt:     #23201A;
+    --txt-dim: #6E6656;
+    --hot:     #A8631A;
+  }
+  :root[data-theme="dark"] {
+    --stage:   #0E1016;
+    --stage-2: #161A24;
+    --line:    #242A38;
+    --txt:     #DDE3EE;
+    --txt-dim: #7C8AA5;
+    --hot:     #E8A33D;
+  }
+
+  /* ---------- solo: him, and nothing else ----------
+     Opted into with ?solo=1. This is what the Pi runs — a rig page is a development
+     surface, and a title, a caption and twenty buttons are not the character.
+
+     The chrome is HIDDEN, never removed. tools/verify-rig.mjs looks up every id the
+     script touches and asserts STATES matches the panel buttons, so deleting the panel
+     would take four checks and the runtime smoke test down with it. display:none keeps
+     every element addressable — $("caption") and $("rLink") still resolve and are still
+     written to, they simply have no viewer.
+
+     `background: transparent` is the half of the transparency that lives here. The other
+     half is the GTK window not painting a backdrop (tools/spike_gtk_face.py --transparent).
+     BOTH are required: WebKitGTK composites the page onto the window, so a page with a
+     background paints over a transparent window, and a transparent page over a painted
+     window shows the paint. Either alone looks exactly like no change at all. */
+  :root[data-solo="on"] body { background: transparent; }
+  :root[data-solo="on"] header,
+  :root[data-solo="on"] .caption,
+  :root[data-solo="on"] .panel,
+  :root[data-solo="on"] .paper-grid { display: none; }
+
+  /* With the panel gone he no longer shares the viewport, so the same 560px ball fits a
+     600px window instead of needing 800. The 560px cap is deliberate and stays — he is a
+     character on the desktop, not a fullscreen takeover. 96 rather than 100 leaves room
+     for `roll` and `finish`, which carry him sideways; verify-rig measures those staying
+     inside the viewBox with +11.0px to spare, and this keeps that margin real on screen. */
+  :root[data-solo="on"] .stage { padding: 0; min-height: 100vh; }
+  :root[data-solo="on"] .rig-wrap { width: min(96vh, 96vw, 560px); }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--stage);
+    color: var(--txt);
+    font-family: var(--sans);
+    display: flex;
+    flex-direction: column;
+    overflow-x: hidden;
+  }
+
+  /* model-sheet grid, light theme only */
+  .paper-grid {
+    position: fixed; inset: 0; pointer-events: none; opacity: 0; z-index: 0;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size: 32px 32px;
+    transition: opacity .3s;
+  }
+  @media (prefers-color-scheme: light) { .paper-grid { opacity: .35; } }
+  :root[data-theme="light"] .paper-grid { opacity: .35; }
+  :root[data-theme="dark"]  .paper-grid { opacity: 0; }
+
+  header {
+    position: relative; z-index: 2;
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    padding: 20px 24px 0;
+  }
+  h1 {
+    margin: 0;
+    font-size: clamp(1.15rem, 2.6vw, 1.6rem);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+  }
+  .sub {
+    font-family: var(--mono);
+    font-size: .72rem;
+    color: var(--txt-dim);
+    letter-spacing: .04em;
+  }
+
+  /* ---------- stage ---------- */
+  .stage {
+    position: relative; z-index: 1;
+    flex: 1;
+    display: grid;
+    place-items: center;
+    padding: 8px 16px 0;
+    min-height: 46vh;
+  }
+  .rig-wrap { position: relative; width: min(70vh, 88vw, 560px); aspect-ratio: 1; }
+
+  #rimglow {
+    position: absolute; inset: -14%;
+    border-radius: 50%;
+    background: radial-gradient(circle, var(--glow, transparent) 0%, transparent 62%);
+    opacity: var(--glowA, 0);
+    transition: opacity .45s ease, background .45s ease;
+    pointer-events: none;
+  }
+  svg#oddball { position: relative; width: 100%; height: 100%; display: block; overflow: visible; }
+
+  /* Every pivot is written explicitly in the transform attribute (translate→op→translate).
+     No transform-origin here on purpose: it would compound with those pivots. */
+
+  .caption {
+    position: relative; z-index: 2;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: clamp(.8rem, 1.9vw, .95rem);
+    color: var(--txt);
+    min-height: 2.4em;
+    padding: 4px 20px 0;
+    max-width: 62ch; margin: 0 auto;
+    opacity: 0; transition: opacity .35s;
+  }
+  .caption.on { opacity: 1; }
+
+  /* ---------- controls ---------- */
+  .panel {
+    position: relative; z-index: 2;
+    border-top: 1px solid var(--line);
+    background: color-mix(in srgb, var(--stage-2) 78%, transparent);
+    padding: 14px 20px 20px;
+    display: flex; flex-direction: column; gap: 14px;
+    backdrop-filter: blur(8px);
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: center; }
+
+  .lbl {
+    font-family: var(--mono); font-size: .64rem; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--txt-dim);
+    width: 100%; text-align: center;
+  }
+
+  button.state, button.gest {
+    font-family: var(--mono); font-size: .74rem;
+    padding: 8px 13px;
+    color: var(--txt-dim);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 7px;
+    transition: color .16s, border-color .16s, background .16s;
+  }
+  button.state:hover, button.gest:hover { color: var(--txt); border-color: var(--txt-dim); }
+  button.state:focus-visible,
+  button.gest:focus-visible { outline: 2px solid var(--hot); outline-offset: 2px; }
+  button.state[aria-pressed="true"] {
+    color: var(--txt);
+    border-color: currentColor;
+    background: color-mix(in srgb, var(--dot, var(--hot)) 14%, transparent);
+  }
+  /* gestures are momentary, not modal — they flash on press rather than latching */
+  button.gest { border-style: dashed; }
+  button.gest:active { color: var(--txt); background: color-mix(in srgb, var(--hot) 18%, transparent); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dot, var(--txt-dim)); flex: none; }
+  .key { color: var(--txt-dim); font-size: .62rem; opacity: .65; }
+
+  .sliders { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
+  .sl { display: flex; align-items: center; gap: 9px; font-family: var(--mono); font-size: .68rem; color: var(--txt-dim); }
+  .sl input { width: 108px; accent-color: var(--hot); }
+  .sl output { min-width: 2.6em; font-variant-numeric: tabular-nums; color: var(--txt); }
+
+  .readout {
+    font-family: var(--mono); font-size: .68rem; color: var(--txt-dim);
+    text-align: center; letter-spacing: .05em;
+  }
+  .readout b { color: var(--txt); font-weight: 600; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #rimglow, .caption { transition: none; }
+  }
+</style>
+
+<div class="paper-grid" aria-hidden="true"></div>
+
+<header>
+  <h1>Mr Odd Ball</h1>
+  <span class="sub">character rig · v0.1 · procedural SVG</span>
+</header>
+
+<main class="stage">
+  <div class="rig-wrap">
+    <div id="rimglow" aria-hidden="true"></div>
+
+    <svg id="oddball" viewBox="0 0 1000 1000" role="img"
+         aria-label="Mr Odd Ball, a blue cartoon ball with two large asymmetric eyes and a wide toothy mouth">
+      <defs>
+        <clipPath id="mawClip">
+          <ellipse cx="493" cy="712" rx="300" ry="128" transform="rotate(-6 493 712)"/>
+        </clipPath>
+        <!-- keeps the divider lines from running past the white into the cavity.
+             NOTE: pivot is 493,712 — the same pivot as the maw. Rotating about a
+             different centre translates the shape ~15px sideways, which is what
+             knocked the dividers out of register with the gum line. -->
+        <!-- Axis-aligned ON PURPOSE. This clip is referenced from inside a group that
+             is already rotated -6°, so the shape is evaluated in that rotated space.
+             Carrying a rotate() here too applied the rotation twice, skewing the clip
+             ~6° against the drawn gum line — which is why the dividers were ending
+             short at one end of the mouth and running long at the other. -->
+        <clipPath id="teethClip">
+          <ellipse cx="493" cy="570" rx="320" ry="128"/>
+        </clipPath>
+        <!-- Hard guarantee: a pupil can never paint outside its own sclera,
+             whatever the easing or a mid-blink squash is doing. -->
+        <clipPath id="eyeLClip"><ellipse cx="300" cy="368" rx="152" ry="178"/></clipPath>
+        <clipPath id="eyeRClip"><ellipse cx="700" cy="368" rx="152" ry="178"/></clipPath>
+
+        <!-- One "Z", centred on its own origin so the drift maths is just translate+scale.
+             Two passes: a heavy ink stroke underneath, a light fill on top. That is the same
+             outline-then-fill trick the sweat bead uses, and it is what keeps him legible
+             against the dark stage. -->
+        <!-- Thought glyphs. All three are STYLISED marks drawn in his own art style — heavy
+             ink outline, flat fill — not official brand assets. A photoreal logo beside a
+             cartoon ball reads as a sticker; these read as part of the drawing. Swap in
+             official SVGs here if exactness ever matters more than fitting the character. -->
+        <!-- Thin cartoon question mark: light ink outline, coloured centre.
+             #qCurve deliberately carries NO stroke attributes of its own. A <use> cannot
+             override a presentation attribute the referenced element sets directly, so the
+             first version — which set stroke="var(--ink)" on the path and then tried to
+             re-stroke it lighter through <use> — drew BOTH passes in ink and rendered as a
+             black mark on a near-black stage. Leaving the path bare lets each <use> supply
+             its own stroke, which is what makes the two-tone work.
+             The colour comes from `currentColor`, so each slot sets its own via `color`. -->
+        <path id="qCurve" d="M-16 -22 Q-16 -40 2 -40 Q20 -40 20 -24 Q20 -11 3 -4 L3 6"/>
+        <g id="qGlyph" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <use href="#qCurve" stroke="var(--ink)" stroke-width="16"/>
+          <circle cx="3" cy="26" r="9" fill="var(--ink)"/>
+          <use href="#qCurve" stroke="currentColor" stroke-width="7"/>
+          <circle cx="3" cy="26" r="3.6" fill="currentColor"/>
+        </g>
+
+        <!-- Claude: a burst of tapered rays. Drawn twice — a fattened ink pass for the
+             outline, then the warm fill on top — which is the same outline trick as the Zs. -->
+        <g id="clRay"><path d="M-7 -13 L0 -46 L7 -13 Z"/></g>
+        <g id="clBurst">
+          <use href="#clRay"/>
+          <use href="#clRay" transform="rotate(32.73)"/>
+          <use href="#clRay" transform="rotate(65.45)"/>
+          <use href="#clRay" transform="rotate(98.18)"/>
+          <use href="#clRay" transform="rotate(130.91)"/>
+          <use href="#clRay" transform="rotate(163.64)"/>
+          <use href="#clRay" transform="rotate(196.36)"/>
+          <use href="#clRay" transform="rotate(229.09)"/>
+          <use href="#clRay" transform="rotate(261.82)"/>
+          <use href="#clRay" transform="rotate(294.55)"/>
+          <use href="#clRay" transform="rotate(327.27)"/>
+        </g>
+        <g id="clGlyph">
+          <g fill="var(--ink)" stroke="var(--ink)" stroke-width="16" stroke-linejoin="round">
+            <use href="#clBurst"/><circle r="17"/>
+          </g>
+          <g fill="#D97757"><use href="#clBurst"/><circle r="10"/></g>
+        </g>
+
+        <!-- Gemini: the four-point spark with concave sides, blue→purple→warm gradient. -->
+        <linearGradient id="gemGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0"   stop-color="#4285F4"/>
+          <stop offset="0.55" stop-color="#9B72CB"/>
+          <stop offset="1"   stop-color="#D96570"/>
+        </linearGradient>
+        <g id="gemGlyph">
+          <path d="M0 -46 C4 -17 17 -4 46 0 C17 4 4 17 0 46 C-4 17 -17 4 -46 0 C-17 -4 -4 -17 0 -46 Z"
+                fill="url(#gemGrad)" stroke="var(--ink)" stroke-width="14" stroke-linejoin="round"/>
+        </g>
+
+        <!-- Checker tile is 28, i.e. two 14px squares, and the banner's strips are placed on
+             multiples of 14 so the tiling lands flush against their edges rather than being
+             sliced mid-square. patternUnits is user space, so the tile is evaluated in each
+             tape half's own (rotated) frame and stays locked to the banner as it swings. -->
+        <pattern id="tapeCheck" width="28" height="28" patternUnits="userSpaceOnUse">
+          <rect width="28" height="28" fill="#F4F1EA"/>
+          <rect width="14" height="14" fill="#111111"/>
+          <rect x="14" y="14" width="14" height="14" fill="#111111"/>
+        </pattern>
+
+        <g id="zGlyph">
+          <path d="M-30 -30 H30 L-30 30 H30" fill="none" stroke="var(--ink)"
+                stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M-30 -30 H30 L-30 30 H30" fill="none" stroke="#BFE3F5"
+                stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+        </g>
+      </defs>
+
+      <g id="bodyG">
+        <g id="headG">
+          <!-- body -->
+          <circle id="ball" cx="500" cy="500" r="468" fill="var(--ball)" stroke="var(--ink)" stroke-width="13"/>
+
+          <!-- Both eyes identical and unrotated, level at cy 368.
+               The sclera used to be rotated while the pupil was not, which is what
+               let the pupil drift outside the white. Same geometry both sides = no drift. -->
+          <g id="eyeLG">
+            <ellipse id="eyeL" cx="300" cy="368" rx="158" ry="184"
+                     fill="var(--sclera)" stroke="var(--ink)" stroke-width="13"/>
+            <g id="pupLG" clip-path="url(#eyeLClip)">
+              <ellipse id="pupL" cx="300" cy="368" rx="55" ry="70" fill="var(--pupil)"/>
+              <ellipse cx="300" cy="391" rx="14" ry="19" fill="var(--sclera)"/>
+            </g>
+          </g>
+
+          <g id="eyeRG">
+            <ellipse id="eyeR" cx="700" cy="368" rx="158" ry="184"
+                     fill="var(--sclera)" stroke="var(--ink)" stroke-width="13"/>
+            <g id="pupRG" clip-path="url(#eyeRClip)">
+              <ellipse id="pupR" cx="700" cy="368" rx="55" ry="70" fill="var(--pupil)"/>
+              <ellipse cx="700" cy="391" rx="14" ry="19" fill="var(--sclera)"/>
+            </g>
+          </g>
+
+          <!-- Closed lids for `sleeping`. Real arcs, not a squashed sclera: scaling the eye
+               to near-zero leaves a thin white sliver, which reads as a squint, not as shut.
+               The eye groups fade out as these fade in, so he genuinely closes his eyes.
+               Arc spans 236px against the eye's 316px width — a lid sits inside the socket. -->
+          <g id="lids" opacity="0" fill="none" stroke="var(--ink)"
+             stroke-width="20" stroke-linecap="round">
+            <path d="M182 362 Q300 300 418 362"/>
+            <path d="M582 362 Q700 300 818 362"/>
+          </g>
+
+          <!-- Dead-eye X overlay for the `error` state. Sits OUTSIDE both eye groups on
+               purpose, so it neither blinks nor inherits the eye's vertical scale — it is
+               drawn over his eyes, not part of them. Extent ±78 × ±92 from each eye centre,
+               comfortably inside the sclera's 151.5 × 177.5 inner bounds. -->
+          <g id="xeyes" opacity="0" stroke="var(--ink)" stroke-width="30" stroke-linecap="round">
+            <line x1="222" y1="276" x2="378" y2="460"/>
+            <line x1="222" y1="460" x2="378" y2="276"/>
+            <line x1="622" y1="276" x2="778" y2="460"/>
+            <line x1="622" y1="460" x2="778" y2="276"/>
+          </g>
+
+          <!-- mouth: the whole group is the JAW and scales vertically.
+               Inside it, #teethAnti carries the inverse scale so the upper teeth
+               stay a fixed size and position — they belong to the skull, not the jaw.
+               They're still clipped by the scaled cavity, so a closing mouth
+               correctly hides them rather than squashing them. -->
+          <g id="mouthG">
+            <ellipse cx="493" cy="712" rx="300" ry="128" fill="var(--maw)" transform="rotate(-6 493 712)"/>
+            <g clip-path="url(#mawClip)">
+              <!-- tongue rides with the jaw -->
+              <ellipse cx="505" cy="804" rx="162" ry="62" fill="var(--tongue)"/>
+              <path d="M505 752 q26 30 4 58" fill="none" stroke="var(--ink)"
+                    stroke-width="7" stroke-linecap="round" opacity=".5"/>
+            <g id="teethAnti">
+              <!-- teeth: the same ellipse lifted and widened, so its lower arc
+                   becomes the gum line and the taper happens near the corners -->
+              <ellipse cx="493" cy="570" rx="320" ry="128" fill="var(--sclera)" transform="rotate(-6 493 712)"/>
+              <!-- Rotation and clipping are deliberately on SEPARATE groups.
+                   Outer = rotation only; inner = clip only, so the clip is
+                   unambiguously evaluated in the rotated frame where the teeth
+                   ellipse is axis-aligned. Each line runs long and is cut exactly
+                   on the gum line, so none can end short or overshoot. -->
+              <g transform="rotate(-6 493 712)">
+                <g clip-path="url(#teethClip)" stroke="var(--ink)" stroke-width="8">
+                  <line x1="248" y1="420" x2="248" y2="860"/>
+                  <line x1="309" y1="420" x2="309" y2="860"/>
+                  <line x1="370" y1="420" x2="370" y2="860"/>
+                  <line x1="431" y1="420" x2="431" y2="860"/>
+                  <line x1="492" y1="420" x2="492" y2="860"/>
+                  <line x1="553" y1="420" x2="553" y2="860"/>
+                  <line x1="614" y1="420" x2="614" y2="860"/>
+                  <line x1="675" y1="420" x2="675" y2="860"/>
+                  <line x1="736" y1="420" x2="736" y2="860"/>
+                </g>
+              </g>
+              <ellipse id="teethEdge" cx="493" cy="570" rx="320" ry="128" fill="none"
+                       stroke="var(--ink)" stroke-width="10" transform="rotate(-6 493 712)"/>
+            </g>
+            </g>
+            <ellipse id="mawEdge" cx="493" cy="712" rx="300" ry="128" fill="none"
+                     stroke="var(--ink)" stroke-width="13" transform="rotate(-6 493 712)"/>
+          </g>
+
+          <!-- Closed mouth for `sleeping`, on the same principle as #lids: the jaw cannot
+               squash to a line — at mouth 0 it is still a 57%-height ellipse with teeth in
+               it — so the shut mouth is drawn and crossfaded in instead. Carries the same
+               rotate(-6) as the maw so it sits on his mouth axis, not level. -->
+          <g id="mouthShut" opacity="0">
+            <line x1="353" y1="712" x2="633" y2="712" stroke="var(--ink)"
+                  stroke-width="22" stroke-linecap="round" transform="rotate(-6 493 712)"/>
+          </g>
+        </g>
+
+        <!-- sweat bead floats OUTSIDE the silhouette, clear of the right eye -->
+        <g id="sweat" opacity="0">
+          <path d="M906 148 q27 43 27 61 a27 27 0 0 1-54 0 q0-18 27-61z"
+                fill="#8FD4F0" stroke="var(--ink)" stroke-width="9" stroke-linejoin="round"/>
+        </g>
+
+        <!-- Three Zs drifting up and to the right on a staggered loop, for `sleeping`.
+             Sits beside the sweat bead: inside #bodyG so it travels and shrinks with him,
+             but outside #headG so it floats in the air instead of tilting with his head.
+             Placement and drift live in the ZZZ constant so the verification script can
+             prove they stay on screen while visible. -->
+        <g id="zzz" opacity="0">
+          <g id="z0"><use href="#zGlyph"/></g>
+          <g id="z1"><use href="#zGlyph"/></g>
+          <g id="z2"><use href="#zGlyph"/></g>
+        </g>
+
+        <!-- Thought marks orbiting his head while he thinks. Three fixed slots rather than a
+             drifting cloud, because he is r=468 in a 1000 box: there is no room DIRECTLY above
+             him (his crown is at y≈26), so the only space is the upper diagonals. Every slot
+             centre sits just outside the silhouette. Slot 1 is the swap slot — it shows a
+             question mark on `local` and the provider mark on `claude` / `gemini`. -->
+        <g id="think" opacity="0">
+          <g id="t0" color="#E05A5A"><use href="#qGlyph"/></g>
+          <g id="t1" color="#4C7FE0"><use href="#qGlyph"/></g>
+          <g id="t2" color="#E05A5A"><use href="#qGlyph"/></g>
+          <g id="t3" color="#4FC3E8"><use href="#qGlyph"/></g>
+          <g id="t4">
+            <g id="t4q" color="#E05A5A"><use href="#qGlyph"/></g>
+            <g id="t4c" opacity="0"><use href="#clGlyph"/></g>
+            <g id="t4g" opacity="0"><use href="#gemGlyph"/></g>
+          </g>
+          <g id="t5" color="#4C7FE0"><use href="#qGlyph"/></g>
+        </g>
+      </g>
+
+      <!-- Finish line. Deliberately a SIBLING of #bodyG, not a child: it is scenery, so it
+           must hold still while he rolls through it. Drawn after him so the tape passes in
+           front — that is what sells breaking through rather than rolling past.
+           Each half pivots about its own post, so the break point (x=640) is simply where
+           the two rects meet, and it is placed where his leading edge actually arrives. -->
+      <g id="finish" opacity="0">
+        <rect x="127" y="360" width="26" height="540" rx="13"
+              fill="#E0463C" stroke="var(--ink)" stroke-width="9"/>
+        <rect x="847" y="360" width="26" height="540" rx="13"
+              fill="#E0463C" stroke="var(--ink)" stroke-width="9"/>
+        <!-- Checkered borders top and bottom with a clear band between them. Checker alone
+             would swallow the lettering; this is how a real finish banner solves the same
+             problem. The word sits at global x=500, which is inside the LEFT half (the break
+             is at 640), so FINISH stays intact on one piece instead of tearing mid-word.
+             Local x is 360 because tapeL pivots at x=140. -->
+        <g id="tapeL">
+          <rect x="0" y="-28" width="500" height="56" fill="#F4F1EA"/>
+          <rect x="0" y="-28" width="500" height="14" fill="url(#tapeCheck)"/>
+          <rect x="0" y="14"  width="500" height="14" fill="url(#tapeCheck)"/>
+          <text x="360" y="0" text-anchor="middle" dominant-baseline="central"
+                font-family="system-ui, 'Segoe UI', sans-serif" font-weight="800"
+                font-size="30" letter-spacing="5" fill="var(--ink)">FINISH</text>
+          <rect x="0" y="-28" width="500" height="56"
+                fill="none" stroke="var(--ink)" stroke-width="7"/>
+        </g>
+        <g id="tapeR">
+          <rect x="-220" y="-28" width="220" height="56" fill="#F4F1EA"/>
+          <rect x="-220" y="-28" width="220" height="14" fill="url(#tapeCheck)"/>
+          <rect x="-220" y="14"  width="220" height="14" fill="url(#tapeCheck)"/>
+          <rect x="-220" y="-28" width="220" height="56"
+                fill="none" stroke="var(--ink)" stroke-width="7"/>
+        </g>
+      </g>
+    </svg>
+  </div>
+</main>
+
+<p class="caption" id="caption" aria-live="polite"></p>
+
+<section class="panel">
+  <div class="row">
+    <span class="lbl">state — click, or press 1–8</span>
+    <button class="state" data-s="idle"     style="--dot:#7C8AA5" aria-pressed="false"><i class="dot"></i>idle <span class="key">1</span></button>
+    <button class="state" data-s="listening" style="--dot:#5FD9A4" aria-pressed="false"><i class="dot"></i>listening <span class="key">2</span></button>
+    <button class="state" data-s="local"    style="--dot:#4C7FE0" aria-pressed="false"><i class="dot"></i>thinking · local <span class="key">3</span></button>
+    <button class="state" data-s="claude"   style="--dot:#E8A33D" aria-pressed="false"><i class="dot"></i>thinking · claude <span class="key">4</span></button>
+    <button class="state" data-s="gemini"   style="--dot:#4FC3E8" aria-pressed="false"><i class="dot"></i>thinking · gemini <span class="key">5</span></button>
+    <button class="state" data-s="speaking" style="--dot:#C4628C" aria-pressed="false"><i class="dot"></i>speaking <span class="key">6</span></button>
+    <button class="state" data-s="confused" style="--dot:#E05A5A" aria-pressed="false"><i class="dot"></i>confused <span class="key">7</span></button>
+    <button class="state" data-s="happy"    style="--dot:#8FD46A" aria-pressed="false"><i class="dot"></i>done <span class="key">8</span></button>
+  </div>
+
+  <div class="row">
+    <span class="lbl">state · v0.2 — letters</span>
+    <button class="state" data-s="sleeping"  style="--dot:#48506A" aria-pressed="true"><i class="dot"></i>sleeping <span class="key">S</span></button>
+    <button class="state" data-s="working"   style="--dot:#C98A2E" aria-pressed="false"><i class="dot"></i>working <span class="key">W</span></button>
+    <button class="state" data-s="straining" style="--dot:#6E8FE0" aria-pressed="false"><i class="dot"></i>straining <span class="key">H</span></button>
+    <button class="state" data-s="error"     style="--dot:#E05A5A" aria-pressed="false"><i class="dot"></i>error <span class="key">X</span></button>
+    <button class="state" data-s="excited"   style="--dot:#8FD46A" aria-pressed="false"><i class="dot"></i>excited <span class="key">E</span></button>
+    <button class="state" data-s="bored"     style="--dot:#7C8AA5" aria-pressed="false"><i class="dot"></i>bored <span class="key">B</span></button>
+  </div>
+
+  <div class="row">
+    <span class="lbl">gesture — one-shot, plays over the current state</span>
+    <button class="gest" data-g="startle"><i class="dot" style="--dot:#5FD9A4"></i>startle <span class="key">space</span></button>
+    <button class="gest" data-g="wink"><i class="dot" style="--dot:#C4628C"></i>wink <span class="key">K</span></button>
+    <button class="gest" data-g="bounce"><i class="dot" style="--dot:#8FD46A"></i>bounce <span class="key">N</span></button>
+    <button class="gest" data-g="roll"><i class="dot" style="--dot:#4FC3E8"></i>roll <span class="key">M</span></button>
+    <button class="gest" data-g="finish"><i class="dot" style="--dot:#E0463C"></i>finish line <span class="key">F</span></button>
+  </div>
+
+  <div class="row sliders">
+    <label class="sl">gaze x <input type="range" id="gx" min="-1" max="1" step=".01" value="0"><output id="gxo">0.00</output></label>
+    <label class="sl">gaze y <input type="range" id="gy" min="-1" max="1" step=".01" value="0"><output id="gyo">0.00</output></label>
+    <label class="sl">mouth <input type="range" id="mo" min="0" max="1" step=".01" value="0"><output id="moo">auto</output></label>
+  </div>
+
+  <p class="readout">
+    state <b id="rState">idle</b> · gesture <b id="rGest">–</b> · mouth <b id="rMouth">0.00</b>
+    · fps <b id="rFps">–</b> · link <b id="rLink">–</b>
+    · <span id="rNote">sliders override while you drag — double-click one to hand it back</span>
+  </p>
+</section>
+
+<script>
+(() => {
+  "use strict";
+
+  // ---- solo mode. `?solo=1` strips the page to the character alone (see the CSS block).
+  // Read from the URL for the same reason `?ws=` is: this stays ONE file that behaves
+  // differently on request, rather than forking a "kiosk copy" that quietly drifts from
+  // the rig everything else is verified against. Set on <html>, not <body>, because the
+  // theme attributes already live on :root and the CSS keys off the same place.
+  // `?solo=0` is honoured as OFF — a flag that cannot be turned off by setting it to zero
+  // is the kind of thing that wastes an evening on a machine you are SSH'd into.
+  const soloParam = new URLSearchParams(location.search).get("solo");
+  if (soloParam !== null && soloParam !== "0" && soloParam !== "false")
+    document.documentElement.dataset.solo = "on";
+
+  const $ = (id) => document.getElementById(id);
+  const el = {
+    body: $("bodyG"), head: $("headG"), ball: $("ball"),
+    pupLG: $("pupLG"), pupRG: $("pupRG"),
+    eyeLG: $("eyeLG"), eyeRG: $("eyeRG"),
+    mouth: $("mouthG"), teeth: $("teethAnti"), sweat: $("sweat"), xeyes: $("xeyes"),
+    lids: $("lids"), zzz: $("zzz"), z: [$("z0"), $("z1"), $("z2")], shut: $("mouthShut"),
+    think: $("think"), t: [$("t0"), $("t1"), $("t2"), $("t3"), $("t4"), $("t5")],
+    t4q: $("t4q"), t4c: $("t4c"), t4g: $("t4g"),
+    finish: $("finish"), tapeL: $("tapeL"), tapeR: $("tapeR"),
+    glow: $("rimglow"), cap: $("caption"),
+  };
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ---- states are parameter targets, not keyframes. the loop eases toward them.
+  // mouthBase stays high everywhere: the wide toothy grin IS the character.
+  // Closing it to a slit turns him into somebody else.
+  const STATES = {
+    idle:      { eye:1.00, pupil:1.00, bob:1.0, tilt:  0, blink:[2.2,6.0], drift:.30, mouthBase:.55, glow:"transparent",        glowA:0,   sweat:0, cap:"" },
+    listening: { eye:1.14, pupil:1.10, bob:0.6, tilt: -3, blink:[3.5,8.0], drift:.06, mouthBase:.42, glow:"#5FD9A4",            glowA:.30, sweat:0, cap:"listening…" },
+    // The three thinking tiers float marks around his head: question marks throughout, with
+    // the provider's own mark taking the top slot when the work has left the device.
+    // All three pull back to 0.86 — that is what clears the ring the marks live in. The sweat
+    // bead is gone from `claude` at LB's request; `straining` is the state that sweats now.
+    local:     { eye:0.92, pupil:0.92, bob:1.3, tilt:  5, blink:[1.6,4.0], drift:.55, mouthBase:.38, glow:"var(--tier-local)",  glowA:.26, sweat:0, think:1, zoom:.86,        cap:"thinking — on-device" },
+    claude:    { eye:1.05, pupil:0.86, bob:2.4, tilt: -6, blink:[1.0,2.6], drift:.85, mouthBase:.66, glow:"var(--tier-claude)", glowA:.42, sweat:0, think:1, zoom:.86, cl:1,  cap:"working — asking Claude" },
+    gemini:    { eye:1.02, pupil:1.05, bob:1.1, tilt:  2, blink:[1.4,3.4], drift:.95, mouthBase:.46, glow:"var(--tier-gemini)", glowA:.32, sweat:0, think:1, zoom:.86, gem:1, cap:"looking that up" },
+    speaking:  { eye:1.03, pupil:1.02, bob:1.5, tilt:  1, blink:[2.0,5.0], drift:.18, mouthBase:.50, glow:"var(--tongue)",      glowA:.22, sweat:0, cap:"Two hundred and fifty hertz — from your bcg_processor file, line forty-seven." },
+    confused:  { eye:0.88, pupil:0.80, bob:0.7, tilt:-13, blink:[2.6,5.5], drift:.45, mouthBase:.30, glow:"var(--tier-alert)",  glowA:.28, sweat:0, cap:"…say that again?" },
+    // `enter` plays a gesture the moment the state is entered — done arrives by rolling
+    // through a finish line rather than just appearing pleased.
+    happy:     { eye:0.34, pupil:1.00, bob:2.0, tilt:  0, blink:[9,14],    drift:.10, mouthBase:.88, glow:"#8FD46A",            glowA:.34, sweat:0, enter:"finish", cap:"done!" },
+
+    // --- v0.2 ---------------------------------------------------------------
+    // eye:.06 sits under the `T.eye > 0.5` blink guard, so blinking correctly stops —
+    // his eyes are already shut. drift 0 for the same reason: nothing to look at.
+    // lid:1 swaps the eyes for drawn closed arcs — see #lids. eye:0.10 makes the sclera
+    // squash down as it fades out, so entering the state reads as lids closing rather than
+    // as his eyes dissolving. zzz:1 floats the Zs.
+    // The one state where his mouth closes — LB's explicit exception to D9. mouthBase drops
+    // to .12 so the maw squashes down as it fades, making it read as closing rather than
+    // vanishing, then #mouthShut takes over as a straight line.
+    sleeping:  { eye:0.10, pupil:1.00, bob:0.5, tilt:  4, blink:[99,99],   drift:.00, mouthBase:.12, glow:"transparent",        glowA:0,   sweat:0, lid:1, zzz:1, shut:1, cap:"" },
+    // Deliberately calmer than `claude` — this one has to be watchable for a minute or more,
+    // and `claude`'s 2.4 bob is exhausting held that long.
+    working:   { eye:0.86, pupil:0.94, bob:0.9, tilt:  7, blink:[2.0,4.5], drift:.22, mouthBase:.40, glow:"var(--tier-claude)", glowA:.24, sweat:0, cap:"working on it — I'll tell you when it's done" },
+    // Reuses the existing sweat channel, so no new art.
+    straining: { eye:0.62, pupil:0.74, bob:1.8, tilt: -9, blink:[1.2,2.8], drift:.30, mouthBase:.34, glow:"var(--tier-local)",  glowA:.34, sweat:1, cap:"still going…" },
+    // The only new state needing art: #xeyes, driven by the `xeye` channel.
+    error:     { eye:1.00, pupil:0.70, bob:0.5, tilt: 16, blink:[99,99],   drift:.00, mouthBase:.26, glow:"var(--tier-alert)",  glowA:.55, sweat:0, xeye:1, cap:"that didn't work" },
+    // NOT a wider mouth: mouthBase above ~0.77 is clipped by JAW.maxSy, so anything higher
+    // renders identically. Reads bigger than `happy` through eyes, pupils and bounce instead.
+    excited:   { eye:1.22, pupil:1.18, bob:2.6, tilt: -2, blink:[3.0,6.5], drift:.20, mouthBase:.76, glow:"#8FD46A",            glowA:.48, sweat:0, cap:"oh, that worked beautifully" },
+    // Wide, slow, wandering gaze — he's looking anywhere but at you.
+    bored:     { eye:0.70, pupil:0.90, bob:0.6, tilt:  9, blink:[1.4,3.0], drift:.98, mouthBase:.44, glow:"transparent",        glowA:0,   sweat:0, cap:"" },
+  };
+
+  // These three are optional per row, so every other state doesn't need to carry a 0.
+  for (const s of Object.values(STATES)) {
+    if (s.xeye === undefined) s.xeye = 0;
+    if (s.lid  === undefined) s.lid  = 0;
+    if (s.zzz  === undefined) s.zzz  = 0;
+    if (s.shut === undefined) s.shut = 0;
+    if (s.think === undefined) s.think = 0;
+    if (s.cl   === undefined) s.cl   = 0;
+    if (s.gem  === undefined) s.gem  = 0;
+    if (s.zoom === undefined) s.zoom = 1;
+  }
+
+  // Six marks in an arc over his head, scattered in size and angle the way the reference art
+  // is — not a tidy row. Slot 4 is the swap slot: question mark on `local`, the provider's
+  // mark on `claude` / `gemini`.
+  //
+  // This layout is only possible because the thinking states shrink him (see `zoom` below).
+  // At full size he is r=468 in a 1000-unit box, his crown sits at y≈26, and there is no
+  // clear space above him at all — the first version had to crowd everything into the upper
+  // diagonals and the marks still overlapped his face. Pulling back to 0.86 opens a real ring
+  // and lets a mark sit directly over his head, which is what the reference actually shows.
+  //
+  // `s` is per-slot scale, `r` rotation. `half` is the glyph's base half-extent with stroke.
+  const THINK = {
+    slots: [
+      { x: 50,  y: 404, s: 0.62, r: -20 },
+      { x: 128, y: 165, s: 0.85, r:  12 },
+      { x: 381, y:  56, s: 0.70, r:  -8 },
+      { x: 643, y:  61, s: 0.78, r:  15 },
+      { x: 887, y: 175, s: 0.92, r: -14 },
+      { x: 950, y: 404, s: 0.66, r:  10 },
+    ],
+    bob: 9, pulse: 0.06, half: 48, rate: 1.4,
+  };
+
+  // Where the Zs live and how they drift. Kept as one constant so tools/verify-rig.mjs can
+  // read it and prove they stay on screen for as long as they are actually visible.
+  // `half` is the glyph's half-extent: 30 to the path edge plus half the 26px ink stroke.
+  // Origin sits 490px from his centre, just outside the 474.5px silhouette, so the first Z
+  // appears beside his head rather than on it. dy is -120 rather than -150 because at -150
+  // the last Z was still 5% visible 21px above the top of the frame.
+  const ZZZ = { x:880, y:190, dx:50, dy:-120, s0:0.55, s1:1.25, rate:0.42, half:43 };
+
+  // He boots ASLEEP. `idle` is awake-but-waiting — he blinks, breathes and looks around — so
+  // a rig that opens in it has already spent the change the wake word is supposed to cause,
+  // and until you speak he looks like he is ignoring you. This is the same reasoning as
+  // `wake.resting_state` in config/oddball.toml, applied to the one state the rig has to pick
+  // for itself before any server has told it anything: with no orchestrator running, or on the
+  // couple of seconds before the socket connects, THIS is what is on screen.
+  const BOOT = "sleeping";
+
+  let state = BOOT;
+  let T = STATES[BOOT];                       // targets
+
+  // Current (eased) values, seeded FROM the boot state rather than from a second hardcoded
+  // set of numbers. Those numbers described `idle`, so with BOOT asleep he visibly slumped
+  // shut every time the page loaded — a half-second animation of him falling asleep, which is
+  // a lie, because he was never awake. Deriving them means changing BOOT cannot leave the
+  // opening frame describing a different state than `state` claims.
+  //
+  // Runs after the defaults loop above, so every optional channel is already present.
+  const C = { gx:0, gy:0 };
+  function snapTo(t) {
+    C.eye = t.eye;   C.pupil = t.pupil; C.tilt = t.tilt;  C.mouth = t.mouthBase;
+    C.sweat = t.sweat; C.bob = t.bob;   C.drift = t.drift; C.xeye = t.xeye;
+    C.lid = t.lid;   C.zzz = t.zzz;     C.shut = t.shut;  C.think = t.think;
+    C.cl = t.cl;     C.gem = t.gem;     C.zoom = t.zoom;
+  }
+  snapTo(T);
+
+  // Exponential smoothing with an explicit time constant, in seconds.
+  // tau = how long to cover ~63% of the remaining distance. Frame-rate independent.
+  const ease = (cur, tgt, tau, dt) => cur + (tgt - cur) * (1 - Math.exp(-dt / tau));
+  const TAU = { eye:.16, pupil:.16, tilt:.30, gaze:.22, sweat:.45, bob:.40, drift:.6,
+                mouthTalk:.045, mouthRest:.20, xeye:.12, lid:.18, zzz:.55, shut:.18,
+                think:.30, mark:.22, zoom:.34 };
+
+  // Manual overrides from the sliders. null = "not overridden", for every channel.
+  // gx/gy used to use 0 as the sentinel, which meant dragging a gaze slider back to centre
+  // handed control *back* to the idle drift — centre was the one gaze you could not set.
+  const man = { gx:null, gy:null, mouth:null };
+
+  let blinkAt = 0, blinkPhase = 0;
+  let driftX = 0, driftY = 0, driftAt = 0;
+  let speechT0 = 0;                 // clock reset each time he starts talking
+
+  // Live lip-sync: real loudness from the TTS playback, one value per 20ms audio block.
+  // `v` is null until something sends one, so a rig with no server behaves exactly as it
+  // always did. `at` is on the same performance.now()/1000 clock as the frame loop.
+  const live = { v:null, at:-Infinity };
+  // A live value older than this is treated as gone. 0.30s is ~15 missed blocks — long
+  // enough that ordinary jitter never triggers it, short enough that a dropped link does
+  // not leave his jaw hanging mid-word.
+  const LIVE_MOUTH_STALE_S = 0.30;
+
+  // ---- gestures: one-shot, additive, played OVER whatever state is current.
+  //
+  // States are parameter TARGETS the loop eases toward — that is the whole design, and it is
+  // why every transition works without being authored. Startle, wink, bounce and roll are not
+  // targets though: they fire, play, and release. Forcing them into STATES would have broken
+  // the invariant. So they get a second, smaller mechanism instead: a timed offset ADDED on
+  // top at draw time, decaying to zero. A gesture can never leave a channel stuck — when it
+  // ends the underlying state is simply what remains. setState() needed no changes at all.
+  //
+  // travel / rise / spin / zoom are locomotion and drive #bodyG. The rest are face offsets.
+  const GESTURES = {
+    startle: { dur:0.55, attack:.10, eye:.34, pupil:.34, mouth:.26, tilt:-5, rise:24, zoom:.98 },
+    wink:    { dur:0.55, attack:.28, wink:"r", mouth:.14, tilt:4 },
+    bounce:  { dur:1.70, attack:.30, rise:70,  bounces:3, damp:1.5, zoom:.86, mouth:.10 },
+    roll:    { dur:1.90, attack:.30, travel:150, spin:540, zoom:.70, eye:.10 },
+
+    // The victory lap. This one is a scripted set-piece rather than a parameter row — it has
+    // phases, a prop, and a collision — so it supplies its own sampler. The generic path
+    // stays generic; `sample` is the escape hatch for gestures that genuinely need a script.
+    //
+    // He charges in from the left at CONSTANT speed (an ease-out here would put him at the
+    // tape in the first 9% of the run, before the viewer has read what is happening), breaks
+    // it at p=0.45, then smoothsteps to a stop dead centre at full size. Ending at tx=0,
+    // zoom=1 and a whole number of turns is what lets it release cleanly into `happy`.
+    finish: {
+      dur:2.60, attack:.34, eye:.10, mouth:.20,
+      // breakAt is where his leading edge actually reaches the tape (x=640), plus a beat.
+      // At 0.45 he sat inside the tape for a quarter second before it gave — it has to snap
+      // near enough to contact to read as cause and effect.
+      run:.72, from:-250, past:60, zoom:.50, spin:1080, breakAt:.38,
+      sample(p, G) {
+        if (p < this.run) {
+          const q = p / this.run;
+          G.tx   = this.from + (this.past - this.from) * q;
+          G.spin = this.spin * 0.78 * q;
+          G.zoom = this.zoom;
+        } else {
+          const q = (p - this.run) / (1 - this.run);
+          const es = q * q * (3 - 2 * q);
+          G.tx   = this.past * (1 - es);
+          G.spin = this.spin * (0.78 + 0.22 * es);
+          G.zoom = this.zoom + (1 - this.zoom) * es;
+        }
+        // tape: snaps on contact, droops from each post, flutters as it settles
+        const brk = Math.max(0, (p - this.breakAt) / (1 - this.breakAt));
+        const droop = 1 - Math.pow(1 - brk, 3);
+        const flap = brk > 0 ? Math.sin(brk * 17) * 9 * (1 - brk) : 0;
+        G.tapeL =  52 * droop + flap;
+        G.tapeR = -52 * droop - flap;
+        G.prop = Math.min(1, p / .10) * Math.min(1, (1 - p) / .18);
+      },
+    },
+  };
+
+  let gest = null, gestT0 = 0;
+  const G = { eye:0, pupil:0, mouth:0, tilt:0, winkL:0, winkR:0, tx:0, ty:0, spin:0, zoom:1,
+              tapeL:0, tapeR:0, prop:0 };
+
+  function playGesture(name) {
+    if (!GESTURES[name]) return;
+    gest = name;
+    gestT0 = performance.now() / 1000;
+    $("rGest").textContent = name;
+  }
+
+  /**
+   * Sample the active gesture into G. The formulas here are mirrored by
+   * tools/verify-rig.mjs to prove he stays inside the viewBox — keep the two in step.
+   */
+  function sampleGesture(t) {
+    G.eye = G.pupil = G.mouth = G.tilt = G.winkL = G.winkR = G.tx = G.ty = G.spin = 0;
+    G.tapeL = G.tapeR = G.prop = 0;
+    G.zoom = 1;
+    if (!gest) return;
+
+    const g = GESTURES[gest];
+    const p = (t - gestT0) / g.dur;
+    if (p < 0 || p >= 1) { gest = null; $("rGest").textContent = "–"; return; }
+    if (reduce) return;                      // reduced-motion: gesture runs its clock, draws nothing
+
+    // face offsets: snap up over `attack`, then ease back down
+    const env = p < g.attack ? p / g.attack : Math.pow(1 - (p - g.attack) / (1 - g.attack), 2);
+    G.eye   = (g.eye   ?? 0) * env;
+    G.pupil = (g.pupil ?? 0) * env;
+    G.mouth = (g.mouth ?? 0) * env;
+    G.tilt  = (g.tilt  ?? 0) * env;
+    if (g.wink === "r") G.winkR = env;
+    if (g.wink === "l") G.winkL = env;
+
+    // A gesture with its own script takes over from here — position, spin, zoom and props
+    // are all its business. Everything above still applies, so a set-piece can still use the
+    // face offsets without reimplementing them.
+    if (g.sample) { g.sample(p, G); return; }
+
+    // Out, through centre, back — so a roll returns him exactly where he started.
+    G.tx = (g.travel ?? 0) * Math.sin(2 * Math.PI * p);
+
+    // SMOOTH bounce, per LB. Raised cosine, so vertical velocity is zero at every ground
+    // contact: no cusp, no impact snap. A |sin| arc — the obvious choice — has a velocity
+    // discontinuity at each contact, which is exactly the stiff hop this is meant not to be.
+    G.ty = -(g.rise ?? 0) * (0.5 - 0.5 * Math.cos(2 * Math.PI * (g.bounces ?? 1) * p))
+                          * Math.exp(-(g.damp ?? 0) * p);
+
+    // Spin tracks DISPLACEMENT, not the clock. Driving it from p meant he kept turning the
+    // same way on the return leg — a ball rolling left while spinning clockwise reads as
+    // skidding backwards. Tying it to tx means he winds up going out and unwinds coming back,
+    // and the sign is right in both directions (moving right = clockwise = positive in SVG).
+    // It is still not no-slip: at r=468 one true revolution needs 2940px of travel and there
+    // is room for 150, so honest rolling would read as a faint lean. This is the cartoon
+    // convention, and it returns to 0 with him.
+    G.spin = (g.spin ?? 0) * Math.sin(2 * Math.PI * p);
+
+    // Zoom tracks NORMALISED DISPLACEMENT rather than the clock, so he is at his smallest
+    // exactly when he is furthest from centre. He fills 94% of the frame at rest, so
+    // travelling at full size would put him through the header and the control panel.
+    // Keying this to the clock instead leaves him oversized at the extremes — that version
+    // failed the viewBox check by ~34px.
+    const dn = Math.hypot(g.travel ? G.tx / g.travel : 0, g.rise ? G.ty / g.rise : 0);
+    G.zoom = 1 - (1 - (g.zoom ?? 1)) * Math.min(1, dn);
+  }
+
+  const rand = (a,b) => a + Math.random()*(b-a);
+
+  // Eye geometry, single source of truth — must match the SVG above.
+  // margin keeps a rim of white showing at full deflection.
+  //
+  // maxScale is the eye's containment ceiling, and it exists because gesture offsets ADD to
+  // state values: `startle` on top of `excited` reached 1.82, which put the eye straight
+  // through the top of his head. Clamping here rather than shrinking the gesture means any
+  // future state or gesture is safe by construction, not by arithmetic nobody re-checks.
+  const EYE = { lx:300, rx:700, cy:368, rxr:158, ryr:184, prx:55, pry:70, margin:26, maxScale:1.28 };
+
+  // Jaw envelope. Speech moves the mouth on three axes, not one:
+  //   sy     — opens (up/down)
+  //   sx     — narrows as it opens, widens as it closes (the "in and out")
+  //   dy     — the whole mouth eases down a little when wide, plus a syllable bob
+  // syA/syB are set so mouth 0.55 — his resting grin — lands exactly on scale 1.0,
+  // i.e. the reference art. maxSy is the ceiling that keeps him inside his own face.
+  //
+  // maxSy was 1.32, set against a containment check that held the ball STATIC and only
+  // compared the mouth's lowest y to the ball edge at x=500. Both parts were wrong: #ball
+  // squashes and #mouthG does not inherit it, and rotate(-6) drops the mouth's LEFT side,
+  // so it comes closest to the silhouette off-centre where the ball has already curved in.
+  // Measured properly, 1.32 was over the true ceiling — at a full shout while speaking the
+  // mouth crossed his chin by ~11px. 1.22 restores an 11.6px margin. Run tools/verify-rig.mjs.
+  //
+  // Root cause, left alone deliberately: the squash lives on #ball only, so his silhouette
+  // deforms while his features stay rigid, and the clearance moves with the breathing phase.
+  // Moving the squash up to #headG would make containment scale-invariant and let this cap go
+  // back up — but it changes how every state looks, so it is proposed in RIG-NOTES, not done.
+  const JAW = { x:493, pivot:592, syA:0.45, syB:1.00, maxSy:1.22,
+                narrow:0.26, drop:16, bob:2.5, sway:10, rest:0.55 };
+
+  // A believable speech envelope: phrase-level swell, syllable pulses, micro-jitter.
+  // `t` is measured from the moment speaking began, NOT absolute clock time — using
+  // absolute time meant entering the state could land mid-pause, freezing the mouth
+  // for up to ~2s before the first syllable.
+  function envelope(t) {
+    const phrase = Math.sin(t*0.62) * 0.5 + 0.5;
+    if (phrase < 0.20) return 0;                       // breath between phrases
+    const syl   = Math.max(0, Math.sin(t * Math.PI * 2 * 4.3));
+    const micro = 0.5 + 0.5 * Math.sin(t * Math.PI * 2 * 16.7);
+    return Math.pow(syl, 0.55) * (0.62 + 0.38*micro) * Math.min(1,(phrase-0.20)*4.5);
+  }
+
+  function setState(next) {
+    if (!STATES[next]) return;
+    state = next; T = STATES[next];
+    document.querySelectorAll("button.state").forEach(b =>
+      b.setAttribute("aria-pressed", String(b.dataset.s === next)));
+    el.glow.style.setProperty("--glow", T.glow);
+    el.glow.style.setProperty("--glowA", reduce ? Math.min(T.glowA,.18) : T.glowA);
+    el.cap.textContent = T.cap;
+    el.cap.classList.toggle("on", !!T.cap);
+    $("rState").textContent = next;
+    const nowS = performance.now()/1000;
+    blinkAt = nowS + rand(...T.blink);
+    // start every utterance at the top of a phrase, so he speaks immediately
+    if (next === "speaking") speechT0 = nowS;
+    // A state may bring an entrance with it. This is the only coupling between the two
+    // mechanisms, and it runs one way: a state can fire a gesture, never the reverse.
+    if (T.enter) playGesture(T.enter);
+  }
+
+  // ---- 30fps cap: audio always outranks animation on the Pi
+  const FRAME = 1000/30;
+  let last = 0, fpsAcc = 0, fpsN = 0, fpsAt = 0;
+
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (now - last < FRAME) return;
+    const dt = Math.min((now - last)/1000, .1);
+    last = now;
+    const t = now/1000;
+
+    // fps meter
+    fpsAcc += 1/dt; fpsN++;
+    if (now - fpsAt > 500) { $("rFps").textContent = Math.round(fpsAcc/fpsN); fpsAcc=0; fpsN=0; fpsAt=now; }
+
+    // ---- blink (skipped when squinting happily, or when the lids are drawn shut —
+    // his eyes are already closed either way)
+    let blinkScale = 1;
+    if (T.eye > 0.5 && T.lid < 0.5) {
+      if (t > blinkAt && blinkPhase === 0) blinkPhase = t;
+      if (blinkPhase) {
+        const p = (t - blinkPhase) / 0.13;
+        if (p >= 1) { blinkPhase = 0; blinkAt = t + rand(...T.blink); }
+        else blinkScale = Math.abs(Math.cos(p * Math.PI)) * 0.94 + 0.06;
+      }
+    }
+
+    // ---- gaze: idle drift, or manual override. drift *amount* eases too,
+    // so a state change never snaps his eyes to a new position.
+    C.drift = ease(C.drift, T.drift, TAU.drift, dt);
+    if (t > driftAt) {
+      driftX = rand(-1, 1) * C.drift;
+      driftY = rand(-.6, .6) * C.drift;
+      driftAt = t + rand(0.7, 2.4);
+    }
+    // Gaze is a VECTOR, so its target is clamped to the unit disc, not the unit square.
+    // The per-axis travel limits below form a rectangle inside an elliptical sclera; at full
+    // diagonal deflection (gx=gy=±1) that rectangle's corner falls outside the white, and the
+    // pupil was only saved by the clipPath backstop slicing it. Clamping the magnitude fixes
+    // it at the source. Easing between two in-disc values stays in the disc — it's convex.
+    let tgx = man.gx !== null ? man.gx : driftX;
+    let tgy = man.gy !== null ? man.gy : driftY;
+    const gmag = Math.hypot(tgx, tgy);
+    if (gmag > 1) { tgx /= gmag; tgy /= gmag; }
+    C.gx = ease(C.gx, tgx, TAU.gaze, dt);
+    C.gy = ease(C.gy, tgy, TAU.gaze, dt);
+
+    sampleGesture(t);
+
+    // ---- mouth: manual > live lip-sync > synthetic lip-sync > resting grin
+    let mTarget = T.mouthBase;
+    if (state === "speaking") {
+      // A live envelope from real TTS audio (orchestrator/hud_bridge.py set_mouth) beats the
+      // synthetic one, but only while it is fresh. If the link stalls mid-sentence he falls
+      // back to envelope() and keeps talking naturally, rather than freezing with his mouth
+      // wherever the last packet left it. With nothing connected live.v stays null forever
+      // and this is byte-for-byte the old behaviour — the standalone file must not need a
+      // server, which is why tools/verify-rig.mjs boots it with no WebSocket at all.
+      const fresh = live.v !== null && (t - live.at) < LIVE_MOUTH_STALE_S;
+      mTarget = 0.30 + (fresh ? live.v : envelope(t - speechT0)) * 0.70;
+    }
+    if (man.mouth !== null)   mTarget = man.mouth;
+    C.mouth = ease(C.mouth, mTarget,
+                   state === "speaking" && man.mouth === null ? TAU.mouthTalk : TAU.mouthRest, dt);
+
+    // ---- eased channels
+    C.eye   = ease(C.eye,   T.eye,   TAU.eye,   dt);
+    C.pupil = ease(C.pupil, T.pupil, TAU.pupil, dt);
+    C.tilt  = ease(C.tilt,  T.tilt,  TAU.tilt,  dt);
+    C.sweat = ease(C.sweat, T.sweat, TAU.sweat, dt);
+    C.bob   = ease(C.bob,   T.bob,   TAU.bob,   dt);
+    C.xeye  = ease(C.xeye,  T.xeye,  TAU.xeye,  dt);
+    C.lid   = ease(C.lid,   T.lid,   TAU.lid,   dt);
+    C.zzz   = ease(C.zzz,   T.zzz,   TAU.zzz,   dt);
+    C.shut  = ease(C.shut,  T.shut,  TAU.shut,  dt);
+    C.think = ease(C.think, T.think, TAU.think, dt);
+    C.cl    = ease(C.cl,    T.cl,    TAU.mark,  dt);
+    C.gem   = ease(C.gem,   T.gem,   TAU.mark,  dt);
+    C.zoom  = ease(C.zoom,  T.zoom,  TAU.zoom,  dt);
+
+    // ---- gesture offsets fold in here. mouth is clamped to [0,1] so the containment
+    // guarantee measured by tools/verify-rig.mjs over that exact range stays complete.
+    const mouthEff = Math.max(0, Math.min(1, C.mouth + G.mouth));
+    const pupilEff = C.pupil + G.pupil;
+    const tiltEff  = C.tilt + G.tilt;
+
+    // ---- locomotion: #bodyG owns WHERE HE IS. Scale about his centre, then spin about it,
+    // then travel — so a tumble stays centred on him rather than swinging around the frame.
+    // Gesture zoom and state zoom multiply. Both are <= 1, so the combination is never larger
+    // than either alone and the locomotion bound stays valid.
+    // ---- finish line. Lives outside #bodyG, so it is driven straight from the gesture.
+    el.finish.setAttribute("opacity", G.prop.toFixed(3));
+    if (G.prop > 0.004) {
+      el.tapeL.setAttribute("transform", `translate(140 560) rotate(${G.tapeL.toFixed(2)})`);
+      el.tapeR.setAttribute("transform", `translate(860 560) rotate(${G.tapeR.toFixed(2)})`);
+    }
+
+    const zoom = G.zoom * C.zoom;
+    el.body.setAttribute("transform",
+      `translate(${G.tx.toFixed(2)} ${G.ty.toFixed(2)}) rotate(${G.spin.toFixed(2)} 500 500) ` +
+      `translate(500 500) scale(${zoom.toFixed(4)}) translate(-500 -500)`);
+
+    // ---- breathing + squash-and-stretch. he's a ball, so he deforms like one.
+    const breathe = reduce ? 0 : Math.sin(t*1.5) * 0.012 * C.bob;
+    const talkPunch = state === "speaking" ? (mouthEff - 0.30) * 0.030 : 0;
+    const sx = 1 + breathe + talkPunch;
+    const sy = 1 - breathe - talkPunch;
+    el.ball.setAttribute("transform",
+      `translate(500 500) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(-500 -500)`);
+    el.head.setAttribute("transform",
+      `rotate(${tiltEff.toFixed(2)} 500 520) translate(0 ${(Math.sin(t*1.5)*7*C.bob).toFixed(2)})`);
+
+    // ---- eyes: identical geometry both sides, except a wink, which closes exactly one.
+    // The 0.94 factor matches the blink's floor, so a wink bottoms out where a blink does.
+    const eyeBase = Math.min(C.eye + G.eye, EYE.maxScale) * blinkScale;
+    const eyeScaleL = eyeBase * (1 - G.winkL * 0.94);
+    const eyeScaleR = eyeBase * (1 - G.winkR * 0.94);
+    el.eyeLG.setAttribute("transform", `translate(${EYE.lx} ${EYE.cy}) scale(1 ${eyeScaleL.toFixed(3)}) translate(${-EYE.lx} ${-EYE.cy})`);
+    el.eyeRG.setAttribute("transform", `translate(${EYE.rx} ${EYE.cy}) scale(1 ${eyeScaleR.toFixed(3)}) translate(${-EYE.rx} ${-EYE.cy})`);
+    el.xeyes.setAttribute("opacity", C.xeye.toFixed(3));
+
+    // ---- closed lids crossfade with the eyes, so shut really means shut
+    const open = (1 - C.lid).toFixed(3);
+    el.eyeLG.setAttribute("opacity", open);
+    el.eyeRG.setAttribute("opacity", open);
+    el.lids.setAttribute("opacity", C.lid.toFixed(3));
+
+    // ---- and the mouth does the same, on the one state that closes it
+    el.mouth.setAttribute("opacity", (1 - C.shut).toFixed(3));
+    el.shut.setAttribute("opacity", C.shut.toFixed(3));
+
+    // ---- zzz: three Zs on one staggered loop, each rising, growing and fading out.
+    // sin(pi*ph) means every Z is fully transparent at both ends of its travel, so they
+    // appear and vanish rather than popping — and the tail end is invisible by the time it
+    // reaches the top of the frame.
+    // ---- thought marks: each slot bobs on its own phase and shimmers, so the cluster reads
+    // as alive rather than as three stickers. Slot 1 crossfades ? → provider mark; the
+    // question mark yields to whichever of the two marks is coming in.
+    el.think.setAttribute("opacity", C.think.toFixed(3));
+    if (C.think > 0.004) {
+      for (let i = 0; i < THINK.slots.length; i++) {
+        const sl = THINK.slots[i];
+        const ph = t * THINK.rate + i * 1.7;
+        const dy = reduce ? 0 : Math.sin(ph) * THINK.bob;
+        const s = sl.s * (1 + (reduce ? 0 : Math.sin(ph * 1.7) * THINK.pulse));
+        el.t[i].setAttribute("transform",
+          `translate(${sl.x} ${(sl.y + dy).toFixed(1)}) rotate(${sl.r}) scale(${s.toFixed(3)})`);
+        el.t[i].setAttribute("opacity", (0.62 + 0.38 * (0.5 + 0.5 * Math.sin(ph * 0.9))).toFixed(3));
+      }
+      el.t4c.setAttribute("opacity", C.cl.toFixed(3));
+      el.t4g.setAttribute("opacity", C.gem.toFixed(3));
+      el.t4q.setAttribute("opacity", Math.max(0, 1 - Math.max(C.cl, C.gem)).toFixed(3));
+    }
+
+    el.zzz.setAttribute("opacity", C.zzz.toFixed(3));
+    if (C.zzz > 0.004) {
+      for (let i = 0; i < 3; i++) {
+        const ph = reduce ? (i + 0.5) / 3 : ((t * ZZZ.rate) + i / 3) % 1;
+        const s = ZZZ.s0 + (ZZZ.s1 - ZZZ.s0) * ph;
+        el.z[i].setAttribute("transform",
+          `translate(${(ZZZ.x + ZZZ.dx * ph).toFixed(1)} ${(ZZZ.y + ZZZ.dy * ph).toFixed(1)}) ` +
+          `scale(${s.toFixed(3)})`);
+        el.z[i].setAttribute("opacity", Math.sin(Math.PI * ph).toFixed(3));
+      }
+    }
+
+    // Pupils: the travel limit is derived from the actual geometry at this instant,
+    // so a wider pupil (listening) simply gets less room. It cannot leave the white.
+    const maxX = EYE.rxr - EYE.prx * pupilEff - EYE.margin;
+    const maxY = EYE.ryr - EYE.pry * pupilEff - EYE.margin;
+    const px = C.gx * Math.max(0, maxX);
+    const py = C.gy * Math.max(0, maxY);
+    el.pupLG.setAttribute("transform",
+      `translate(${px.toFixed(1)} ${py.toFixed(1)}) translate(${EYE.lx} ${EYE.cy}) scale(${pupilEff.toFixed(3)}) translate(${-EYE.lx} ${-EYE.cy})`);
+    el.pupRG.setAttribute("transform",
+      `translate(${px.toFixed(1)} ${py.toFixed(1)}) translate(${EYE.rx} ${EYE.cy}) scale(${pupilEff.toFixed(3)}) translate(${-EYE.rx} ${-EYE.cy})`);
+
+    // ---- jaw: opens, narrows, and rides down slightly — capped so it stays on his face
+    const jawY = Math.min(JAW.syA + mouthEff * JAW.syB, JAW.maxSy);
+    const jawX = 1 + (JAW.rest - mouthEff) * JAW.narrow;
+    const talking = state === "speaking" && !reduce;
+    const ts = t - speechT0;
+    const talkBob = talking ? Math.sin(ts * Math.PI * 2 * 4.3) * JAW.bob  * mouthEff : 0;
+    // lateral sway runs at roughly half the syllable rate, so the mouth drifts
+    // side to side across a phrase instead of buzzing per-syllable
+    const jawDX  = talking ? Math.sin(ts * Math.PI * 2 * 2.1) * JAW.sway * mouthEff : 0;
+    const jawDY  = (mouthEff - JAW.rest) * JAW.drop + talkBob;
+
+    el.mouth.setAttribute("transform",
+      `translate(${jawDX.toFixed(2)} ${jawDY.toFixed(2)}) translate(${JAW.x} ${JAW.pivot}) ` +
+      `scale(${jawX.toFixed(4)} ${jawY.toFixed(4)}) translate(${-JAW.x} ${-JAW.pivot})`);
+
+    // Exact inverse of the above, in reverse order, so the upper teeth cancel out
+    // of all four channels and stay pinned however the jaw moves.
+    el.teeth.setAttribute("transform",
+      `translate(${JAW.x} ${JAW.pivot}) scale(${(1/jawX).toFixed(5)} ${(1/jawY).toFixed(5)}) ` +
+      `translate(${-JAW.x} ${-JAW.pivot}) translate(${(-jawDX).toFixed(2)} ${(-jawDY).toFixed(2)})`);
+
+    // ---- sweat: fades in, drifts down, and shrinks away rather than popping
+    el.sweat.setAttribute("opacity", C.sweat.toFixed(3));
+    el.sweat.setAttribute("transform",
+      `translate(0 ${(Math.sin(t*2.2)*10*C.sweat).toFixed(1)}) ` +
+      `translate(906 200) scale(${(0.55 + C.sweat*0.45).toFixed(3)}) translate(-906 -200)`);
+
+    $("rMouth").textContent = mouthEff.toFixed(2);
+  }
+
+  // ---- wiring
+  document.querySelectorAll("button.state").forEach(b =>
+    b.addEventListener("click", () => setState(b.dataset.s)));
+  document.querySelectorAll("button.gest").forEach(b =>
+    b.addEventListener("click", () => playGesture(b.dataset.g)));
+
+  // Digits 1–8 stay bound to the original eight states so the muscle memory built while
+  // reviewing v0.1 still works. v0.2's states and the gestures go on letters.
+  const order = ["idle","listening","local","claude","gemini","speaking","confused","happy"];
+  const keyState = { s:"sleeping", w:"working", h:"straining", x:"error", e:"excited", b:"bored" };
+  const keyGest  = { " ":"startle", k:"wink", n:"bounce", m:"roll", f:"finish" };
+
+  addEventListener("keydown", (e) => {
+    if (e.target.matches("input, button")) return;   // don't hijack slider arrows or button space
+    const i = parseInt(e.key, 10);
+    if (i >= 1 && i <= 8) return setState(order[i-1]);
+    const k = e.key.toLowerCase();
+    if (keyState[k]) return setState(keyState[k]);
+    if (keyGest[k]) { e.preventDefault(); playGesture(keyGest[k]); }   // space would scroll
+  });
+
+  // Every slider uses null for "not overridden", and double-click hands the channel back.
+  const bind = (id, out, set, fmt) => {
+    const s = $(id), o = $(out);
+    s.addEventListener("input", () => { set(parseFloat(s.value)); o.textContent = fmt(s.value); });
+    s.addEventListener("dblclick", () => { set(null); o.textContent = "auto"; });
+  };
+  bind("gx","gxo", v => man.gx = v, v => (+v).toFixed(2));
+  bind("gy","gyo", v => man.gy = v, v => (+v).toFixed(2));
+  bind("mo","moo", v => man.mouth = v, v => (+v).toFixed(2));
+
+  // `state`, `T` and `C` are already BOOT from their declarations; this is what brings the
+  // DOM into line with them — the pressed button, the rim glow and the caption.
+  setState(BOOT);
+  requestAnimationFrame(frame);
+
+  // ---- optional live link to the orchestrator (orchestrator/run_wake.py).
+  //
+  // This file is a standalone rig FIRST. Opening it with nothing listening must behave
+  // exactly as it did before this block existed, so every failure path here is silent and
+  // the retry runs forever in the background. Nothing above depends on any of it.
+  //
+  // Two message types, matching the rig's two mechanisms:
+  //   {"type":"state","value":"listening"}  -> setState()
+  //   {"type":"gesture","value":"startle"}  -> playGesture()
+  // Both callees already ignore names they don't know, so a bad message is inert.
+  // Where the orchestrator is, in priority order:
+  //   1. ?ws=192.168.1.50:8765  — explicit, for watching a Pi from another machine
+  //   2. the page's own host     — when the Pi serves its own HUD over http
+  //   3. 127.0.0.1:8765          — opened as a plain local file, both ends on one box
+  // Deriving it rather than hardcoding is what lets the mic and the screen be different
+  // machines, which is the normal case once he lives on the Pi.
+  const LINK_HOST =
+    new URLSearchParams(location.search).get("ws") ||
+    (location.protocol.startsWith("http") ? location.host : "127.0.0.1:8765");
+  const LINK_URL = `ws://${LINK_HOST}`, LINK_RETRY_MS = 2000;
+
+  (function connect() {
+    let ws;
+    try { ws = new WebSocket(LINK_URL); }
+    catch { return void setTimeout(connect, LINK_RETRY_MS); }
+
+    ws.onopen = () => { $("rLink").textContent = "live"; };
+    ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m && m.type === "state") setState(m.value);
+      else if (m && m.type === "gesture") playGesture(m.value);
+      else if (m && m.type === "mouth") {
+        // Clamped at ingest, not at use. An out-of-range value would drive mouthEff past
+        // JAW.maxSy and push his mouth back through the silhouette — the exact bug
+        // tools/verify-rig.mjs caught in v0.1. Non-numbers are dropped rather than
+        // turned into NaN, which would poison the eased channel permanently.
+        const v = Number(m.value);
+        if (Number.isFinite(v)) {
+          live.v  = Math.max(0, Math.min(1, v));
+          live.at = performance.now()/1000;
+        }
+      }
+    };
+    // onclose fires after a failed connect too, so this is the single retry path.
+    ws.onclose = () => { $("rLink").textContent = "–"; setTimeout(connect, LINK_RETRY_MS); };
+    ws.onerror = () => { try { ws.close(); } catch {} };
+  })();
+})();
+</script>

@@ -1,0 +1,337 @@
+# Mr Odd Ball — runtime configuration
+#
+# Read by orchestrator/run_wake.py. audio/wake.py is a library plus a debug CLI and takes
+# its values as arguments, so this file is the single runtime source of truth.
+
+[wake]
+# Either a pre-trained name shipped with openWakeWord ("hey_jarvis", "alexa", "hey_mycroft",
+# "hey_rhasspy") or a path to a trained .onnx, e.g. "models/hey_mr_odd_ball.onnx".
+#
+# Trained 2026-08-11 on free Colab from training/hey_mr_odd_ball.ipynb. Replaced the
+# "hey_jarvis" stand-in, which measured 0.0000-0.0120 against real recordings of this phrase —
+# below the ambient floor. Nothing else in the pipeline changed.
+model = "models/hey_mr_odd_ball.onnx"
+
+# Score 0..1 above which a frame counts as a detection.
+#
+# ===================================================================================
+# 0.50 -> 0.76 on 2026-08-15. EVERYTHING BELOW THIS BLOCK IS SUPERSEDED — it is kept
+# because it argues for 0.50 and explicitly REFUSES 0.60, and the reason it was wrong
+# is worth more than the conclusion it reached.
+#
+# It rests on "the quietest positive is 0.6227". That number came from
+# tools/verify_wake.py, and verify_wake was measuring the wrong thing: WakeDetector
+# calls reset() the instant it fires, so the highest score the harness could ever see
+# was the score AT THE FIRING FRAME, not the peak the clip actually reaches. The
+# reported "peak" was therefore a function of the threshold being evaluated.
+#
+# Measured on positive/normal-03.wav, 2026-08-15:
+#     true peak, raw model                          0.9946
+#     through the detector @ 0.30 / 0.50 / 0.76     0.8140
+#     through the detector @ 0.90                   0.9902
+#
+# So every positive was understated and the band looked far tighter than it is. With
+# true peaks, on the Pi's own fixtures: positives 0.9771-0.9992, loudest negative
+# 0.1461, band 0.8310. 0.76 sits at 74% (rule: 45-85%) with +29% margin under the
+# quietest positive (rule: >=15%). 0.50 sits at 43% — under the floor.
+#
+# tools/tune_threshold.py read the raw model all along and recommended 0.76; the
+# harness contradicted it and the harness was wrong. verify_wake.py now measures both
+# numbers separately: `fired_at` for pass/fail, `true_peak` for choosing a threshold.
+# docs/STATE.md's "set it to 0.60" is superseded by the same correction.
+# ===================================================================================
+#
+# RAISED 0.30 -> 0.50 on 2026-08-14, and this is the answer to the question the previous
+# version of this comment asked. It said: *"Raise this if he starts waking to the television —
+# and if he does, say so, because nobody has yet logged false accepts over a long period."*
+#
+# LB said so: **"he keeps waking up as if i am calling him."** So the log became the long
+# period, and it is now committed as `media/data/2026-08-14-oddball-session.log` with the
+# scores extracted to `media/data/2026-08-14-false-wakes.csv`.
+#
+# Measured over one 127-minute session — 57 wakes, 0.45/min, median score 0.420:
+#
+#     threshold   live wakes kept   positives kept   margin over quietest positive
+#          0.30        57/57             8/8              +108%     <- was
+#          0.40        31/57             8/8               +56%
+#          0.50        17/57             8/8               +25%     <- now
+#          0.60         9/57             8/8                +4%
+#
+# **0.50 removes 70% of them and costs nothing measurable.** Every one of LB's eight recorded
+# positives still fires — the quietest is 0.6227, a 25% margin — because the gap between the
+# loudest negative (0.0885) and the quietest positive is 0.53 wide and 0.30 was sitting at the
+# BOTTOM of it. Every false wake landed in that gap, where no fixture of any kind lives.
+#
+# 0.60 would cut deeper and is refused on purpose: +4% margin means one quiet call and he
+# stops answering, which is a worse failure than the one being fixed.
+#
+# WHAT THIS COSTS, stated rather than discovered later — two clips stop firing:
+#   far-01.wav             0.3432   the far-field nudge from D27. Already "a nudge, not
+#                                   room-scale" in STATE.md; far-02 (0.0023) never worked.
+#   mister-odd-ball-01     0.3784   "Mister Odd Ball" WITHOUT the "hey". D27 records that LB
+#                                   did not mind it firing; he now has to say the full phrase.
+# Both are reversible by putting this back to 0.30.
+#
+# NOT the whole story. 17 of 57 wakes still clear 0.50, and nobody knows which of those were
+# LB and which were the room, because no audio was kept. `--save-captures` is now on in
+# config/oddball.service, so the next session leaves WAVs instead of anecdotes.
+threshold = 0.76
+
+# Seconds to ignore further detections after one fires. Without this, a single utterance
+# triggers on several consecutive frames, because the phrase spans more than one 80ms window.
+refractory_s = 2.0
+
+# How long he stays in `listening` before drifting back to idle.
+listen_s = 4.0
+
+# CONVERSATION MODE — how long he keeps listening for a follow-up after answering, with no
+# wake word needed. Added 2026-08-14 on LB's request: *"I eventually want to keep him up
+# longer and have a phrase to put him back to sleep."*
+#
+# Every answered exchange RESETS this window, so a real conversation runs as long as it runs.
+# What does NOT reset it is a turn that heard nothing — otherwise a single false wake would
+# hold the microphone open indefinitely, which is the failure D44 was chasing wearing a
+# different hat.
+#
+# It ends three ways, and the first is the one LB asked for:
+#   1. he is dismissed  — "go to sleep", "that's all", "goodnight". See router._SLEEP_PHRASES
+#   2. this window expires with nothing said
+#   3. the service stops
+#
+# 25s is a guess and is written down as one. It wants to be longer than the pause between
+# "what's the time constant" and "and what about the cutoff frequency", and shorter than the
+# time it takes to forget he is listening. Tune it by using him.
+#
+# **Set it to 0 to switch conversation mode off entirely** — every turn then ends by going
+# straight back to sleep, which is exactly the behaviour up to 2026-08-14.
+conversation_s = 25.0
+
+# What he returns to when nothing is happening: "idle" or "sleeping".
+#
+# `sleeping`, not `idle`. `idle` is awake-but-waiting — he blinks, breathes and looks around —
+# so the wake word had nothing visible to change and he appeared already awake before you said
+# anything. Asleep (closed lids, closed mouth, drifting Zs) is what makes waking him legible.
+resting_state = "sleeping"
+
+# Input device: "" means the system default, and a substring of the name is enough. Run
+# `python audio/wake.py --list-devices` to see the options.
+#
+# PINNED to the webcam, and this is measured, not tidiness. On 2026-08-13 he became very hard
+# to wake: scores collapsed to 0.153 against a 0.30 threshold, where the C270 measures
+# 0.62-0.94 at desk range (D27). `wpctl status` showed why — the default SOURCE had moved to
+# `bluez_input`, the Bose Flex 2's Bluetooth microphone, which is HFP telephone-grade and
+# useless for a wake word. Connecting the Bose as a SPEAKER silently changed which microphone
+# he listens through.
+#
+# "" was correct on the WI-4, where the C270 was the system default and the Bose was not
+# usable as an input at all. It is wrong here. The name substring is stable across reboots and
+# Bluetooth reconnections in a way that both "" and a device index are not.
+#
+# Bonus: nothing opening the Bose's microphone also keeps it in A2DP rather than dropping to
+# HFP, which is the difference between music quality and telephone quality on the way OUT too.
+device = "C270"
+
+# "onnx" or "tflite". Must be onnx on Windows — openWakeWord does not ship tflite wheels
+# for it, and its own default is tflite, so this cannot be left implicit.
+framework = "onnx"
+
+[listen]
+# Build-order step 5 — capturing what you actually said, after the wake word fires.
+# Voice activity detection is openWakeWord's own Silero wrapper, so there is no extra model
+# to download or keep in step; `silero_vad.onnx` is already on disk beside the wake models.
+
+# VAD score above which an 80ms frame counts as speech.
+#
+# 0.35, not Silero's usual 0.5. Measured from saved captures: "what time is it" came back as
+# "of all damage" and "with Amazon" because the quiet trailing syllables ("...is it") scored
+# under 0.5, the hangover expired, and the recording stopped while LB was still talking. Both
+# tiny.en AND base.en failed identically on those clips, which proves the words were never
+# recorded rather than misheard.
+#
+# There is headroom: voiced peaks measure 0.94-0.99, so 0.35 is nowhere near the noise floor.
+threshold = 0.35
+
+# Give up if you never start talking. This is also what triggers the spoken greeting:
+# stay quiet this long after waking him and he asks "What's up LB?" instead of guessing.
+wait_s = 1.5
+
+# End the utterance after this much silence FOLLOWING speech. The one number you feel:
+# too short and he cuts you off mid-sentence, too long and every answer is late by the
+# difference. It is spent on every turn, so it is part of the latency budget.
+#
+# 1.10 as of 2026-08-13, raised from 0.75 because LB reported being cut off mid-question in
+# the first live Phase 2 session. 0.75 was itself a raise from 0.6, for the same reason.
+#
+# The pressure changed with Phase 2. Under Phase 1 every turn was a ~1.6s reflex answer, so a
+# third of a second of hangover was a third of the whole turn. Now a Tier 1 or Tier 3 answer
+# costs 3-4s anyway, so 0.35s more silence is a much smaller share of the wait — and being
+# cut off mid-sentence costs a whole retry, which is far more expensive than 0.35s.
+hangover_s = 1.10
+
+# Hard cap on one utterance, so a television cannot record forever. 15, up from 10, after a
+# live turn hit the cap mid-question and was transcribed from a truncated recording.
+max_s = 15.0
+
+[stt]
+# "tiny.en" or "base.en". Measured on the Pi (int8, 4 threads), nine synthesised commands:
+#
+#   tiny.en   1.05-1.40s   7/9 exact
+#   base.en   2.03-2.49s   8/9 exact
+#
+# tiny.en is the default because it is the ONLY one that fits PLAN.md's under-2s turn once
+# ~0.4s of Piper synthesis is added on. Most of what it gets wrong survives the router, which
+# matches on keywords rather than sentences — its "What is today?" still routes to the date.
+#
+# Measured on SYNTHESISED speech, not on LB's voice. If he is misheard in practice, switch to
+# base.en and accept a slower turn; it is one word.
+model = "tiny.en"
+
+# int8 is ~4x faster than float32 on this CPU with no accuracy difference worth the time.
+compute_type = "int8"
+
+# The Pi 5 has four cores and the default did not use them.
+cpu_threads = 4
+
+[speech]
+# Build-order step 4 — his voice. Local Piper TTS; nothing leaves the machine.
+engine = "piper"
+
+# A voice name (looked up in voices/) or a path to a .onnx. Voices are gitignored at ~63MB
+# each and are re-downloaded in seconds:
+#   python -m piper.download_voices en_US-joe-medium --data-dir voices
+# Audition candidates with `python audio/say.py "..." --voice NAME --wav out.wav`.
+voice = "en_US-joe-medium"
+
+# Output device: "" means the system default. `python audio/say.py --list-devices` lists them.
+# Prefer a name substring over an index — indices renumber when Bluetooth devices reconnect,
+# which is what made the microphone silently unusable in step 3.
+device = ""
+
+# Playback level, 0..1. Applied to the audio only, never to the mouth envelope, so turning
+# him down does not make him mumble visually.
+volume = 0.8
+
+# How long the microphone stays shut *after* he finishes speaking. It covers the room's
+# reverberation and the audio still sitting in the card's buffer, both of which outlive the
+# last sample written. Measured, not guessed — see docs/SPEECH.md.
+gate_tail_s = 0.35
+
+# Output latency the sound card does NOT report, in milliseconds, added to what PortAudio
+# says when deciding how far to delay his mouth behind the audio.
+#
+# This exists for Bluetooth. A2DP buffers 150-250ms downstream of everything PortAudio can
+# see — on the Pi, with the Bose connected, PortAudio reports 20ms and is wrong by an order
+# of magnitude. Leave it at 0 for wired or HDMI output; raise it until his lips line up.
+# Set it too high and his mouth lags the words instead, which looks equally wrong.
+#
+# CHECKED 2026-08-15 and deliberately left at 0. `wpctl status` on the Pi shows exactly one
+# sink — `Built-in Audio Digital Stereo (HDMI)`, marked default. The Bose is PAIRED but NOT
+# CONNECTED, so nothing is going over A2DP and there is no buffer to compensate for. Raising
+# this now would CREATE the lag it exists to remove.
+#
+# docs/STATE.md said this value was "now wrong" because the Bose had reconnected. It had since
+# dropped. **The right value depends on which sink is live, and nothing detects that** — so if
+# lip-sync ever looks wrong, check the sink before touching the number:
+#
+#     ssh oddball-pi 'XDG_RUNTIME_DIR=/run/user/$(id -u) wpctl status | grep -A3 Sinks:'
+#
+# HDMI or USB -> 0. Bose connected -> start at 200 and tune by watching his mouth.
+output_latency_ms = 0
+
+# Silence written BEFORE the first real sample, to wake a sink that has gone to sleep.
+#
+# PipeWire suspends an idle output node. Measured on the Pi 2026-08-15 with `pw-dump`, with
+# nothing playing:
+#
+#     node: alsa_output.platform-107c701400.hdmi.hdmi-stereo    state: "suspended"
+#
+# Resuming that node swallows the start of whatever arrives, and LB heard it exactly that way:
+# **"mr odd ball speaks the beginning is inaudible"** — the first word clipped on every reply,
+# and worst after a pause, which is when the node has had time to suspend.
+#
+# 200ms is the wake-up paid where nothing is lost. It does NOT delay his mouth: audio/say.py
+# writes this silence before on_start(), so the animation still begins on the first real
+# syllable. It DOES add 200ms to every reply, which is the honest cost.
+#
+# Set it to 0 for a sink that never suspends. Raise it if the first word is still clipped.
+prime_ms = 200
+
+# What he says when woken AND you then say nothing for listen.wait_s. He does not greet you
+# if you carry straight on ("Hey Mr Odd Ball, what time is it?") — his face is the
+# acknowledgment, and the mic is muted while he talks, so greeting unconditionally made a
+# single-breath command impossible. One is chosen at random, so he is not a parrot.
+#
+# Careful: anything here is played through a speaker his own microphone can hear. A line
+# containing his wake phrase would put him in a loop, and the gate is what stops that —
+# tools/verify_speech.py scores every line against the live wake model and fails if one
+# would wake him.
+greeting = [
+    "What's up LB? What can I do for you?",
+]
+
+[hud]
+# The rig connects here. Loopback only: nothing about this should be reachable off-box.
+host = "127.0.0.1"
+port = 8765
+
+[brain]
+# Phase 2 — Tiers 1 and 3, reached only when Tier 0 could not answer. Which of the two gets a
+# question is decided by orchestrator/classify.py, and that is a privacy boundary: read it
+# before changing anything here.
+
+# false runs him exactly as Phase 1 did — unhandled questions get "I don't know how to do that
+# yet" and no model is loaded. Useful on a machine with no GGUF, and as a fast way to tell a
+# model problem from a pipeline problem.
+enabled = true
+
+# D30's winner, measured against three alternatives: 695MiB on disk, ~1471MB resident, and it
+# reaches a speaker 1.7x sooner than Llama-3.2-1B despite nearly identical tokens/sec, because
+# it answers in 17 words rather than 23. Llama-3.2-3B was disqualified at 18.57s and 4.4GB.
+# Gitignored — copy it to the Pi separately, the deploy tarball excludes models/.
+model = "models/llm/LFM2.5-1.2B-Instruct-Q4_K_M.gguf"
+
+# Built on the Pi at ~/llama.cpp with -mcpu=cortex-a76+crc+crypto+dotprod.
+binary = "/home/ironi/llama.cpp/build/bin/llama-server"
+
+# Loopback only, like the HUD. This tier never leaves the machine, which is the whole point
+# of it existing alongside Tier 3.
+port = 8080
+
+# The Pi 5 has four cores. The desktop session (labwc + Firefox + wayvnc) is permanent
+# contention at ~18% — his face is a browser page — so this is four threads against a machine
+# that is never fully idle.
+threads = 4
+
+# Enough for the persona plus a running conversation. Kept small on purpose: the KV cache
+# costs memory and long-context ability is worth nothing to a voice assistant.
+ctx = 4096
+
+# ~160 tokens is three or four spoken sentences. He is told to answer in one to three, and a
+# cap is what stops a runaway reply from talking for a minute.
+max_tokens = 160
+
+# Warmer than Tier 3's 0.2, because this tier is personality. Tier 3 is where being right
+# matters and gemini.py pins its own temperature.
+temperature = 0.7
+
+# Start a fresh conversation after this long with nothing said. Keeping ONE conversation is
+# what makes turns 2+ cost ~0.9s instead of ~2.5s (D30, D35) — llama-server reuses its slot
+# only when the new prompt extends it — so this should be generous. 0 disables the timer, but
+# the context-headroom reset in orchestrator/brains.py still applies.
+idle_reset_s = 900
+
+# Send one throwaway prompt at startup so the ~1650ms cache-miss prefill is paid before LB ever
+# speaks, putting his FIRST real question in the warm band: measured 252ms prefill / 1.23s to
+# first sentence, against 1677ms / 2.39s without.
+#
+# It runs on HIS conversation, not a scratch one, and that is not a shortcut — warming a
+# scratch conversation was measured to do NOTHING (cache_n stayed 0), because llama-server
+# reuses a slot only when the new prompt extends it. The cost is one throwaway exchange left
+# in his history, which is ~20 tokens of a 4096 context.
+prewarm = true
+
+# Empty = no stall phrase, and that is measured rather than assumed. D31 introduced
+# "Bet, let me look into that for you" to hide a cloud round trip believed to be slow; the
+# round trip measured 0.66-0.72s on 2026-08-13, so a Tier 3 turn already lands near 2.3s and
+# speaking a stall line would make the exchange LONGER. Set it to a sentence to bring it back.
+stall_phrase = ""

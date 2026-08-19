@@ -1,0 +1,60 @@
+[Unit]
+# Mr Odd Ball — the assistant itself. Wake word, capture, STT, router, tiers, voice.
+#
+# A systemd USER unit, not a system one, and that is not a style choice: he needs the
+# microphone and the speaker, and on this Pi both live behind PipeWire, which is itself a
+# per-user service. A system unit runs before any of that exists and would find no audio.
+#
+# `loginctl show-user ironi -p Linger` is already `Linger=yes` on this box, which is what lets
+# a user unit start at BOOT rather than waiting for somebody to log in. If that is ever turned
+# off, this unit silently stops starting on power-up — re-enable it with:
+#     sudo loginctl enable-linger ironi
+#
+# Deliberately has NOTHING to do with the screen. hud_bridge broadcasts to whoever is connected
+# and does not care whether anyone is, so he must work with no display attached. The face is a
+# separate autostart entry (config/oddball-face.desktop) and either can be running without the
+# other.
+Description=Mr Odd Ball — voice assistant
+Documentation=file:%h/oddball/docs/PLAN.md
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/oddball
+# --save-captures is ON, added 2026-08-14 while chasing false wakes.
+#
+# The flag has existed since 2026-08-13 and had never been used, so every misheard question
+# and every spurious wake up to that point was unrecoverable — `docs/STATE.md` had listed
+# turning it on as the next concrete step for a day. LB's "he keeps waking up as if i am
+# calling him" is exactly the report that cannot be diagnosed from a log alone: the log says a
+# frame scored 0.42, and only the audio says whether that was the television, the room, or LB.
+#
+# Cost: a 16kHz mono WAV per captured utterance, ~50KB for 1.6s. At the observed 0.45 wakes a
+# minute that is ~2MB/hour against 97GB free. `captures/` is gitignored.
+ExecStart=%h/oddball/venv/bin/python orchestrator/run_wake.py --log %h/oddball/oddball.log --save-captures %h/oddball/captures
+
+# He brings up llama-server himself (brains/local.py's LlamaServer context manager), so this
+# unit starts one process and gets two. KillMode=control-group is the default and is what makes
+# `systemctl --user stop oddball` take the model down with him rather than orphaning a 698MB
+# server holding port 8080 — an orphan that a health poll would then answer, which has already
+# caused one confusing debugging session on this project.
+
+# A cold model off the SD card can take 20-40s to answer /health, and faster-whisper loads on
+# top of that, so the default 90s start timeout is not generous enough on a cold boot.
+TimeoutStartSec=180
+
+Restart=on-failure
+RestartSec=5
+# Give up after 3 failures in 5 minutes rather than restarting forever. A microphone that has
+# gone into digital silence (the C270 does this) fails identically every time, and a service
+# that respawns into it for hours only makes the journal harder to read.
+StartLimitBurst=3
+StartLimitIntervalSec=300
+
+# Audio must not be starved by anything else on a 4-core box, and llama-server takes all four
+# threads when he thinks. This keeps him below interactive work without making him unresponsive.
+Nice=-5
+
+[Install]
+WantedBy=default.target
