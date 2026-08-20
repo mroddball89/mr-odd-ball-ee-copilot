@@ -17,17 +17,18 @@ reported 7.9 GiB total with 4.7 free under load. Confirmed, and the note there c
 ## It goes in a NEW directory
 
 ```
-~/oddball        the standalone assistant. STILL RUNNING. Untouched.
-~/mr-odd-ball    the merged copilot.
+~/mr-odd-ball    the merged copilot. LIVE — systemd unit `oddball`, enabled.
+~/oddball        the pre-merge assistant. Stopped and disabled. Kept as a fallback.
 ```
 
-Not an overwrite, and not fussiness. `~/oddball` holds the working assistant, its systemd unit
-is `active` and `enabled`, and the merged repo is a different tree — dropping it on top would
-leave `brains/`, `orchestrator/classify.py`, `orchestrator/tiers.py` and `run_wake.py` lying
-around beside the files that replaced them, with nothing to say which was live. Two directories
-costs 200 MB and buys a fallback that is one `systemctl` away.
+Not an overwrite, and not fussiness. The merged repo is a different tree — dropping it on top
+would have left `brains/`, `orchestrator/classify.py`, `orchestrator/tiers.py` and
+`run_wake.py` lying around beside the files that replaced them, with nothing to say which was
+live. Two directories cost 200 MB and buy a fallback that is one `systemctl` away.
 
-The two cannot run at once: both serve the rig on port 8765.
+**The two cannot run at once**: both serve the rig on port 8765. The unit name is `oddball` for
+both, so installing the new one overwrote the old one's definition — there is no second service
+to keep in step, only a second directory to fall back to.
 
 ## The deploy
 
@@ -60,11 +61,26 @@ Delete it on the Pi so the box starts with its own memory and its own 15-day bac
 
 ## The key
 
+**The Pi is the only machine that has one** (D7). LB runs him on the Pi and writes him on
+Windows, so the Windows checkout has no `.env` and must not be given one. The consequence binds
+everything written from here: **every harness has to run keyless**, because the box they are
+authored on has no key. `tools/verify_agents.py` substitutes a dummy when what it loads is
+unusable and says so; `--live` is the only mode that needs the real thing.
+
+Paste-safe — echoes nothing, and confirms the length so a truncated paste is visible:
+
 ```bash
 cd ~/mr-odd-ball
-printf 'GOOGLE_API_KEY=%s\n' 'your-key' > .env
-chmod 600 .env
+read -rsp 'Paste your key, then press Enter: ' KEY \
+  && printf 'GOOGLE_API_KEY=%s\n' "$KEY" > .env \
+  && chmod 600 .env && echo && echo "wrote ${#KEY} characters"
 ```
+
+A real key is about 39 characters. **If it says 18, the placeholder went in** — which is exactly
+what happened on 2026-08-19, on both boxes, and cost twenty minutes of him answering every
+question with "my API key isn't working" while the reason sat in a log on a headless machine.
+`engine/models.py` now refuses placeholder text, short keys and embedded whitespace at startup,
+naming the file to fix.
 
 `GEMINI_API_KEY` is accepted as an alias, because that is what the standalone assistant read.
 
@@ -100,6 +116,19 @@ into the HDMI card while the speaker sits silent.
 
 `openwakeword` installs with `--no-deps`; it declares `tflite-runtime`, which publishes no
 wheels for Python 3.12+, and we never load tflite (`framework = "onnx"` in the config).
+
+## sympy IS installed, and that was not obvious
+
+`requirements.txt` carries `sympy` because the MATH agent's REPL runs **in this interpreter** —
+"available to the agent" and "installed in the venv" are one statement. On 2026-08-19 the Pi
+answered a derivative question with *"the calculation resulted in a ModuleNotFoundError because
+there is no module named 'sympy'"*: the route was reachable, the sandbox executed, and there was
+no maths library to import. It had been present on Windows by accident of some other dependency,
+which is why nothing caught it until the Pi ran a lean venv.
+
+`tools/verify_agents.py` now imports each library the MATH prompt invites the sandbox to use —
+math, cmath, statistics, numpy, scipy, sympy — **from inside the sandbox**. That check is the
+one that would not exist if the harness only verified imports.
 
 ## Torch is NOT installed, deliberately
 
@@ -151,9 +180,16 @@ does not.
 
 ```bash
 sudo apt install gir1.2-gtk-4.0 gir1.2-webkit-6.0 libwebkitgtk-6.0-4 python3-gi
-venv/bin/python hud/float.py --url 'http://127.0.0.1:8765/?chat=1' \
+/usr/bin/python3 hud/float.py --url 'http://127.0.0.1:8765/?chat=1' \
     --transparent --undecorated --width 560 --height 900
 ```
+
+**`/usr/bin/python3`, not the venv.** PyGObject is a system package on Debian and is not
+pip-installable into a plain venv, so `venv/bin/python` fails here with
+`ModuleNotFoundError: No module named 'gi'`. The old entry worked only because `~/oddball`'s
+venv had system site-packages. `float.py` imports nothing from the project, so the system
+interpreter is enough — and `tools/install_autostart.sh` now preflights `python3 -c 'import gi'`
+so a missing face is caught at install time rather than on a boot nobody is watching.
 
 Three things make the transparency work and **all three are required** — drop any one and the
 effect disappears completely rather than degrading: `?chat=1` (the page clears its own
@@ -174,3 +210,41 @@ systemctl --user stop oddball
 # edit WorkingDirectory and ExecStart to ~/mr-odd-ball, then
 systemctl --user daemon-reload && systemctl --user start oddball
 ```
+
+
+## Typed control
+
+The chat box can do everything the voice can, which matters because the microphone currently
+cannot (see the measurements below):
+
+| typed | effect |
+|---|---|
+| `hey mr odd ball`, `wake up`, `oddball` | wakes him: startle, listening, conversation opens |
+| `go to sleep`, `goodnight`, `that's all` | back to sleeping immediately |
+| anything else | answered, whether or not he is awake |
+| `yes` / `no`, or the Approve/Deny buttons | resolves a permission gate; 90 s then declines |
+
+Both matchers are end-anchored — the phrase has to BE the line. *"why did my board go to
+sleep"* is a question and gets answered.
+
+## Open: the microphone
+
+Measured 2026-08-19, unresolved, and the cause of most of what looked like software faults:
+
+```
+capture gain    16/16, +30 dB — already maxed, no software headroom
+peak mic RMS    0.035–0.17     (healthy speech is ~0.1–0.3)
+wake scores     0.17–0.28      against a threshold of 0.76
+```
+
+Whisper on audio that quiet hallucinates — the conversation log has him answering *"Don't you?
+Hey, hey, thank you. Everybody, I want to let you hold me."* The persona agent replying politely
+to that is what made an input fault look like an agent fault.
+
+The 0.76 threshold was derived from recorded fixtures whose quietest positive scored 0.9771, and
+raised deliberately because 45% of the band let the television wake him on 2026-08-14. Lowering
+it trades false accepts back in — do not do it silently.
+
+Three options, none chosen: move the C270 closer; record fixtures in LB's voice at real desk
+distance and re-derive the threshold from those; or switch STT to `base.en`, which tolerates
+poor audio better at roughly 1 s more latency.
