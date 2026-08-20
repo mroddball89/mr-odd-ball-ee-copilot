@@ -454,6 +454,79 @@ async def main(argv: list[str] | None = None) -> int:
         )
         turn_thread.start()
 
+        # ---- the typed channel
+        #
+        # This was built and not wired: hud_bridge collected `{"type":"text"}` on its inbound
+        # queue and nothing drained it outside a permission gate, so typing into the panel did
+        # exactly nothing. LB typed two lines into it and watched them vanish.
+        #
+        # It matters more than a convenience. Measured on the Pi 2026-08-19, his wake
+        # utterances peaked 0.17-0.28 against a 0.76 threshold and mostly did not fire, and the
+        # transcripts that did get through were nonsense. Typing is the channel that works when
+        # the microphone does not, so it has to be able to do everything the voice can —
+        # including the two things that are not questions: waking him, and sending him to bed.
+        def _typed_thread() -> None:
+            from orchestrator.instant import is_sleep, is_wake      # noqa: PLC0415
+
+            nonlocal conversation_until
+            while not stop.is_set():
+                messages = bridge.drain_inbound()
+                if not messages:
+                    time.sleep(0.2)
+                    continue
+
+                for msg in messages:
+                    if msg.get("type") != "text":
+                        continue                      # `approve` belongs to whoever is gating
+                    text = str(msg.get("value", "")).strip()
+                    if not text:
+                        continue
+
+                    # A turn already running owns the gate, and _wait_for_typed_answer is
+                    # draining for it. Putting this back is what stops the two racing for the
+                    # same message.
+                    if in_turn.is_set():
+                        bridge.inbound.put_nowait(msg)
+                        time.sleep(0.2)
+                        continue
+
+                    if is_wake(text):
+                        LOG.info("typed wake: %r", text)
+                        bridge.say_line("you", text)
+                        bridge.play_gesture("startle")
+                        bridge.set_state("listening")
+                        # Open the conversation window, so typing the wake phrase leaves him
+                        # awake and listening exactly as the spoken one does.
+                        if conversation_s > 0:
+                            conversation_until = time.monotonic() + conversation_s
+                            loop.call_soon_threadsafe(rearm)
+                        continue
+
+                    if is_sleep(text):
+                        LOG.info("typed dismissal: %r", text)
+                        bridge.say_line("you", text)
+                        conversation_until = 0.0
+                        if detector is not None:
+                            detector.reset()
+                        bridge.set_state(rest)
+                        continue
+
+                    # Anything else is a question, and it is answered whether or not he is
+                    # awake. Typing is already deliberate — making it require a wake phrase
+                    # first would be ceremony, not safety.
+                    LOG.info("typed question: %r", text)
+                    try:
+                        in_turn.set()             # claim the gate drain for this turn
+                        turn.answer_typed(text)
+                    except Exception:             # noqa: BLE001
+                        LOG.exception("typed turn failed")
+                    finally:
+                        in_turn.clear()
+                        bridge.set_state(rest if conversation_until <= time.monotonic()
+                                         else "listening")
+
+        threading.Thread(target=_typed_thread, name="typed", daemon=True).start()
+
     def on_detect(_det) -> None:
         """Called from the audio thread."""
         # Startle first and unconditionally: whatever follows takes a moment, and a face that

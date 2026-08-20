@@ -252,6 +252,61 @@ _DISMISS_FILLER = frozenset({
 })
 
 
+# The typed equivalent of the wake word. Spoken, waking him is openWakeWord's job and this is
+# never consulted; typed, there is no audio to score, so the phrase has to be matched as text.
+#
+# LB asked for this because the microphone is the weak link — measured 2026-08-19 on the Pi,
+# his wake utterances peaked 0.17-0.28 against a 0.76 threshold and mostly did not fire. Typing
+# is the channel that always works, so it has to be able to do everything the voice can,
+# including the two things that are not questions: waking him and dismissing him.
+_WAKE_PHRASES = (
+    "hey mr odd ball", "hey mister odd ball", "hey mr oddball", "hey oddball",
+    "mr odd ball", "mister odd ball", "mr oddball", "oddball", "odd ball",
+    "wake up", "wakeup", "hey you", "you awake", "are you awake", "you there",
+    "are you there", "hello there",
+)
+
+# Same idea as _DISMISS_FILLER and a DIFFERENT set, deliberately. "mr", "odd" and "ball" are
+# filler around a dismissal ("Mr Odd Ball, that's all") and are the whole point of a wake
+# phrase, so sharing one set would make "hey mr odd ball" reduce to nothing and match every
+# wake phrase at once.
+_WAKE_FILLER = frozenset({
+    "ok", "okay", "alright", "hey", "hi", "hello", "yo", "um", "uh", "please",
+    "so", "now", "then", "just", "buddy", "man", "there",
+})
+
+
+def is_wake(text: str) -> bool:
+    """Is this typed line asking him to wake up, rather than a sentence that mentions him?
+
+    Args:
+        text: the raw typed line. Normalised here, so callers pass what was typed.
+
+    The end-anchor rule from `_is_dismissal`, for the opposite job: the wake phrase has to BE
+    the line. "hey mr odd ball" wakes him; "what does mr odd ball run on" is a question about
+    him and must be answered, not treated as a doorbell.
+    """
+    flat = normalise(text)
+    if not flat:
+        return False
+    for phrase in _WAKE_PHRASES:
+        if not _has(flat, phrase):
+            continue
+        rest = re.sub(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", " ", flat)
+        if not [w for w in rest.split() if w not in _WAKE_FILLER]:
+            return True
+    return False
+
+
+def is_sleep(text: str) -> bool:
+    """Is this typed line dismissing him? The typed door out, matching the spoken one exactly.
+
+    A thin wrapper on `_is_dismissal` so callers do not reach for a private name, and so the
+    typed and spoken paths cannot drift onto different phrase lists.
+    """
+    return _is_dismissal(normalise(text))
+
+
 def _is_dismissal(text: str) -> bool:
     """Is this utterance a dismissal, rather than a sentence that mentions one?
 
