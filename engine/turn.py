@@ -306,6 +306,38 @@ class Turn:
         """
         self._show_line("you", heard)
         response = self._engine.ask(heard)
+        self._deliver(response, t, typed=False)
+
+    def answer_typed(self, text: str) -> Timings:
+        """Answer a line that was TYPED into the chat panel. No microphone involved.
+
+        The whole point of the typed channel is that it works when the microphone does not —
+        measured on the Pi 2026-08-19, wake utterances peaked 0.17-0.28 against a 0.76
+        threshold. So this path must not reach for audio anywhere, including at a permission
+        gate, which is the one place `_answer` does.
+        """
+        t = Timings()
+        t.heard = text
+        began = time.monotonic()
+
+        self._bridge.set_state(self._thinking)
+        response = self._engine.ask(text)
+        t.intent = response.route
+        t.extras.append("typed")
+        t.extras.extend(self._engine.last.extras)
+        t.route_s = time.monotonic() - began
+
+        self._deliver(response, t, typed=True)
+        self._quiet(lambda: self._bridge.set_mode(self._engine.mode))
+        LOG.info("%s", t.line())
+        return t
+
+    def _deliver(self, response, t: Timings, typed: bool) -> None:
+        """Show the cards, speak the sentence, and resolve a gate if one opened.
+
+        Shared by the spoken and typed paths so the two cannot drift — the only difference is
+        where the gate's yes/no comes from, and that is the `typed` flag.
+        """
         t.intent = response.route
         t.extras.extend(self._engine.last.extras)
 
@@ -320,25 +352,31 @@ class Turn:
         if response.pending is not None:
             t.extras.append(f"gate {response.pending.kind}")
             self._quiet(lambda: self._bridge.ask_approval(response.pending))
-            self._bridge.set_state("listening")
 
-            capture = self._capture()
             answer = ""
-            if capture is not None and capture.outcome is not Outcome.SILENT:
-                got = self._stt.transcribe(capture.audio)
-                t.stt_s += got.took_s          # a second capture is a second transcription
-                answer = got.text
-                LOG.info("gate: heard %r -> %s", answer, is_yes(answer))
+            if typed:
+                # No microphone on this path — that is the whole point of it. Wait for the
+                # Approve/Deny buttons or a typed yes/no instead, and time out into a decline,
+                # which is the same default silence gets on the spoken path.
+                answer = self._wait_for_typed_answer(t)
             else:
-                t.extras.append("no answer to the gate")
+                self._bridge.set_state("listening")
+                capture = self._capture()
+                if capture is not None and capture.outcome is not Outcome.SILENT:
+                    got = self._stt.transcribe(capture.audio)
+                    t.stt_s += got.took_s      # a second capture is a second transcription
+                    answer = got.text
+                    LOG.info("gate: heard %r -> %s", answer, is_yes(answer))
+                else:
+                    t.extras.append("no answer to the gate")
 
-            # A click on Approve or Deny beats what was heard, because it is unambiguous and
-            # a transcript never is. Checked AFTER the capture rather than instead of it, so
-            # LB can answer with his voice OR the mouse and neither has to win a race.
-            for msg in self._quiet(lambda: self._bridge.drain_inbound()) or []:
-                if msg.get("type") == "approve":
-                    answer = "yes" if msg.get("value") else "no"
-                    t.extras.append(f"gate answered by click: {answer}")
+                # A click on Approve or Deny beats what was heard, because it is unambiguous
+                # and a transcript never is. Checked AFTER the capture rather than instead of
+                # it, so LB can answer by voice OR mouse and neither has to win a race.
+                for msg in self._quiet(lambda: self._bridge.drain_inbound()) or []:
+                    if msg.get("type") == "approve":
+                        answer = "yes" if msg.get("value") else "no"
+                        t.extras.append(f"gate answered by click: {answer}")
 
             self._quiet(self._bridge.clear_pending)
             # Empty string is deliberate and load-bearing: Engine.ask("") declines the pending
@@ -348,6 +386,35 @@ class Turn:
             self._say(outcome.speech, t)
 
         self._quiet(lambda: self._bridge.set_mode(self._engine.mode))
+
+    # How long a typed gate waits for Approve/Deny before declining. Generous, because reading
+    # a shell command and deciding is slower than saying "yes" — and short enough that a gate
+    # LB has walked away from does not hold the panel open indefinitely.
+    TYPED_GATE_TIMEOUT_S = 90.0
+
+    def _wait_for_typed_answer(self, t: Timings) -> str:
+        """Block until Approve/Deny is clicked, or yes/no is typed, or it times out.
+
+        Returns the answer as text, or "" for a timeout — and "" is not a neutral value here:
+        `Engine.ask("")` declines the pending action and closes the gate. Walking away is a no,
+        exactly as silence is on the spoken path.
+        """
+        deadline = time.monotonic() + self.TYPED_GATE_TIMEOUT_S
+        while time.monotonic() < deadline:
+            for msg in self._quiet(lambda: self._bridge.drain_inbound()) or []:
+                kind = msg.get("type")
+                if kind == "approve":
+                    answer = "yes" if msg.get("value") else "no"
+                    t.extras.append(f"gate answered by click: {answer}")
+                    return answer
+                if kind == "text":
+                    typed = str(msg.get("value", ""))
+                    t.extras.append(f"gate answered by typing: {typed[:24]!r}")
+                    return typed
+            time.sleep(0.15)
+
+        t.extras.append("typed gate timed out — declined")
+        return ""
 
     def _quiet(self, fn):
         """Run a rig call, swallowing anything it throws.
