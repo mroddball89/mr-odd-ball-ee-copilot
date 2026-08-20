@@ -110,34 +110,49 @@ number on a chart rather than a feeling.
 
 ## Review
 
-**Done: stages 0-7, and most of 8.** 10,717 checks green across 13 harnesses; three of them
-carry a `--probe` that removes the guard and confirms the checks go red.
+**Stages 0-8 done, deployed, and running on the Pi.** ~11,000 checks green across 16 harnesses;
+five carry a `--probe` that removes the guard and confirms the checks go red.
 
-### What the measurements changed
+### Live on the hardware
 
-- **D3 — the free tier is 20 requests/day, not ~1,500.** Found by exhausting it in five
-  questions on the first end-to-end run. Jobs now split across models because the quota is
-  per model: routing on `flash-lite` (~750ms, its own bucket), agents on `flash`.
-- **UTILITY was missing every EE acronym.** `media/scripts/measure_turn.py` timed ten
-  questions; "what does i2c stand for" missed the tables, fell through to the persona agent,
-  and cost 2.20s and one of the twenty. 19 acronym rows later it is 0.73s and free, and
-  0/10 exceed the 2.0s budget instead of 1/10. Chart: `media/charts/turn-latency.svg`.
-- **The RAG pipeline was never connected.** Built, embedded, persisted, and never queried.
+`~/mr-odd-ball` on `oddball-pi`, systemd unit `oddball` enabled, face autostarting at 560x900
+with the chat box under him at 50% opacity. He starts asleep — config, bridge and rig all agree.
+The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallback.
+
+### What measurement changed
+
+| finding | consequence |
+|---|---|
+| Free tier is **20 req/day/model**, not ~1,500 | jobs split across models; D3 |
+| UTILITY had **no EE acronyms** — "what does i2c stand for" cost an API call and 2.20s | 19 rows added; 0.73s and free |
+| The RAG pipeline was **never queried** | retrieval on the answer path, sources cited |
+| The math sandbox had **no sympy** | a spoken `ModuleNotFoundError`; `verify_agents.py` now imports every library the prompt promises |
+| Mic peaks **0.035-0.17 RMS**, wake scores **0.17-0.28** vs a 0.76 threshold | typed control shipped as the channel that works; the mic itself is still open |
 
 ### What didn't work
 
-- **PyQt6 for the floating face.** Proposed in the plan and wrong — LB had already shipped
-  GTK4 + WebKitGTK (D41). The spike was promoted rather than replaced.
-- **A probe that asserted a patched lambda returns None.** A tautology dressed as a
-  non-vacuity check. Rewritten to drive the real `split()`; then the gate probe had the same
-  shape and got the same treatment.
-- **Three checks that punished their own documentation.** `verify-rig` counting script tags
-  hit a literal tag in a comment; `verify_chat`'s "never innerHTML" hit the comment promising
-  never to use innerHTML. The comment gives way, never the check.
+- **PyQt6 for the floating face** — proposed in the plan; LB had already shipped GTK4 +
+  WebKitGTK (D41). The spike was promoted, not replaced.
+- **Probes that could not fail.** The first asserted a patched lambda returned None — a
+  tautology. Rewritten to drive the real code path; the gate probe then had the same shape and
+  got the same treatment.
+- **Four checks that punished their own documentation.** A script-tag literal in a comment, a
+  promise never to use `innerHTML`, and a `shell=True` docstring before that. The comment gives
+  way, never the check.
+- **`~=` pins captured from Windows** were unbuildable on a fresh aarch64 venv, and pip's error
+  named the wrong package.
+- **A slice-and-append edit** that silently deleted the `case` dispatcher off the end of
+  `install_autostart.sh`, which then exited 0 having done nothing.
+- **`PASTE_NEW_KEY_HERE`** pasted verbatim from my own instructions, on both boxes.
 
-### Left for LB
+### Still open
 
-- [ ] **Rotate the Gemini key** — it was in plaintext in three files
-- [ ] Ingest datasheet PDFs into `data/`, run `python tools/vector_db.py`, then `verify_rag.py`
-- [ ] Deploy to the Pi and run the six end-to-end scenarios; nothing here has run on hardware
-- [ ] Decide on D3's option 3: put a local model back for PERSONA, which has no quota
+- [ ] **The microphone.** Gain is maxed; he cannot reliably hear the wake word. Move the C270,
+      re-derive the threshold from fixtures in LB's voice, or switch STT to `base.en`.
+- [ ] **An unexplained Pi reboot** on 2026-08-19 at 14:41:43. No undervoltage, no OOM, and
+      journald is volatile so the evidence went with it. Enable persistent journald first.
+- [ ] Ingest datasheet PDFs, `pip install -r requirements-rag.txt`, build the store, then a
+      `verify_rag.py` that is meaningful rather than vacuous.
+- [ ] Re-measure turn latency **on the Pi** — the router leg logged 9.8s there against 750ms on
+      Windows, and 52.7s for a first sympy import. Both want a warm re-run.
+- [ ] Consider D3 option 3: a local model for PERSONA, which has no quota.

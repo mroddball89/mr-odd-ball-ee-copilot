@@ -149,3 +149,58 @@ standing between him and the exit.
 `Engine.leave_quiz()` is the way out that does not depend on being heard at all, and the HUD
 carries a visible `QUIZ MODE` chip with the exit phrase printed on it. A mode you cannot see is
 a mode you get stuck in.
+
+---
+
+## D6 — The typed channel does everything the voice does
+
+**2026-08-19.** Typing was going to be for questions, with waking and dismissing left to the
+microphone. That was wrong, and the Pi proved it within an hour of being deployed:
+
+| | |
+|---|---|
+| capture gain | already maxed, 16/16 at +30 dB — no software headroom |
+| peak mic RMS | 0.035–0.17, against ~0.1–0.3 for healthy speech |
+| wake scores | 0.17–0.28 against a threshold of 0.76 |
+| what Whisper heard | *"Don't you? Hey, hey, thank you. Everybody, I want to let you hold me."* |
+
+The persona agent was politely answering that, which is what made an input fault look like an
+agent fault.
+
+**So the typed channel is not a convenience, it is the one that works.** It has to be able to
+do everything the voice can, including the two things that are not questions:
+`instant.is_wake()` and `instant.is_sleep()`. The second is a wrapper on the existing
+`_is_dismissal` rather than a second list, so the typed and spoken doors out cannot drift.
+
+Both use the **end-anchor rule** — the phrase has to BE the line, not appear in it. A question
+that mentions him stays a question. `tools/verify_typed.py --probe` swaps in "contains the
+phrase" and 4 of 12 negatives are then obeyed instead of answered, including *"why did my board
+go to sleep"*. That is `verify_turn.py`'s "I bought it at the goodbye sale" bug arriving on a
+new channel, caught before it shipped this time.
+
+`_WAKE_FILLER` is deliberately a **different set** from `_DISMISS_FILLER`. "mr", "odd" and
+"ball" are filler around a dismissal ("Mr Odd Ball, that's all") and are the entire content of a
+wake phrase; one shared set would make "hey mr odd ball" reduce to nothing and match every wake
+phrase at once.
+
+**The underlying bug was worse than the missing feature.** `hud_bridge` had been collecting
+`{"type":"text"}` on an inbound queue since the panel was built, and nothing drained it outside
+a permission gate. Typing did nothing at all, silently. Built and not wired is the failure mode
+a harness that only tests the transport cannot see — `verify_chat.py` proved the message
+arrived, and it did arrive, at a queue nobody read.
+
+---
+
+## D7 — He runs on the Pi. Windows is for writing him.
+
+**2026-08-19.** LB's call, after the Pi was working: *"I'm only going to use him on the pi."*
+The Windows `.env` was deleted and should not be recreated.
+
+The consequence is a constraint on everything written from here: **every harness must run with
+no API key present**, because the machine they are authored on has none.
+`tools/verify_agents.py` substitutes a dummy when what it loads is unusable, and says so;
+`--live` is the only mode that needs a real key and it runs on the Pi.
+
+This also settles what the two directories on the Pi are for. `~/mr-odd-ball` is the copilot.
+`~/oddball` is the pre-merge assistant, stopped and disabled, kept as a fallback — not a
+second install to keep in step.
