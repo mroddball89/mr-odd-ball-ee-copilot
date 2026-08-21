@@ -128,6 +128,7 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
 | The RAG pipeline was **never queried** | retrieval on the answer path, sources cited |
 | The math sandbox had **no sympy** | a spoken `ModuleNotFoundError`; `verify_agents.py` now imports every library the prompt promises |
 | Mic peaks **0.035-0.17 RMS**, wake scores **0.17-0.28** vs a 0.76 threshold | typed control shipped as the channel that works; the mic itself is still open |
+| Amperes: **5 of 14 questions answered wrong**, 6 more refused | three separate defects in `convert.py`; 14/14 right, 0 wrong; D8 |
 
 ### What didn't work
 
@@ -144,6 +145,9 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
 - **A slice-and-append edit** that silently deleted the `case` dispatcher off the end of
   `install_autostart.sh`, which then exited 0 having done nothing.
 - **`PASTE_NEW_KEY_HERE`** pasted verbatim from my own instructions, on both boxes.
+- **A harness check that asserted a bug.** `verify_convert.py` pinned "a bare `m` is not a
+  unit" — true of a whole sentence, false of the fragment `_find_unit` actually receives, and
+  it was the reason "5 A in mA" was refused for a week. Green is not the same as right. D8.
 
 ### Still open
 

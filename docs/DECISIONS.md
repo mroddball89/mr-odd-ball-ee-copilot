@@ -204,3 +204,68 @@ no API key present**, because the machine they are authored on has none.
 This also settles what the two directories on the Pi are for. `~/mr-odd-ball` is the copilot.
 `~/oddball` is the pre-merge assistant, stopped and disabled, kept as a fallback — not a
 second install to keep in step.
+
+---
+
+## D8 — A guard written for a whole sentence was applied to a fragment
+
+**2026-08-21.** LB: *"he is getting the ampere conversion wrong."* He was, in three unrelated
+ways, and the three met on amperes because amperes are what an EE student converts most.
+Measured before and after on fourteen questions —
+`media/data/2026-08-21-ampere-conversion.csv`, chart beside it:
+
+| | right | refused | **wrong** |
+|---|---|---|---|
+| before (`ff3a43b`) | 3 | 6 | **5** |
+| after | 14 | 0 | **0** |
+
+### 1. The symbol forms were refused — "5 A in mA" reached the network
+
+`_NEEDS_A_NUMBER` says a one-letter alias only counts as a unit with a digit in front of it,
+which is what tells `5 a` from `a mile`. That rule is correct about a whole utterance and
+wrong about a **fragment**, and `_find_unit` only ever sees fragments: by the time it is
+called, the frame regex has eaten the number into its own `amount` group, so
+`convert 5 a to ma` arrives as `src="a"` with the 5 nowhere in it. Every symbol conversion an
+engineer actually types — 5 A in mA, 5 V in mV, 10 F in uF, 5 s in ms — was refused.
+
+A guarded alias now also passes when it **is the entire fragment**, because that is the
+grammar saying a unit belongs there: nothing but a unit fills the `to ___` of
+`convert 5 amps to ___`. The article is still safe, and for a reason worth keeping: in
+`how many meters in a mile` the source fragment is `a mile`, where `a` is not the whole
+fragment, so it stays an article.
+
+The harness had a check pinning the old rule — `'m' does not parse an English word as a unit`.
+It was asserting the bug. It has been split into the two halves that are actually true:
+multi-word fragments must not yield a unit, bare fragments must.
+
+### 2. The amount defaulted to 1 with the number still visible in the sentence
+
+`amount` defaults to 1.0 so `how many meters in a mile` works. The default fired whenever the
+number failed to land in the group, **not only when there was no number** —
+`how many milliamps in point 5 amps` parsed as `amount=None, src="point 5 amps"` and he said
+*"1 amp is 1000 milliamps."* The 5 was sitting in the fragment, and was answered as a 1.
+
+This is D42's factor error arriving by a different road, and the fix is an invariant rather
+than another special case: **the frame must account for every digit.** A digit left in either
+fragment means the parse did not understand the question, so it refuses. Spoken decimals
+(`point 5`, `.5`) are now parsed properly and answered; `1/2 amp` is refused rather than
+guessed at. Refusing escalates to a tier that can answer — a wrong number does not.
+
+### 3. The amp hour is charge, and he was reading it as current
+
+`how many amps in 3000 milliamp hours` matched the bare `milliamp`, dropped the `hours`
+silently, and answered *"3 amps"* — a dimensional error delivered as a confident number, which
+is the exact failure the category check exists to prevent. Leaving battery capacity out of the
+table did not make him refuse it; it made him answer it wrongly. `amperehour` is now in
+`charge` at 3600 C, so mAh↔Ah↔C all work and mAh→A is refused by the check that was always
+there.
+
+`Unit.symbol_forms` exists for this one unit: the prefix machinery builds symbol forms only
+from one-letter aliases, so `milli` + `ah` gives `milliah` and never `mah`.
+
+### What is deliberately still refused
+
+`kohm` and `mohm` are not aliases, and should not become them. `m` is milli in SI, so `mohm`
+would resolve to milliohms — while roughly half the people who type it mean megohms. That is a
+1,000,000x error with a plausible reading on both sides, which is the worst shape this table
+can hold. `kilohm` and `megohm` (the standard spellings) both work.
