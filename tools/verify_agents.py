@@ -145,6 +145,7 @@ section("2. each agent's own tools import")
 
 TOOLS = {
     "tools.trace_calculator": "calculate_ipc2221_trace_width",
+    "tools.kicad_parser":     "extract_kicad_bom",
     "tools.math_sandbox":     "math_repl_tool",
     "tools.os_controller":    "execute_terminal_command",
     "tools.web_search":       "perform_web_search",
@@ -170,6 +171,22 @@ out = calculate_ipc2221_trace_width.invoke(
     {"current_amps": 5.0, "temp_rise_c": 20.0, "thickness_oz": 2.0, "layer_type": "internal"})
 check("92.99" in out, "trace calculator returns the IPC-2221 width for 5A/20C/2oz internal",
       out[:90])
+
+# The KiCad reader, against a fixture with a known answer.
+#
+# Here for the same reason the sympy check is: `tools.kicad_parser` imports perfectly whether or
+# not `kiutils` is installed — the import is wrapped, by design, so the HARDWARE agent still
+# starts on a box without it. That means "the module imports" says nothing at all about whether
+# the tool can read a file, and a Pi that missed one `pip install` would answer every schematic
+# question with an install instruction. tools/verify_kicad.py is the full harness; this is the
+# one check that belongs in the reachability sweep.
+from tools.kicad_parser import extract_kicad_bom                          # noqa: E402
+
+_fixture = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "kicad" / "flat.kicad_sch"
+out = extract_kicad_bom.invoke({"file_path": str(_fixture)})
+check("8 parts" in out and "TL074" in out,
+      "the KiCad reader returns the known BOM for tests/fixtures/kicad/flat.kicad_sch",
+      out.splitlines()[0] if out else "(no output)")
 
 # The REPL sandbox — and the libraries the MATH prompt tells it to use. THIS is the check that
 # caught the live bug: the agent was reachable and the sandbox ran, and `import sympy` failed.
