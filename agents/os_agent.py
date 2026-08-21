@@ -46,7 +46,7 @@ from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Pending, Response
 from engine.split import SPOKEN_INSTRUCTION, split
 from tools.memory_manager import format_memory_for_llm
-from tools.os_controller import execute_terminal_command
+from tools.os_controller import KINDS, Outcome, execute_terminal_command, run_command
 
 OS_PROMPT_TEMPLATE = """
 You are an expert Linux System Administrator running on a Raspberry Pi.
@@ -85,6 +85,45 @@ Write only the question.
 """
 
 _FALLBACK_QUESTION = "I want to run a command on the Pi. It's on the screen. Should I?"
+
+# What he SAYS for each way an action can end. Lives here, not in `tools/`, because the tools
+# must stay free of persona — they report facts, this file decides how he puts them.
+#
+# It is total over `tools.os_controller.KINDS` and a harness asserts that, because the failure
+# mode of a missing row is the one this table exists to fix: falling through to a generic
+# sentence that happens to sound like success.
+#
+# Two rules every row obeys:
+#   1. It is a claim about what HE DID, never about what is now true of the screen. He cannot
+#      see the screen. "Opening Firefox now" is checked; "Firefox is open" is not.
+#   2. It is speakable — no paths, no flags, no numbers that drift. The old timeout sentence
+#      named fifteen seconds; TIMEOUT_S is a constant and the sentence would have started
+#      lying the moment anybody tuned it.
+_SPEECH: dict[str, str] = {
+    "output":        "Done. The output's on the screen.",
+    "error":         "That didn't work — the error is on the screen.",
+    # NOT "that didn't work". The blocklist refusing something is the system working, and
+    # os_controller's own docstring says reporting it as a fault is how a guard gets disabled.
+    "blocked":       "I won't run that one. The reason's on the screen.",
+    # subprocess.run kills the child on timeout, so "I stopped it" is a fact, not a euphemism.
+    "timeout":       "It was taking too long, so I stopped it.",
+    "crash":         "Something went wrong on my end. It's on the screen.",
+    "launched":      "Opening {subject} now.",
+    "no-display":    "I couldn't find the screen to open it on, so I've left it alone.",
+    "not-installed": "{subject} isn't installed on here, so there's nothing to open.",
+    "unknown-app":   "I don't know how to open that one. What I can open is on the screen.",
+    "ambiguous":     "There's more than one of those. The list is on the screen.",
+    "launch-failed": "{subject} wouldn't start. The reason's on the screen.",
+    "unknown-tool":  "I'm not sure how to do that one. The details are on the screen.",
+}
+
+assert set(_SPEECH) == set(KINDS), f"_SPEECH is not total over KINDS: {set(KINDS) ^ set(_SPEECH)}"
+
+
+def _speech_for(outcome: Outcome) -> str:
+    """The sentence for `outcome`. Never raises, never leaks the detail into speech."""
+    template = _SPEECH.get(outcome.kind, _SPEECH["crash"])
+    return template.format(subject=outcome.subject or "That")
 
 
 def _describe(llm, command: str) -> str:
@@ -143,25 +182,88 @@ def propose_os_action(query: str) -> Response:
     return split(extract_text_content(response.content), route="os")
 
 
+def propose_launch(app: str, spoken: str) -> Response:
+    """Ask whether to open `app`. **Costs no model call at all.**
+
+    `_describe()` exists because a shell string is unspeakable — reading
+    `cat /sys/class/thermal/thermal_zone0/temp` aloud is unusable as a question. But "Want me
+    to open Firefox?" is already a sentence, so the second Gemini call that produced it is pure
+    waste. Together with the free intent in `orchestrator/launch_intent.py`, that takes a
+    launch from three API calls to zero.
+
+    D4's property is unchanged and this is the point: the card still carries the exact argv,
+    rendered before the question is asked. It is in fact *stronger* here than on the shell
+    path, because the thing approved, the thing spoken and the thing shown all come from one
+    reviewed desktop entry rather than from a paraphrase of model output.
+
+    Args:
+        app:    the phrase to resolve — "firefox", "the browser".
+        spoken: the question to ask, from `launch_intent`.
+
+    Returns:
+        A gated `Response`. **Nothing has run.**
+    """
+    from tools.app_catalogue import cached_catalogue, resolve
+
+    shown = app
+    try:
+        match = resolve(app, cached_catalogue())
+        if match.ok:
+            shown = f"{' '.join(match.app.argv)}\n\n{match.app.path}"
+    except Exception:                                                  # noqa: BLE001
+        pass    # the card degrades to the app name; resolution happens again at launch time
+
+    return Response(
+        speech=spoken,
+        cards=[Card(CardKind.CODE, "Wants to open", shown, "bash")],
+        route="os",
+        pending=Pending(kind="os", tool_args={"app": app}, spoken=spoken, shown=shown,
+                        tool="launch_app"),
+        raw=f"Proposed launch:\n{app}")
+
+
+# Which tool resumes a Pending. `engine/core.py` dispatches on `Pending.kind` to pick the AGENT;
+# this picks the tool within it. Dispatch is on the NAME, never on the shape of `tool_args`:
+# models routinely emit extra keys, and the day one arrives as {"app": ..., "command": ...} an
+# `if "command" in args` would pick the shell and run something. An authority boundary decided
+# by a dict key is not a boundary.
+_RESUME = {
+    "execute_terminal_command": lambda args: run_command(args.get("command", "")),
+    "launch_app": lambda args: _launch(args.get("app", "")),
+}
+
+
+def _launch(app: str):
+    """Imported late so a broken catalogue costs the launch feature, not the whole OS route."""
+    from tools.app_launcher import launch
+    return launch(app)
+
+
 def resume_os_action(pending: Pending) -> Response:
-    """Run the approved command and report what happened.
+    """Run the approved action and report what happened.
 
     Only ever called after `orchestrator.classify_yes.is_yes` returned True.
     """
-    result = execute_terminal_command.invoke(pending.tool_args)
+    resume = _RESUME.get(pending.tool)
+    if resume is None:
+        # An unrecognised tool refuses. Distinct from a LEGACY Pending with no tool at all,
+        # which takes the field's default and reaches the shell exactly as it always did.
+        outcome = Outcome(ok=False, kind="unknown-tool", detail=pending.tool)
+    else:
+        outcome = resume(pending.tool_args)
 
-    failed = result.startswith("Terminal Error:") or result.startswith("Action Blocked:")
-    speech = ("That didn't work — the error is on the screen." if failed
-              else "Done. The output's on the screen.")
-
+    launched = pending.tool == "launch_app"
     return Response(
-        speech=speech,
+        speech=_speech_for(outcome),
         cards=[
-            Card(CardKind.CODE, "Ran", pending.shown, "bash"),
-            Card(CardKind.ERROR if failed else CardKind.LOG, "Output", result),
+            Card(CardKind.CODE, "Opened" if launched else "Ran", pending.shown, "bash"),
+            # ERROR styling for anything that did not happen, refusals included. The card being
+            # obvious is right either way; the SENTENCE is what distinguishes "I refused" from
+            # "it broke", and that distinction now lives in `_SPEECH` where it can be tested.
+            Card(CardKind.ERROR if not outcome.ok else CardKind.LOG, "Output", outcome.text),
         ],
         route="os",
-        raw=f"OS Execution Result:\n{result}")
+        raw=f"OS Execution Result:\n{outcome.text}")
 
 
 def run_os_agent(query: str) -> str:

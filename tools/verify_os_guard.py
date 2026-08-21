@@ -159,6 +159,56 @@ check("recursive forced delete" in out,
 check(guard.TIMEOUT_S == 15, "the 15-second timeout is still in place")
 
 # =========================================================================================
+section("4. the result is STATED, not re-parsed from prose")
+# =========================================================================================
+# Still nothing is executed. The blocked path returns before `subprocess.run` is reached, and
+# every other kind is checked by constructing the Outcome the producer would have built.
+
+blocked = guard.run_command("rm -rf /")
+check(isinstance(blocked, guard.Outcome), "run_command returns an Outcome, not a string")
+check(blocked.ok is False, "a refused command did not happen")
+check(blocked.kind == "blocked",
+      "and its kind is 'blocked', NOT 'error' — the guard working is not a malfunction",
+      f"got {blocked.kind!r}")
+check("recursive forced delete" in blocked.detail, "the reason is carried in .detail")
+
+# The two regressions that motivated the type. Both were spoken as "Done. The output's on the
+# screen." because the caller tested `.startswith("Terminal Error:")` and neither string matched.
+timed_out = guard.Outcome(ok=False, kind="timeout", detail="firefox")
+check(timed_out.ok is False,
+      "a command that was started and then KILLED did not succeed",
+      "this was announced as success until 2026-08-21")
+check(not timed_out.text.startswith("Terminal Error:"),
+      "and its prose still does not begin with the prefix the old check looked for — "
+      "which is exactly why reading .ok instead of parsing .text is the fix")
+
+crashed = guard.Outcome(ok=False, kind="crash", detail="boom")
+check(crashed.ok is False and not crashed.text.startswith("Terminal Error:"),
+      "same for an exception on our side")
+
+# `.text` is a compatibility surface: the @tool return value is a schema the model sees, and
+# run_os_agent()'s --text path still prints it. It must not drift.
+check(guard.Outcome(True, "output", "45000").text == "Terminal Output:\n45000",
+      "output prose is byte-identical to the pre-Outcome string")
+check(guard.Outcome(False, "error", "nope").text == "Terminal Error:\nnope",
+      "error prose is byte-identical")
+check(guard.Outcome(False, "blocked", "a fork bomb").text.startswith("Action Blocked:"),
+      "blocked prose is byte-identical")
+check(guard.Outcome(False, "timeout").text
+      == f"Error: Command timed out after {guard.TIMEOUT_S} seconds.",
+      "timeout prose names the real constant, so it cannot drift from TIMEOUT_S")
+check(guard.Outcome(False, "crash", "boom").text == "System Error: boom",
+      "crash prose is byte-identical")
+
+check(guard.execute_terminal_command.invoke({"command": "rm -rf /"})
+      == guard.run_command("rm -rf /").text,
+      "the @tool is a pure wrapper — the model sees exactly what run_command reports")
+
+check(len(set(guard.KINDS)) == len(guard.KINDS), "no duplicate kinds")
+check(all(k and k.islower() and " " not in k for k in guard.KINDS),
+      "every kind is a bare lowercase token, safe as a dict key and never spoken")
+
+# =========================================================================================
 
 
 def probe() -> int:

@@ -269,3 +269,219 @@ from one-letter aliases, so `milli` + `ah` gives `milliah` and never `mah`.
 would resolve to milliohms — while roughly half the people who type it mean megohms. That is a
 1,000,000x error with a plausible reading on both sides, which is the worst shape this table
 can hold. `kilohm` and `megohm` (the standard spellings) both work.
+
+---
+
+## D9 — He reads LB's KiCad files with kiutils, and the obvious parser was measured first
+
+**2026-08-21.** The HARDWARE agent could compute an IPC-2221 trace width and nothing else — it
+had never been able to look at an actual design. It now has two tools,
+`tools/kicad_parser.py`: `extract_kicad_bom` reads a schematic's parts, `analyze_kicad_pcb`
+reads a board's layer stack, nets and footprints. Both work offline and neither needs KiCad
+installed, which matters because the Pi does not have it and never will.
+
+**The parser is `kiutils`, not a regex.** A `.kicad_sch` is an S-expression whose useful fields
+sit four levels deep inside quoted strings that may themselves contain brackets. A regex over
+that is a parser that works on the file you tested it against.
+
+### The tutorial implementation was run before it was replaced
+
+Measured on twelve questions against eight fixtures —
+`media/data/2026-08-21-kicad-parser.csv`, chart beside it. "Before" is a **live run** of the
+textbook version, kept verbatim in `media/scripts/measure_kicad_parser.py`, not a note of what
+it used to do:
+
+| | right | error | **wrong** |
+|---|---|---|---|
+| the tutorial parser | 2 | 7 | **3** |
+| shipped | 12 | 0 | **0** |
+
+**Every schematic question is in the error column, and one wrong attribute name puts it
+there.** kiutils has no `Schematic.symbols` — it is `schematicSymbols`. Wrapped in the
+customary `except Exception`, that AttributeError comes back as *"Failed to parse schematic:
+'Schematic' object has no attribute 'symbols'"*, which reads like a corrupt file, for every
+file. See L5.
+
+The three genuinely **wrong** answers are all board questions, and all the same shape as D8 —
+a number, said confidently, that nobody would question:
+
+- **"29 layers"** for a two-layer board. `len(board.layers)` counts adhesive, paste,
+  silkscreen, mask, courtyard, fab and nine user layers alongside the copper. What anybody
+  means by "a four-layer board" is the copper count, so that is the headline and the table size
+  is reported beside it, labelled.
+- **"6 nets"** where there are 5. Net 0 is KiCad's unassigned net and exists on every board,
+  including an empty one — it inflates every net count by exactly one, forever.
+
+### Three more defects that the fixtures caught and the measurement does not show
+
+**`inBom` defaults to `False` in kiutils, so absence and exclusion are the same value.** A
+filter written as `if not symbol.inBom: continue` returns an **empty BOM** for any file that
+does not write the `in_bom` token — and an empty BOM does not look like a failure, it looks
+like an empty sheet. The exclusion rule is therefore KiCad's own `#` reference prefix, stable
+across every format version; `inBom` is consulted only when some symbol in that file carries
+`True`, which proves the token is being written. `tests/fixtures/kicad/no-inbom.kicad_sch` is a
+file in the second state.
+
+**A multi-unit part is several symbol blocks with one reference.** A TL074 is one 14-pin chip
+drawn as four amplifiers plus a power unit — five blocks, all `U1`. Counting blocks orders five
+quad op-amps. De-duplicated by reference, and the unit carrying a real footprint wins, because
+KiCad writes the power unit with an empty Footprint field.
+
+**A hierarchical design keeps almost nothing on the root sheet.** Reading only the file you
+were handed gives a BOM of two connectors for a 90-part board. The walk follows each sheet's
+`Sheetfile` property, and distinguishes the two ways a file can be met twice: an ancestor is a
+**cycle** and the design is malformed, while a non-ancestor is a **repeated sheet**, which is
+legal and means those parts really are on the board more than once. Both are reported; neither
+is silent.
+
+### A name is accepted as well as a path, because he is listening
+
+A dictated path does not survive Whisper — "slash home slash pi slash amp dot kicad underscore
+sch" comes back as prose. So a bare project name is searched for under `ODDBALL_KICAD_ROOT`
+(`.env`, default `~/kicad`), matching on case- and punctuation-free slugs so "the amp board"
+finds `amp_board/`. **Two matches are reported as two matches.** Answering confidently about
+the wrong board is worse than asking which one, because the answer is correct — about something
+LB did not ask about.
+
+### What the voice does with a bill of materials
+
+Nothing, and that is the point. The tool result is appended under `Tool Execution Result:`,
+which `engine/split.py` already cards, so the listing lands on the HUD and the spoken half is
+one sentence the model writes from it. D2's rule holds: the model may phrase the answer and may
+never derive it, so `SUMMARY_PROMPT_TEMPLATE` forbids naming any part that is not in the tool's
+output — asked to summarise a BOM, a model will otherwise mention the decoupling capacitor it
+believes ought to be there, and LB will go looking for it.
+
+### Deliberately not built
+
+Netlist and connectivity extraction ("is pin 3 tied to ground"), DRC, and gerber export.
+kiutils can reach some of it; each is its own tool with its own failure modes.
+
+---
+
+## D10 — He opens applications by handing them to systemd, and asking costs no API call
+
+**2026-08-21.** LB: *"he is struggling to open Firefox and different apps on the pi."* He was
+not misunderstanding the request — `router.py` already routed "launching applications" to OS.
+Five independent defects sat on the execution path, and every one had to go before a window
+could appear.
+
+| # | defect | why it was invisible |
+|---|---|---|
+| 1 | **No display.** `oddball.service` sets no `Environment=`, and `Linger=yes` starts it at boot, *before labwc exists*. | Intermittent — see below. |
+| 2 | **`subprocess.run(capture_output=True, timeout=15)`.** Blocks until exit, and **kills the child** on timeout. A GUI app that did find a display appeared and died at 15s — and the turn thread is the speech thread, so he was deaf for it. | Looked like the app "not opening". |
+| 3 | **The failure was spoken as success.** `failed = result.startswith("Terminal Error:")`. `firefox &` returns 0 instantly, Firefox dies unseen, and he says **"Done. The output's on the screen."** | A *confident success* is the one shape nobody escalates. |
+| 4 | **Wrong cgroup.** Anything spawned inherits `oddball.service`'s, and `KillMode=control-group` kills it on the next restart. | Only visible after a deploy. |
+| 5 | **A refusal was reported as a malfunction.** `Action Blocked:` set `failed=True`. | `os_controller.py`'s own docstring says this is how a guard gets switched off. |
+
+**Defect 1 is intermittent, and that is why it presented as "struggling" rather than "broken".**
+The desktop session imports its environment into the systemd user manager at login, so a
+service *restarted* after login inherits `WAYLAND_DISPLAY`, while the same service started at
+boot does not. Measured: the running process had `WAYLAND_DISPLAY=wayland-0` and `DISPLAY=:0`
+after a manual restart, and neither after a reboot.
+
+### The catalogue is the machine's, not a table we maintain
+
+`~/oddball/hardware/apps.py` was a hand-written allow-list of three rows. A `which` sweep of the
+Pi found **`nautilus` missing** — one row in three would have failed exactly as that file's own
+comment predicted: *"he says he opened it and nothing appears."* So the source of truth is the
+XDG desktop-entry database (`tools/app_catalogue.py`): 62 entries, 32 launchable after
+filtering `NoDisplay`, `Hidden`, non-`Application` and session-ending entries. `apt install vlc`
+and VLC is openable with no code change, and `rm`/`dd`/`bash` are excluded for free because they
+are not applications.
+
+LB chose this over curation, and chose to keep the single permission gate covering all of it.
+
+### A transient service, not a scope, and not a bare Popen
+
+```
+systemd-run --user --collect --unit=oddball-app-<id>-<ts> -p Type=exec --setenv=... -- /usr/bin/firefox
+```
+
+`--scope` runs **synchronously** (defect 2 unfixed) and inherits our environment wholesale —
+including `Nice=-5`, which would put Firefox above the audio thread on the one unit whose
+comments say audio must never be starved. A transient **service** is forked by the user manager
+from a clean environment, gets its own cgroup, and can be named, inspected and stopped.
+
+The fix is therefore not "stop blocking" but **"run something that finishes."** `capture_output`
+and `timeout` stay and are now correct: the thing being run is a control-plane command that
+returns in ~150 ms. systemd owns the process lifetime, so there is no `Popen`, no
+`start_new_session`, no orphan reaping.
+
+**`Type=exec` was measured rather than assumed, and the usual claim about it is wrong on
+systemd 257:**
+
+| | `Type=simple` | `Type=exec` |
+|---|---|---|
+| binary missing | rc=1 | rc=1 |
+| binary present, **cannot exec** (bad shebang, corrupt ELF, missing `.so`) | **rc=0** | rc=1 |
+
+A *missing* binary is caught either way — systemd validates `ExecStart` at load. What
+`Type=simple` reports as success is a program that exists and then fails to `execve`, because
+the start job completes at `fork()`. So `_which()` catches *not installed* and `Type=exec`
+catches *installed but broken*; both are kept.
+
+### Opening Firefox went from three API calls to none
+
+The router ran unconditionally, so **every** turn began with a Gemini request. A launch cost
+three: route it, write `firefox`, then paraphrase that into a speakable question. Against D3's
+20 requests/model/day, six launches was a day's quota.
+
+`orchestrator/instant.py` already answered time, date, conversions, constants, definitions and
+arithmetic for free — the merge wired it in as the UTILITY *destination* rather than as a pass
+in front, so the free path could only be reached by paying for it. It now runs first, and a new
+planner (`orchestrator/launch_intent.py`) recognises a launch with no model at all.
+
+| | before | after |
+|---|---|---|
+| "open firefox" (whole approval conversation) | 3 | **0** |
+| "what time is it" / a conversion / a definition / a sum | 1 | **0** |
+
+Verified by monkeypatching `router_agent` to raise. `formula` deliberately stays behind the
+router: measured against a 15-question corpus it is the only intent that claims questions
+belonging to an agent — *"design a low pass filter with a cutoff of one kilohertz"* is a MATH
+problem and `formula` answers it with a formula.
+
+**A launch needs a verb AND a target AND nothing left over but filler.** That end-anchor rule is
+inherited from `apps.py` and is the whole safety argument: *"how do I open a file in Python"*,
+*"why did my browser crash"*, *"is firefox installed"* and *"what is firefox"* all decline.
+Mutation-tested — removing the anchor turns checks red, and the failure it describes is a
+question starting a program.
+
+`instant.py`'s planner seam had never been used, and its log line reached for
+`plan.name`/`plan.argv` — attributes of `hardware.actions.Plan`, a class that did not come
+across in the merge. It was a guaranteed `AttributeError` waiting for the first planner anybody
+injected, and because the exception was caught it took the entire free tier down into the router
+fallback *silently*.
+
+### What was measured
+
+`media/data/2026-08-21-app-launch.csv`, chart beside it. Five trials per arm on the Pi:
+
+| arm | alive after launch | survived a service restart | what he said |
+|---|---|---|---|
+| `firefox` (old) | 0/5 | never started | "That didn't work — the error is on the screen." |
+| `firefox &` (old) | 0/5 | never started | **"Done. The output's on the screen."** |
+| `launch_app` | **5/5** | **survived** | "Opening Firefox now." |
+
+Restart survival is measured on a `sleep`, not on Firefox, and separately confirmed by hand
+with the browser: a window on a real screen is a bad probe for a cgroup property because a
+human can close it.
+
+### What didn't work
+
+- **The measurement poisoned its own subject.** Firefox increments
+  `toolkit.startup.recent_crashes` whenever it is stopped before startup completes; past 3 it
+  starts, writes prefs and **shuts down cleanly** — exit 0, no output, no crash report,
+  `Result=success`. Fifteen trials drove it to **17**, and the run then reported that the cgroup
+  fix had failed. Indistinguishable from the bug being fixed. See L8.
+- **`pkill -f /usr/lib/firefox` killed the ssh session, twice** — `-f` matches the command line
+  that invoked it. Already recorded in the pre-merge repo's lessons and not carried across in
+  the merge, so it was learned again. See L9.
+- **`ls ~/.mozilla` returning nothing** was read as "Firefox has no profile" for a long time.
+  This build uses XDG paths; the profile was in `~/.config/mozilla/firefox` the whole time. L10.
+- **An `os.path.exists` fallback beside `shutil.which`** — dead code, since `which` already
+  resolves absolute paths, and it silently bypassed the harness's injection seam so the tests
+  passed on Windows and failed on the Pi.
+- **A regex that stripped `%f` before unescaping `%%`**, turning `%%f` into `%` instead of `%f`.
+  Field codes need one left-to-right pass. The harness caught it.

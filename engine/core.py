@@ -189,35 +189,106 @@ class Engine:
     # --- the three paths ---------------------------------------------------------------
 
     def _routed_turn(self, text: str, t: Turnlog) -> Response:
-        from tools.memory_manager import add_message, check_for_backup_reminder
+        from tools.memory_manager import add_message
 
         add_message("user", text)
 
-        t0 = time.monotonic()
-        decision = router_agent(text)
-        t.route_s = time.monotonic() - t0
-        t.route = decision.destination.value
-        LOG.info("route %r -> %s (%s)", text, t.route, decision.reasoning)
+        # The free tier, BEFORE the router. See `_free_turn`.
+        response = self._free_turn(text, t)
+        if response is None:
+            t0 = time.monotonic()
+            decision = router_agent(text)
+            t.route_s = time.monotonic() - t0
+            t.route = decision.destination.value
+            LOG.info("route %r -> %s (%s)", text, t.route, decision.reasoning)
 
-        t0 = time.monotonic()
-        response = self._dispatch(decision.destination, text, t)
-        t.agent_s = time.monotonic() - t0
+            t0 = time.monotonic()
+            response = self._dispatch(decision.destination, text, t)
+            t.agent_s = time.monotonic() - t0
 
-        # The 15-day clock. Appended to the SHOWN half, never the spoken one: a system alarm
-        # read aloud in the middle of an answer is startling, and this is a reminder rather
-        # than an emergency. It stays on screen until LB deals with it.
-        if check_for_backup_reminder():
-            response = Response(
-                speech=response.speech,
-                cards=list(response.cards) + [Card(
-                    CardKind.ERROR, "Back up your memory",
-                    "sd_card_memory.json is more than 15 days old. Copy it to the portable "
-                    "drive before the SD card is the only copy of it.")],
-                route=response.route, pending=response.pending, raw=response.raw)
-            t.extras.append("backup reminder")
-
+        response = self._with_backup_reminder(response, t)
         add_message("assistant", response.raw or response.speech)
         return response
+
+    # Intents allowed to answer WITHOUT consulting the router. Every one is a lookup with a
+    # single right answer that no model improves on.
+    #
+    # `formula` is deliberately ABSENT even though it is free and often correct. Measured
+    # 2026-08-21 against a 15-question corpus: it is the only intent that claims questions
+    # belonging to an agent — "design a low pass filter with a cutoff of one kilohertz" is a
+    # MATH problem and `formula` answers it with a formula. It stays behind the router, where
+    # it has always been, until its matcher earns promotion. D38, for the sixth time: the
+    # danger is never the intent that fails to match, it is the one that matches too much.
+    FREE_INTENTS = frozenset({"time", "date", "convert", "constant", "define", "calc"})
+
+    def _free_turn(self, text: str, t: Turnlog) -> Response | None:
+        """Answer without spending a Gemini call, or return None to let the router decide.
+
+        **Why this is in front of the router rather than behind it.** `router_agent()` is an
+        API call, and it used to run unconditionally — so "what time is it" cost one request to
+        be told to use a lookup table, and "open Firefox" cost three (route, write the command,
+        paraphrase it aloud). D3 measured the free tier at 20 requests per model per day, which
+        made six launches a whole day's quota.
+
+        `orchestrator.instant` already answered all of this for free; the merge simply wired it
+        in as the UTILITY *destination* instead of as a pass in front. So the free path existed
+        and could only be reached by paying for it.
+
+        A miss costs one `normalise()` and a few table lookups — microseconds — and then the
+        turn proceeds exactly as it did before. Nothing here can answer *wrongly* in a new way:
+        an intent either matches, in which case it answered before too, or it does not.
+
+        Returns:
+            A `Response`, or None when nothing free applies.
+        """
+        from orchestrator import launch_intent
+        from orchestrator.instant import Router as InstantRouter
+
+        try:
+            # `planners` is checked before INTENTS and was built for exactly this. Injected
+            # rather than imported, per that class's docstring: a dependency handed in is one a
+            # harness can withhold, which is what lets `verify_engine.py` prove nothing runs.
+            reply = InstantRouter(planners={"launch": launch_intent.look_up}).route(text)
+        except Exception:                                              # noqa: BLE001
+            LOG.exception("free tier failed; falling back to the router")
+            return None
+
+        request = reply.action
+        if isinstance(request, launch_intent.LaunchRequest):
+            from agents.os_agent import propose_launch
+            t.route = AgentRoute.OS.value
+            t.extras.append(f"free launch ({request.app})")
+            # Still gated. The free path decides WHAT was asked for, never whether to do it.
+            return self._gate(propose_launch(request.app, request.spoken),
+                              AgentRoute.OS.value, t)
+
+        if reply.handled and reply.intent in self.FREE_INTENTS:
+            t.route = AgentRoute.UTILITY.value
+            t.extras.append(f"free:{reply.intent}")
+            return Response(speech=reply.text, route=AgentRoute.UTILITY.value, raw=reply.text)
+
+        return None
+
+    def _with_backup_reminder(self, response: Response, t: Turnlog) -> Response:
+        """The 15-day clock. Appended to the SHOWN half, never the spoken one: a system alarm
+        read aloud in the middle of an answer is startling, and this is a reminder rather than
+        an emergency. It stays on screen until LB deals with it.
+
+        Applies to free turns too — a reminder that only fires when he happens to make an API
+        call is a reminder that stops firing on exactly the days he is being careful with quota.
+        """
+        from tools.memory_manager import check_for_backup_reminder
+
+        if not check_for_backup_reminder():
+            return response
+        t.extras.append("backup reminder")
+        return Response(
+            speech=response.speech,
+            cards=list(response.cards) + [Card(
+                CardKind.ERROR, "Back up your memory",
+                "sd_card_memory.json is more than 15 days old. Copy it to the portable "
+                "drive before the SD card is the only copy of it.")],
+            route=response.route, pending=response.pending, raw=response.raw)
 
     def _dispatch(self, route: AgentRoute, text: str, t: Turnlog) -> Response:
         """Hand the question to the one agent that should answer it."""
