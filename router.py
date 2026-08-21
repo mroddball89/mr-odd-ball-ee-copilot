@@ -62,7 +62,9 @@ Your only job is to analyze the user's query and route it to the correct special
 
 Available Agents:
 - FIRMWARE: C/C++, RTOS, microcontroller registers, bitmasks, and reading datasheets.
-- HARDWARE: physical PCB layout, trace widths, current carrying capacity, IPC-2221.
+- HARDWARE: physical PCB layout, trace widths, current carrying capacity, IPC-2221. ALSO the
+  user's own KiCad files — a schematic's parts or bill of materials, a board's layers or nets.
+  He can read them; a question about what is on one of his designs is HARDWARE, not OS.
 - MATH: physics equations, filter design, and calculations that need real computation.
 - OS: controlling THIS Raspberry Pi — running commands, checking CPU temperature or RAM,
   managing files, launching applications. Anything that acts on the machine itself.
@@ -79,7 +81,9 @@ Routing notes:
   problems that need working out, not for facts.
 - Prefer PERSONA over GENERAL when the user is being social.
 - Choose OS only when the user wants something DONE to the Pi. A question *about* Linux is
-  FIRMWARE or GENERAL; a request to check this machine's temperature is OS.
+  FIRMWARE or GENERAL; a request to check this machine's temperature is OS. Naming a FILE does
+  not make it OS: "what's on my amp schematic" is HARDWARE, because reading design files is
+  something the hardware agent does itself.
 
 User Query: {question}
 """
