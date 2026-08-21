@@ -176,6 +176,16 @@ KNOWN = [
     ("how many bytes in 4 kilobytes",                   4000.0,        1e-12),
     ("convert 1 horsepower to watts",                   745.6998716,   1e-6),
     ("how many kilocalories in 500 joules",             0.11950286,    1e-6),
+    # THE AMPERE CASES, 2026-08-21. All three were reported as "he gets amps wrong", and they
+    # are three different defects that happen to meet on the unit LB asks about most.
+    ("5 a in ma",                                       5000.0,        1e-9),
+    ("convert 3.3 v to mv",                             3300.0,        1e-9),   # not amps: same bug
+    ("how many ns in 5 s",                              5e9,           1e-9),
+    ("how many milliamps in point 5 amps",              500.0,         1e-9),
+    ("how many milliamps in .5 amps",                   500.0,         1e-9),
+    ("how many coulombs in 1 amp hour",                 3600.0,        1e-12),
+    ("convert 2000 mah to ah",                          2.0,           1e-12),
+    ("how many mah in 2.5 ah",                          2500.0,        1e-12),
 ]
 for question, expected, tol in KNOWN:
     got = convert(question)
@@ -203,6 +213,51 @@ minus_forty = convert("convert -40 celsius to fahrenheit")
 check(minus_forty is not None and math.isclose(minus_forty.amount, -40.0),
       "a negative amount keeps its sign",
       f"{minus_forty.amount if minus_forty else None!r}")
+
+# THE UNCONSUMED-DIGIT REGRESSION, stated as a refusal of the wrong ANSWER and not only of the
+# wrong parse — the same shape as the D42 block above, and the same failure: a factor error
+# spoken confidently. `amount` defaults to 1.0 for "how many meters in a mile"; before
+# 2026-08-21 that default also fired when a number was present and merely missed the group, so
+# "point 5 amps" was answered as one amp. Each of these has a digit in the source fragment and
+# must NEVER come back as 1.
+for question, wrong in (("how many milliamps in point 5 amps", 1000.0),
+                        ("how many milliamps in .5 amps",      1000.0),
+                        ("how many milliamps in 1/2 amp",      1000.0)):
+    got = convert(question)
+    check(got is None or not math.isclose(got.amount, 1.0),
+          f"{question!r} is never read as an amount of 1",
+          f"got amount={got.amount if got else None!r} value={got.value if got else None!r}")
+    check(got is None or not math.isclose(got.value, wrong),
+          f"{question!r} does not answer {wrong:g}",
+          f"got {got.value if got else None!r}")
+
+# The two that CAN be read exactly are answered; the one that cannot is refused rather than
+# guessed. Refusing escalates to a tier that can answer — a wrong number does not.
+half = convert("how many milliamps in point 5 amps")
+check(half is not None and math.isclose(half.amount, 0.5),
+      "a spoken decimal point is understood: 'point 5 amps' is 0.5 amps",
+      f"{half.amount if half else None!r}")
+check(convert("how many milliamps in 1/2 amp") is None,
+      "a slash fraction is REFUSED, not guessed at",
+      f"got {convert('how many milliamps in 1/2 amp')!r}")
+
+# "point" only becomes a decimal point next to digits, or every melting point is a number.
+check(convert("what is the melting point in celsius") is None,
+      "'melting point in celsius' is not a conversion",
+      f"got {convert('what is the melting point in celsius')!r}")
+
+# THE AMP HOUR IS CHARGE. Before it entered the table, "how many amps in 3000 milliamp hours"
+# matched the bare "milliamp", dropped the "hours" silently, and answered "3 amps" — a
+# dimensional error delivered as a number, which is the exact failure section 5 exists for.
+check(convert("how many amps in 3000 milliamp hours") is None,
+      "amp hours are charge: converting them to a CURRENT is refused",
+      f"got {convert('how many amps in 3000 milliamp hours')!r}")
+amp_hours = convert("how many amp hours in 3000 milliamp hours")
+check(amp_hours is not None and math.isclose(amp_hours.value, 3.0),
+      "3000 mAh is 3 Ah", f"got {amp_hours.value if amp_hours else None!r}")
+check(amp_hours is not None and "amp hours" in amp_hours.spoken,
+      "and he SAYS amp hours, rather than silently renaming them amps",
+      f"got {amp_hours.spoken if amp_hours else None!r}")
 
 
 # ============================================================ 4. TEMPERATURE IS AFFINE
@@ -397,9 +452,17 @@ check(pa is not None and pa[0].key == "pascal",
       "'pa' resolves to pascals, not picoamperes (table order decides, deliberately)",
       f"got {pa[0].key if pa else None!r}")
 
-# Single-letter and word-shaped aliases need a number in front, or ordinary English becomes
-# a unit. "a mile" must not parse the article as amperes.
-for text in ("a mile", "give it to us", "in a moment", "m"):
+# Single-letter and word-shaped aliases are guarded, or ordinary English becomes a unit.
+# "a mile" must not parse the article as amperes.
+#
+# **The guard is "a digit in front OR the whole fragment", and the second half was added
+# 2026-08-21 to fix a refusal, not a wrong answer.** `_find_unit` is only ever called on ONE
+# SIDE of an already-parsed conversion, and the frame regex has by then eaten the number into
+# its own group — so "convert 5 a to ma" arrives as src="a" with no digit anywhere in it, and
+# a digit-only rule refused every symbol conversion an engineer actually types. This list is
+# therefore the multi-word fragments, where the article reading is the live hazard; the bare
+# fragments below assert the opposite, and both directions have to hold.
+for text in ("a mile", "give it to us", "in a moment", "a moment to spare"):
     found = C._find_unit(text)
     check(found is None or found[0].key not in ("ampere", "second", "meter")
           or text.strip()[0].isdigit(),
@@ -408,6 +471,16 @@ for text in ("a mile", "give it to us", "in a moment", "m"):
 
 check(C._find_unit("5 a") is not None and C._find_unit("5 a")[0].key == "ampere",
       "'5 a' DOES parse as amperes — the digit is what makes it a unit")
+
+# A guarded alias that IS the entire fragment is a unit slot by grammar: nothing but a unit
+# can fill the "to ___" of "convert 5 amps to ___". Pinned per unit, because this is what
+# carries every symbol conversion end to end.
+for text, want_key in (("a", "ampere"), ("m", "meter"), ("v", "volt"), ("s", "second"),
+                       ("f", "farad"), ("g", "gram"), ("ah", "amperehour")):
+    found = C._find_unit(text)
+    check(found is not None and found[0].key == want_key,
+          f"a bare {text!r} fragment IS {want_key} — it is a unit slot, not English",
+          f"got {found[0].key if found else None!r}")
 
 
 # ============================================================ 9. speakable

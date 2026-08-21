@@ -103,6 +103,10 @@ class Unit:
         plural:   plural form. "feet", not "foots".
         names:    every spelling a transcript might contain, longest matched first.
         prefixable: may an SI prefix be attached? True for SI units, False for feet and pounds.
+        symbol_forms: aliases that additionally take the SINGLE-LETTER prefixes in
+            `SI_SYMBOLS`, over and above the length-1 aliases that always do. Exists for one
+            unit: "ah" needs "mah", and the prefix machinery builds symbol forms only from
+            one-letter symbols ("milli" + "ah" gives "milliah", never "mah").
     """
 
     key: str
@@ -113,6 +117,7 @@ class Unit:
     names: tuple[str, ...]
     offset: float = 0.0
     prefixable: bool = False
+    symbol_forms: tuple[str, ...] = ()
 
 
 # --------------------------------------------------------------------------------------
@@ -273,6 +278,15 @@ UNITS: tuple[Unit, ...] = (
          ("henry", "henries", "henrys", "h"), prefixable=True),
     Unit("coulomb", "charge", 1.0, "coulomb", "coulombs",
          ("coulomb", "coulombs", "c"), prefixable=True),
+    # The amp hour is CHARGE, not current, and that distinction is the whole reason it is in
+    # the table. Without it "how many amps in 3000 milliamp hours" matched the bare "milliamp",
+    # silently dropped the "hours", and answered "3 amps" — a dimensional error delivered as a
+    # confident number, which is exactly what the category check exists to prevent. Battery
+    # capacity is the single most common place LB meets a prefixed amp, so leaving the compound
+    # out did not make him refuse it; it made him answer it wrongly. 1 Ah = 3600 C.
+    Unit("amperehour", "charge", 3600.0, "amp hour", "amp hours",
+         ("amp hour", "amp hours", "ampere hour", "ampere hours", "amphour", "amphours", "ah"),
+         prefixable=True, symbol_forms=("ah",)),
     Unit("weber", "flux", 1.0, "weber", "webers", ("weber", "webers", "wb"), prefixable=True),
     Unit("tesla", "fluxdensity", 1.0, "tesla", "teslas",
          ("tesla", "teslas"), prefixable=True),
@@ -335,8 +349,9 @@ def _build_aliases() -> tuple[dict[str, tuple[Unit, float]], list[str]]:
                     add(prefix[:-1] + alias, unit, multiplier)
             # Single-letter prefixes attach ONLY to single-letter unit symbols: mv, ka, uf,
             # ns, ms, kg. Attaching them to whole words would turn "min" into milli-inches
-            # and "cup" into centi-something. Length 1 is the guard, and it is deliberate.
-            if len(alias) == 1:
+            # and "cup" into centi-something. Length 1 is the guard, and it is deliberate —
+            # `symbol_forms` is the one documented way past it, and holds "ah" alone.
+            if len(alias) == 1 or alias in unit.symbol_forms:
                 for symbol, multiplier in SI_SYMBOLS.items():
                     add(symbol + alias, unit, multiplier)
 
@@ -345,12 +360,12 @@ def _build_aliases() -> tuple[dict[str, tuple[Unit, float]], list[str]]:
 
 _ALIAS_MAP, _ALIAS_ORDER = _build_aliases()
 
-# Aliases that are also ordinary English words are matched ONLY with a number in front of
-# them. Every single letter qualifies — "a" is amperes and an article, "m" is meters and a
-# stutter — and so does "us", which is microseconds and a pronoun. Requiring an adjacent digit
-# is what tells "5 a" from "a mile", and it is why "in" is not an alias for inch at all:
-# "how many meters in a mile" would parse as inches, and no digit rule can save that one.
-_NEEDS_A_NUMBER = {a for a in _ALIAS_MAP if len(a) == 1} | {"us"}
+# Aliases that are also ordinary English words are guarded: they match only where a unit
+# demonstrably belongs. Every single letter qualifies — "a" is amperes and an article, "m" is
+# meters and a stutter — and so do "us" (microseconds, and a pronoun) and "ah" (amp hours, and
+# a noise a person makes). It is why "in" is not an alias for inch at all: "how many meters in
+# a mile" would parse as inches, and no guard applied here can save that one.
+_NEEDS_A_NUMBER = {a for a in _ALIAS_MAP if len(a) == 1} | {"us", "ah"}
 
 # ONE compiled alternation rather than ~4,000 separate regexes. Python's `re` alternation
 # takes the first alternative that matches at the earliest position, so feeding it aliases
@@ -365,14 +380,32 @@ def _find_unit(text: str) -> tuple[Unit, float, int, int] | None:
     """The first unit mentioned in `text`, preferring the longest spelling.
 
     Args:
-        text: prepared text — lowercase, digits, letters, dots and minus signs.
+        text: ONE side of a parsed conversion — the source or the destination fragment, not
+            the whole utterance. Prepared: lowercase, digits, letters, dots and minus signs.
 
     Returns:
         (unit, prefix multiplier, start, end) or None if no unit is named.
+
+    **A guarded alias is licensed two ways, and the second one is why "5 A in mA" works.**
+    The original rule was "a digit must sit immediately before it", which reads "5 a" as amps
+    and "a mile" as miles. It is correct about the whole utterance and wrong about a fragment,
+    because by the time `_convert` calls this the frame regex has already eaten the number into
+    its own `amount` group: "convert 5 a to ma" arrives here as src="a", with the 5 nowhere in
+    sight. Every symbol conversion an engineer actually types — 5 A in mA, 5 V in mV, 10 F in
+    uF, 5 s in ms — was refused outright, and refusal on a fragment that IS a unit is not the
+    safe direction, it is a working question sent to the network.
+
+    So a guarded alias also passes when it is the ENTIRE fragment. That is the grammar saying
+    a unit belongs here: "convert 5 a to ma" splits to src="a", and nothing but a unit can fill
+    that slot. Whole-fragment is the load-bearing half of the rule — "how many meters in a
+    mile" gives src="a mile", where "a" is *not* the whole fragment, so it stays an article and
+    "mile" is found. `tools/verify_convert.py` pins both directions.
     """
+    stripped = text.strip()
     for match in _ALIAS_RE.finditer(text):
         alias = match.group(1)
-        if alias in _NEEDS_A_NUMBER and not re.search(r"\d$", text[:match.start()].rstrip()):
+        if alias in _NEEDS_A_NUMBER and alias != stripped \
+                and not re.search(r"\d$", text[:match.start()].rstrip()):
             continue
         unit, multiplier = _ALIAS_MAP[alias]
         return unit, multiplier, match.start(), match.end()
@@ -419,6 +452,9 @@ def _prepare(raw: str) -> str:
     text = re.sub(r"(?<=\d),(?=\d{3}\b)", "", text)        # 1,000 is one number
     text = re.sub(r"[^a-z0-9\.\- ]+", " ", text)
     text = re.sub(r"\.(?!\d)", " ", text)                  # a decimal point needs a digit after
+    # ".5 amps" gets its leading zero, because the frames' amount group is `\d+(\.\d+)?` and
+    # will not start on a dot. Without this the 5 is left stranded in the source fragment.
+    text = re.sub(r"(?<![0-9])\.(?=\d)", "0.", text)
     # A hyphen between words is a separator ("kilo-ohm"); a hyphen before a digit is a sign.
     text = re.sub(r"(?<=[a-z])-(?=[a-z])", "", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -448,7 +484,14 @@ def _numbers_to_digits(text: str) -> str:
         return f"{numerator / denominator:.10g}" if denominator else match.group(0)
 
     joined = re.sub(r"\((\d+(?:\.\d+)?)/(\d+(?:\.\d+)?)\)", _fraction, joined)
-    return re.sub(r"(?<![a-z0-9])negative\s+(\d)", r"-\1", joined)
+    joined = re.sub(r"(?<![a-z0-9])negative\s+(\d)", r"-\1", joined)
+
+    # "point" is a spoken decimal point, and Whisper writes it as a word about as often as it
+    # writes the symbol: "point 5 amps", "3 point 3 volts". Both digits are required on the
+    # first form and one on the second, which is what keeps "the melting point in celsius" a
+    # melting point rather than a number.
+    joined = re.sub(r"(?<![a-z0-9])(-?\d+)\s+point\s+(\d+)(?![a-z0-9])", r"\1.\2", joined)
+    return re.sub(r"(?<![a-z0-9\.])point\s+(\d+)(?![a-z0-9])", r"0.\1", joined)
 
 
 # --------------------------------------------------------------------------------------
@@ -550,6 +593,23 @@ def _convert(raw: str) -> Conversion | None:
             continue
 
         source_text, dest_text = match.group("src"), match.group("dst")
+
+        # THE UNCONSUMED-DIGIT GUARD, and it is the same class of bug as D42 reaching the
+        # answer by a different road. `amount` defaults to 1.0 so that "how many meters in a
+        # mile" works — but the default fired whenever the number failed to land in the group,
+        # not only when there was no number to land. "how many milliamps in point 5 amps"
+        # parsed as amount=None, src="point 5 amps", and he said "1 amp is 1000 milliamps":
+        # the 5 was sitting in the fragment, visibly, and was answered as a 1.
+        #
+        # The invariant is that the frame must account for every digit. A digit still in either
+        # fragment means this parse did not understand the question, so try the next frame and
+        # then refuse. Refusing escalates to a tier that can answer; defaulting to 1 hands LB a
+        # confident number that is out by whatever he actually said. D30.
+        if re.search(r"\d", source_text) or re.search(r"\d", dest_text):
+            LOG.info("refusing %r: digit unaccounted for in %r / %r",
+                     text, source_text, dest_text)
+            continue
+
         found_src = _find_unit(source_text)
         found_dst = _find_unit(dest_text)
         if not found_src or not found_dst:
