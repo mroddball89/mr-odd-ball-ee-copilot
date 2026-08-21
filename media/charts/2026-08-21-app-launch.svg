@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="560" viewBox="0 0 1000 560" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1000" height="560" fill="#FFFFFF"/>
+<text x="76" y="38" font-size="19" font-weight="600" fill="#1B1B1B">Asking Mr Odd Ball to open Firefox — 5 trials per method</text>
+<text x="76" y="60" font-size="13" fill="#666666">Raspberry Pi 5, Debian 13 trixie, labwc/Wayland, 2026-08-21. All three methods return in ~40 ms — speed was never what separated them.</text>
+<line x1="76" y1="346.0" x2="456" y2="346.0" stroke="#E3E3E3" stroke-width="1"/>
+<text x="64" y="350.0" font-size="12" fill="#666666" text-anchor="end">0</text>
+<line x1="76" y1="296.0" x2="456" y2="296.0" stroke="#E3E3E3" stroke-width="1"/>
+<text x="64" y="300.0" font-size="12" fill="#666666" text-anchor="end">1</text>
+<line x1="76" y1="246.0" x2="456" y2="246.0" stroke="#E3E3E3" stroke-width="1"/>
+<text x="64" y="250.0" font-size="12" fill="#666666" text-anchor="end">2</text>
+<line x1="76" y1="196.0" x2="456" y2="196.0" stroke="#E3E3E3" stroke-width="1"/>
+<text x="64" y="200.0" font-size="12" fill="#666666" text-anchor="end">3</text>
+<line x1="76" y1="146.0" x2="456" y2="146.0" stroke="#E3E3E3" stroke-width="1"/>
+<text x="64" y="150.0" font-size="12" fill="#666666" text-anchor="end">4</text>
+<line x1="76" y1="96.0" x2="456" y2="96.0" stroke="#E3E3E3" stroke-width="1"/>
+<text x="64" y="100.0" font-size="12" fill="#666666" text-anchor="end">5</text>
+<text x="30" y="221.0" font-size="12" fill="#666666" text-anchor="middle" transform="rotate(-90 30 221.0)">trials with the app running</text>
+<line x1="100.3" y1="346" x2="178.3" y2="346" stroke="#C0504D" stroke-width="3"/>
+<text x="139.3" y="336.0" font-size="16" font-weight="600" fill="#1B1B1B" text-anchor="middle">0/5</text>
+<text x="139.3" y="367.0" font-size="12" fill="#666666" text-anchor="middle">before</text>
+<text x="139.3" y="386.0" font-size="13" font-weight="600" fill="#1B1B1B" text-anchor="middle" font-family="Consolas, monospace">firefox</text>
+<text x="139.3" y="404.0" font-size="11" fill="#666666" text-anchor="middle">never started</text>
+<line x1="227.0" y1="346" x2="305.0" y2="346" stroke="#E8A33D" stroke-width="3"/>
+<text x="266.0" y="336.0" font-size="16" font-weight="600" fill="#1B1B1B" text-anchor="middle">0/5</text>
+<text x="266.0" y="367.0" font-size="12" fill="#666666" text-anchor="middle">before</text>
+<text x="266.0" y="386.0" font-size="13" font-weight="600" fill="#1B1B1B" text-anchor="middle" font-family="Consolas, monospace">firefox &amp;</text>
+<text x="266.0" y="404.0" font-size="11" fill="#666666" text-anchor="middle">never started</text>
+<rect x="353.7" y="96.0" width="78" height="250.0" fill="#4F8A5B" rx="3"/>
+<text x="392.7" y="86.0" font-size="16" font-weight="600" fill="#1B1B1B" text-anchor="middle">5/5</text>
+<text x="392.7" y="367.0" font-size="12" fill="#666666" text-anchor="middle">after</text>
+<text x="392.7" y="386.0" font-size="13" font-weight="600" fill="#1B1B1B" text-anchor="middle" font-family="Consolas, monospace">launch_app</text>
+<text x="392.7" y="404.0" font-size="11" fill="#666666" text-anchor="middle">never started</text>
+<line x1="76" y1="346" x2="456" y2="346" stroke="#1B1B1B" stroke-width="1.5"/>
+<text x="528" y="80" font-size="14" font-weight="600" fill="#1B1B1B">...and what he said about it</text>
+<rect x="528" y="96" width="432" height="70" rx="5" fill="#C0504D" fill-opacity="0.10" stroke="#C0504D" stroke-width="1.2"/>
+<text x="542" y="117" font-size="11" fill="#666666" font-family="Consolas, monospace">firefox</text>
+<text x="542" y="139" font-size="14" fill="#1B1B1B" font-style="italic">“That didn't work — the error is on the screen.</text>
+<text x="542" y="157" font-size="14" fill="#1B1B1B" font-style="italic">”</text>
+<rect x="528" y="182" width="432" height="70" rx="5" fill="#E8A33D" fill-opacity="0.10" stroke="#E8A33D" stroke-width="1.2"/>
+<text x="542" y="203" font-size="11" fill="#666666" font-family="Consolas, monospace">firefox &amp;</text>
+<text x="542" y="225" font-size="14" fill="#1B1B1B" font-style="italic">“Done. The output's on the screen.</text>
+<text x="542" y="243" font-size="14" fill="#1B1B1B" font-style="italic">”</text>
+<rect x="528" y="268" width="432" height="70" rx="5" fill="#4F8A5B" fill-opacity="0.10" stroke="#4F8A5B" stroke-width="1.2"/>
+<text x="542" y="289" font-size="11" fill="#666666" font-family="Consolas, monospace">launch_app</text>
+<text x="542" y="311" font-size="14" fill="#1B1B1B" font-style="italic">“Opening Firefox now.</text>
+<text x="542" y="329" font-size="14" fill="#1B1B1B" font-style="italic">”</text>
+<text x="76" y="520" font-size="12" fill="#7A4A12">The middle method is the one that was reported: the shell returns 0 immediately, Firefox dies unseen, and he says “Done.”</text>
+<text x="76" y="540" font-size="12" fill="#666666">A confident success is the one failure shape nobody escalates. Data: media/data/2026-08-21-app-launch.csv</text>
+</svg>

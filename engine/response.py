@@ -94,12 +94,21 @@ class Pending:
         tool_args: the arguments to hand the tool if approved. Opaque here.
         spoken:    the yes/no question, safe to say aloud.
         shown:     the exact command or query, verbatim, for the card.
+        tool:      which of that agent's tools resumes this. `kind` selects the AGENT and this
+                   selects the TOOL — two levels, one decision each, so `engine/core.py` did
+                   not need a line changed when the app launcher was added.
+
+                   Appended last WITH A DEFAULT on purpose: every construction in this repo is
+                   positional with four arguments (verify_engine.py, verify_chat.py,
+                   demo_chat.py, web_agent.py), and a field in the middle would have broken
+                   all of them silently by shifting what `spoken` and `shown` mean.
     """
 
     kind: str
     tool_args: dict
     spoken: str
     shown: str
+    tool: str = "execute_terminal_command"
 
 
 @dataclass(frozen=True)
@@ -134,8 +143,8 @@ class Response:
             "cards": [c.to_dict() for c in self.cards],
             "route": self.route,
             "pending": (
-                {"kind": self.pending.kind, "spoken": self.pending.spoken,
-                 "shown": self.pending.shown}
+                {"kind": self.pending.kind, "tool": self.pending.tool,
+                 "spoken": self.pending.spoken, "shown": self.pending.shown}
                 if self.pending else None
             ),
         }

@@ -14,10 +14,48 @@
 # and does not care whether anyone is, so he must work with no display attached. The face is a
 # separate autostart entry (config/oddball-face.desktop) and either can be running without the
 # other.
+#
+# DO NOT ADD `Environment=WAYLAND_DISPLAY=wayland-0` HERE. (D10, 2026-08-21.)
+#
+# It looks like the fix for "he cannot open Firefox" and it is not. Three reasons, in order of
+# how long each takes to bite:
+#
+#   1. It is written before the compositor exists. This unit starts at BOOT, because of
+#      lingering, and labwc is not up yet.
+#   2. labwc picks a different socket number after a session restart, so a baked-in value is
+#      right until the first time LB restarts the desktop and silently wrong forever after —
+#      presenting as "he stopped being able to open anything".
+#   3. This unit does not need a display at all. The value is consumed at LAUNCH time by
+#      `tools/app_launcher.py`, which globs $XDG_RUNTIME_DIR for the socket at the moment it is
+#      needed and refuses to launch when there is none. Storing the answer here puts it in the
+#      one place that cannot be re-read when it changes.
+#
+# Note that the desktop session DOES import its environment into the systemd user manager at
+# login, so a unit restarted after login inherits WAYLAND_DISPLAY while the same unit started at
+# boot does not. That is why the original bug was intermittent rather than absolute, and it is
+# exactly the kind of accident that makes a bad fix look like it worked.
+#
+# KillMode=control-group is also deliberate and stays. It is what makes `systemctl --user stop
+# oddball` clean. It is ALSO why applications he opens must not live in this unit's cgroup —
+# they would die on the next restart or deploy — so each one gets its own transient unit via
+# `systemd-run --user`, named `oddball-app-<id>-<timestamp>`. See docs/DECISIONS.md D10.
 Description=Mr Odd Ball — voice assistant
 Documentation=file:%h/mr-odd-ball/docs/DEPLOY.md
 After=pipewire.service pipewire-pulse.service wireplumber.service
 Wants=pipewire.service wireplumber.service
+
+# Give up after 3 failures in 5 minutes rather than restarting forever. A microphone that has
+# gone into digital silence (the C270 does this) fails identically every time, and a service
+# that respawns into it for hours only makes the journal harder to read.
+#
+# These belong in [Unit]. They were in [Service] until 2026-08-21, where systemd IGNORES them —
+# `systemd-analyze --user verify` says so out loud: "Unknown key 'StartLimitIntervalSec' in
+# section [Service], ignoring." So the rate limit had never once been in force, and a unit that
+# failed identically forever would have gone on doing it forever. Found while reinstalling this
+# file for the D10 comments; nothing to do with that work, and a good argument for running
+# `systemd-analyze verify` after any edit here.
+StartLimitBurst=3
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -50,11 +88,7 @@ TimeoutStartSec=180
 
 Restart=on-failure
 RestartSec=5
-# Give up after 3 failures in 5 minutes rather than restarting forever. A microphone that has
-# gone into digital silence (the C270 does this) fails identically every time, and a service
-# that respawns into it for hours only makes the journal harder to read.
-StartLimitBurst=3
-StartLimitIntervalSec=300
+# The rate limit that goes with these two lives in [Unit], NOT here — see the note up there.
 
 # Audio must not be starved by anything else on a 4-core box. This mattered more when
 # llama-server took all four threads to think; the remaining CPU cost is faster-whisper on one

@@ -81,3 +81,105 @@ re-derived later, which is the whole point of committing the script.
 **How to apply:** `git show <commit>:<path>` into a temp module and run both. Register the
 module in `sys.modules` before executing it, or frozen dataclasses fail to resolve their own
 annotations.
+
+---
+
+## L6 — A bare `except` around an unverified API reports "your data is broken"
+
+**From:** D9, 2026-08-21. The KiCad tool as first written looped over `schematic.symbols`.
+kiutils has no such attribute — it is `schematicSymbols` — and the body sat inside
+`except Exception as e: return f"Failed to parse schematic: {e}"`. So every schematic came back
+as *"Failed to parse schematic: 'Schematic' object has no attribute 'symbols'"*: a message that
+names the user's file, blames the user's file, and is entirely about our typo. Measured at 100%
+of schematic questions before it was found.
+
+**Why:** the `try/except` was written to convert *the library's* failures into a sentence, and
+it converted *our own* failures into the same sentence. Those need to read differently, because
+one of them means "go and look at your file" and the other means "go and look at this code".
+Catching them together makes the wrong one the visible one, and the message is confident about
+a thing it has not checked.
+
+**How to apply:** before writing the `except`, run the API once and print what you are about to
+reach for — `[f.name for f in dataclasses.fields(X)]` takes ten seconds. Then pin the attribute
+in a harness so a rename fails there and not in front of LB. `verify_kicad.py` asserts both that
+`schematicSymbols` exists and that `symbols` does not, so if kiutils ever adds it, the docstring
+gets revisited rather than quietly becoming wrong.
+
+Related: this is [[L4]] pointed at a library instead of a check. A green harness and a fluent
+error message are both forms of something agreeing with you when nobody has looked.
+
+---
+
+## L7 — Ask what the number means before reporting a count
+
+**From:** D9. `len(board.layers)` is 29 for a two-layer board, and `len(board.nets)` is one more
+than the number of nets, because KiCad's table holds silkscreen, mask, paste, courtyard, fab and
+nine user layers, and its net list starts with the unassigned net 0.
+
+**Why:** both are correct counts of the wrong thing, and both produce a fluent sentence nobody
+would question. "This is a 29-layer board" is the same failure as D30's confident wrong physics
+and D8's confident wrong conversion — a number, not a crash.
+
+**How to apply:** when reporting `len(something)` from a file format, say out loud what a person
+asking the question means by it, then check the collection contains only that. If the raw count
+is still worth showing, show it **labelled and beside** the real answer, never instead of it.
+
+---
+
+## L8 — A measurement that kills its subject will eventually corrupt its subject
+
+**From:** D10, 2026-08-21. `measure_launch.py` ran fifteen Firefox trials, stopping the browser
+between each one. Firefox increments `toolkit.startup.recent_crashes` in `prefs.js` every time
+it is stopped before startup completes; past `toolkit.startup.max_resumed_crashes` (default 3)
+it refuses to run. The counter reached **17**.
+
+The refusal is the dangerous part: Firefox starts, writes its prefs, and shuts down **cleanly**.
+Exit 0, no stderr, no crash report, nothing in the journal, `Result=success` in systemd. It is
+**indistinguishable from the bug the measurement existed to prove was fixed** — and it silently
+invalidated a whole run, which was then read as "the cgroup fix does not work".
+
+**Why:** the harness was a hidden input to the thing it measured. Every trial made the next
+trial's subject slightly less healthy, so the results degraded over the run in the direction of
+the hypothesis. That is the shape of a false positive that survives review, because each
+individual number looks fine.
+
+**How to apply:** if a harness stops the thing it measures, ask what that thing records about
+being stopped, and reset it between runs. `kill_firefox()` now sends SIGTERM and waits 20s
+before SIGKILL, and `reset_crash_counter()` runs before *and* after the suite. More generally:
+**when a measurement contradicts a hand-run of the same test, suspect the measurement first** —
+it has more moving parts and it is the thing that was written most recently.
+
+---
+
+## L9 — `pkill -f` matches the command line that invoked it
+
+**From:** D10. `ssh oddball-pi 'pkill -f /usr/lib/firefox'` killed the ssh session twice, because
+`-f` matches the **whole command line** and the remote shell's command line contains the pattern
+being searched for. It reads as a network fault — exit 255, connection closed — so the first one
+was written off as the Pi being flaky under load.
+
+**Why:** the pattern is data to `pkill` and text to the shell, and the shell got there first.
+This is already recorded in the pre-merge `~/oddball/tasks/lessons.md`; it was not carried
+across in the merge, so it was learned twice.
+
+**How to apply:** `pkill -x <name>` matches the process name exactly and cannot match its own
+invocation. Reach for `-f` only when the name genuinely is not enough, and then anchor it so it
+cannot match a shell — or better, stop the systemd unit, which names exactly one thing.
+
+---
+
+## L10 — "It isn't there" is only evidence once the path is confirmed
+
+**From:** D10. `ls ~/.mozilla` returned "No such file or directory", and that was read as
+"Firefox has no profile" — a conclusion that sent the investigation toward profile creation and
+permissions for a long time. This Firefox build uses XDG paths: the profile was in
+`~/.config/mozilla/firefox`, present and healthy, the whole time.
+
+**Why:** a negative result from the wrong location is indistinguishable from a negative result
+from the right one, and it is more convincing than a positive one because nothing contradicts
+it. The absence was real; the inference was not.
+
+**How to apply:** before concluding something does not exist, confirm the place you looked is
+the place it would be — `find`, the package's own docs, or ask the program (`strace`, a `--help`
+that names its config path). Related to [[L7]]: both are correct observations of the wrong
+thing, and neither crashes.

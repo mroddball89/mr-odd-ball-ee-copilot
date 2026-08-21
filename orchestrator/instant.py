@@ -485,8 +485,20 @@ class Router:
         for name, plan_of in self._planners.items():
             plan = plan_of(query)
             if plan is not None:
-                LOG.info("intent %s -> action %s %s", name, plan.name, plan.argv)
-                return Reply(text=plan.echo, intent=name, action=plan)
+                # `!r` rather than `plan.name`/`plan.argv`/`plan.echo`. Those three attributes
+                # are `hardware.actions.Plan`'s, and `hardware/` did not come across in the
+                # merge — so this branch has been a latent AttributeError since the day it
+                # arrived, waiting for the first planner anybody injected. It got one on
+                # 2026-08-21 (`orchestrator/launch_intent.py`) and took the whole free tier
+                # down with it, silently, into the router fallback.
+                #
+                # The contract this class actually needs is the one its own docstring states:
+                # a planner returns SOMETHING or None, and the caller decides what it means.
+                # Reaching into the object's shape here is the router knowing about a type it
+                # deliberately refuses to import.
+                LOG.info("intent %s -> action %r", name, plan)
+                spoken = getattr(plan, "spoken", "") or getattr(plan, "echo", "")
+                return Reply(text=spoken, intent=name, action=plan)
 
         for name, matches, handle in INTENTS:
             if matches(query):

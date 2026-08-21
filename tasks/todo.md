@@ -101,6 +101,56 @@ him running on the Pi desktop transparently today:
 
 ---
 
+## Stage 9 — He reads LB's KiCad files ✅
+
+**2026-08-21.** The HARDWARE agent could compute a trace width and could not look at a design.
+D9 has the reasoning; this is what was done.
+
+- [x] `pip install kiutils`; `kiutils>=1.4.8` added to `requirements.txt` under a Hardware
+      agent heading — pure Python, ~93KB, and does **not** need KiCad installed
+- [x] `tools/kicad_parser.py` — `extract_kicad_bom` (grouped by value + footprint, quantities,
+      references) and `analyze_kicad_pcb` (copper layers, nets, footprints, thickness)
+- [x] Sub-sheet walking, with **cycle** and **repeated sheet** told apart and both reported
+- [x] Multi-unit parts de-duplicated by reference; the unit with a real footprint wins
+- [x] A bare project **name** resolves under `ODDBALL_KICAD_ROOT` — a dictated path does not
+      survive Whisper. Ambiguity is reported, never guessed between
+- [x] `agents/hardware_agent.py` binds all three tools through a name→tool dict, keeps
+      `AGENT_MODEL` (D3), `SPOKEN_INSTRUCTION` and the two-pass summary
+- [x] `router.py` prompt: a question about a design **file** is HARDWARE, not OS
+- [x] `tests/fixtures/kicad/` — 8 hand-written fixtures, one per hazard, with a README
+- [x] `tools/verify_kicad.py` — 162 checks, offline, keyless; **9 mutations applied to the
+      parser and all 9 caught**, so the green is worth something (L4)
+- [x] `tools/verify_agents.py` — kicad_parser in the reachability sweep and in section 3
+- [x] `media/` — the tutorial parser run live against the same fixtures, data + script + chart
+
+Not built, deliberately: netlist/connectivity extraction, DRC, gerber export.
+
+## Stage 9 — Opening applications, and getting off the API for the cheap things
+
+Plan: `~/.claude/plans/check-mr-odd-ball-cheerful-emerson.md`. LB: *"he is struggling to open
+Firefox and different apps on the pi."* Five defects on one path — see D10.
+
+- [x] `Outcome` in `tools/os_controller.py` — the result is **stated**, not re-parsed from a
+      prose prefix. A refusal is no longer reported as a malfunction, and a 15-second kill is
+      no longer reported as "Done"
+- [x] `tools/app_catalogue.py` — the machine's own `.desktop` database, not a curated table
+      (a `which` sweep found `nautilus` missing from the old three-row list)
+- [x] `tools/app_launcher.py` — `systemd-run --user --collect -p Type=exec`, Wayland socket
+      discovered at launch time, its own cgroup so it survives a deploy
+- [x] `orchestrator/launch_intent.py` — recognise a launch with **no model call**, verb +
+      target + end anchor
+- [x] The free tier moved IN FRONT of the router (`engine/core.py:_free_turn`). "open firefox"
+      3 API calls -> **0**; time, date, convert, constants, definitions, arithmetic 1 -> **0**
+- [x] `Pending.tool` so one gate serves two tools; `engine/core.py:_run_pending` unchanged
+- [x] `tools/verify_launch.py` — 180 checks, 5 mutations, green on Windows **and** the Pi
+- [x] Measured on the Pi: `media/data/2026-08-21-app-launch.csv` + script + chart
+- [x] `config/oddball.service` — comments recording why there is no `Environment=` for the
+      display, so the next person does not "fix" it
+- [ ] A terminal/`Terminal=true` app has never been opened end to end — `lxterminal` is
+      wrapped but only the argv is proven, not a real window
+
+---
+
 ## Open question, to be answered with a number
 
 Swapping `classify.py` (a pure function, ~0 ms) for `router_agent()` (a Gemini round trip,
@@ -129,6 +179,8 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
 | The math sandbox had **no sympy** | a spoken `ModuleNotFoundError`; `verify_agents.py` now imports every library the prompt promises |
 | Mic peaks **0.035-0.17 RMS**, wake scores **0.17-0.28** vs a 0.76 threshold | typed control shipped as the channel that works; the mic itself is still open |
 | Amperes: **5 of 14 questions answered wrong**, 6 more refused | three separate defects in `convert.py`; 14/14 right, 0 wrong; D8 |
+| The textbook KiCad parser: **7 of 12 questions error, 3 answered wrong**, and every schematic question failed on one wrong attribute name | `kiutils` used properly; 12/12 right, 0 wrong; D9 |
+| A two-layer board's layer table has **29 entries**, and every net count is **one too high** | copper counted separately, net 0 named and excluded; L7 |
 
 ### What didn't work
 
@@ -148,6 +200,17 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
 - **A harness check that asserted a bug.** `verify_convert.py` pinned "a bare `m` is not a
   unit" — true of a whole sentence, false of the fragment `_find_unit` actually receives, and
   it was the reason "5 A in mA" was refused for a week. Green is not the same as right. D8.
+- **`schematic.symbols`**, which does not exist — the field is `schematicSymbols`. Inside a
+  bare `except` that became *"Failed to parse schematic"* on every file: our typo, reported as
+  the user's corrupt file, at 100%. Ten seconds of `dataclasses.fields()` would have caught it.
+  D9, L6.
+- **Comments in the KiCad fixtures.** kiutils has no comment syntax, so `;` lines parse as
+  *tokens*: the annotated `flat.kicad_sch` came back with 17 symbols instead of 15, two of them
+  fragments of prose. The notes moved to `tests/fixtures/kicad/README.md`.
+- **A `return` split across an implicit string concatenation** in `hardware_agent._for_summary`
+  — the second half of the instruction was structurally unreachable, and the model would have
+  been told the result was truncated without being told not to guess at the rest. Caught by the
+  editor's own diagnostic, not by me.
 
 ### Still open
 
@@ -155,6 +218,14 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
       re-derive the threshold from fixtures in LB's voice, or switch STT to `base.en`.
 - [ ] **An unexplained Pi reboot** on 2026-08-19 at 14:41:43. No undervoltage, no OOM, and
       journald is volatile so the evidence went with it. Enable persistent journald first.
+      Still unenabled, and it cost real time again on 2026-08-21: a transient unit's journal
+      was gone before it could be read, so a launch failure had to be reproduced with
+      `StandardOutput=file:` instead.
+- [ ] **`usb 1-2` resets itself roughly hourly** — `dmesg` shows
+      `reset high-speed USB device number 2 using xhci-hcd` at 2855s, 20661s, 21028s, 21125s,
+      21387s, 21541s uptime. If device 2 is the C270 that is the wake-word microphone
+      dropping out and back, which would fit "he cannot reliably hear the wake word" better
+      than gain does. Confirm with `lsusb -t` before chasing the mic any further.
 - [ ] Ingest datasheet PDFs, `pip install -r requirements-rag.txt`, build the store, then a
       `verify_rag.py` that is meaningful rather than vacuous.
 - [ ] Re-measure turn latency **on the Pi** — the router leg logged 9.8s there against 750ms on
