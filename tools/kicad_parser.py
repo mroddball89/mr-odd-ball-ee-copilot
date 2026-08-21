@@ -102,8 +102,17 @@ _MISSING_KIUTILS = ("The kiutils library is not installed, so I cannot read KiCa
 
 
 def kicad_root() -> Path:
-    """The directory a bare project name is searched under."""
-    return Path(os.environ.get("ODDBALL_KICAD_ROOT", DEFAULT_KICAD_ROOT)).expanduser()
+    """The directory a bare project name is searched under.
+
+    Falls back to the literal path rather than raising: `expanduser()` raises RuntimeError on
+    Linux for a `~unknownuser` prefix, and this runs at call time on a value from the
+    environment — a bad ODDBALL_KICAD_ROOT should make a lookup fail, not the module.
+    """
+    raw = os.environ.get("ODDBALL_KICAD_ROOT", DEFAULT_KICAD_ROOT)
+    try:
+        return Path(raw).expanduser()
+    except (OSError, ValueError, RuntimeError):
+        return Path(raw)
 
 
 # --- finding the file ------------------------------------------------------------------
@@ -181,7 +190,12 @@ def _resolve(path_or_name: str, ext: str) -> tuple[Path | None, str]:
 
     try:
         candidate = Path(raw).expanduser()
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):
+        # RuntimeError is the Linux-only one, and the fuzzer on the Pi is what found it:
+        # `~someuser/x` makes expanduser() look up a real account, and Python 3.13 raises
+        # RuntimeError("Could not determine home directory.") when there is none. On Windows
+        # the same input comes back unchanged, so 162/162 passed there and 161/162 on the Pi —
+        # the harness's own "never raises" claim, false on the only machine he runs on.
         return None, f"{path_or_name!r} is not a usable file path."
 
     other = PCB_EXT if ext == SCH_EXT else SCH_EXT
@@ -346,8 +360,16 @@ def _collect(path: Path, visited: set[Path], parts: dict[str, dict],
         child = getattr(name_prop, "value", None)
         if not isinstance(child, str) or not child.strip():
             continue
-        child_path = (path.parent / child.strip()).expanduser()
-        if not child_path.exists():
+        # Same RuntimeError trap as `_resolve`, and this one is reachable from a FILE rather
+        # than from LB: a sheet whose fileName begins `~someuser` is a sub-sheet reference in
+        # somebody else's project, not an attack, and it must read as a missing child.
+        try:
+            child_path = (path.parent / child.strip()).expanduser()
+            exists = child_path.exists()
+        except (OSError, ValueError, RuntimeError):
+            missing.append(child.strip())
+            continue
+        if not exists:
             missing.append(child.strip())
             continue
         _collect(child_path, visited, parts, stats, missing, reused, cycles, stack)
