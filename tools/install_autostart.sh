@@ -59,11 +59,13 @@ status() {
     fi
     echo "== labwc rule: is the ball pinned to the corner? =="
     if grep -q "mr-odd-ball avatar rule" "$HOME/.config/labwc/rc.xml" 2>/dev/null; then
-        # Single-quoted, so the double quotes in the XML are matched literally. The first
-        # version escaped them as \" inside single quotes, which greps for a BACKSLASH — it
-        # matched nothing and printed "installed:" with a blank after it. A status line that
-        # reports success and shows nothing is worse than one that reports failure.
-        say "installed: $(grep -o 'MoveTo x="[0-9]*" y="[0-9]*"' "$HOME/.config/labwc/rc.xml" | head -1)"
+        # Two bugs deep, so: the real line is `<action name="MoveTo" x="1746" y="906" />`.
+        # v1 escaped the quotes as \" inside single quotes and so grepped for a backslash;
+        # v2 fixed that but matched `MoveTo x=` when the text is `name="MoveTo" x=`. Both
+        # printed "installed:" followed by nothing, which reports success and shows no
+        # evidence — the worst shape a diagnostic can take. Tested against a fixture before
+        # this one shipped.
+        say "installed: $(grep -o 'name="MoveTo" x="[0-9]*" y="[0-9]*"' "$HOME/.config/labwc/rc.xml" | head -1)"
     else
         say "NOT installed — he will land wherever labwc puts him, mid-screen."
         say "  bash tools/install_labwc_rule.sh"
