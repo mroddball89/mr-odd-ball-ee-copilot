@@ -320,16 +320,28 @@ def store_checks() -> int:
     make_pdf(academic / "ece350.pdf",
              "ECE 350 Signals and Systems. Late homework loses ten percent per day.")
 
+    # An image-only PDF: a real page with NO text layer. Both of LB's Pi camera datasheets are
+    # exactly this, and on 2026-08-21 they took the whole build down with
+    # "ValueError: Expected Embeddings to be non-empty list" from inside Chroma — a message
+    # about Chroma's internals for a problem entirely about the input file. It must be reported
+    # and skipped, and the usable files beside it must still index.
+    from pypdf import PdfWriter as _W
+    _blank = _W()
+    _blank.add_blank_page(width=612, height=792)
+    with (data / "sensors" / "scanned_no_text.pdf").open("wb") as fh:
+        _blank.write(fh)
+
     vdb.DATA_PATH, vdb.ACADEMIC_PATH = data, academic
     vdb.CHROMA_PATH, vdb._stores = tmp / "chroma_db", {}
 
     try:
         sheets = sorted(Path(d.metadata["source"]).name
                         for d in vdb.load_pdfs(data, exclude=academic))
-        check(sheets == ["academic_press_sensor.pdf", "hx711.pdf"],
+        check(sheets == ["academic_press_sensor.pdf", "hx711.pdf", "scanned_no_text.pdf"],
               "the exclusion is by PATH — a datasheet named 'academic_*' survives it",
               f"got {sheets}")
 
+        # A textless PDF must not take the build down, and must not silently vanish either.
         vdb.build_vector_database()
         sheet_r = vdb.get_retriever(k=3, collection=vdb.DATASHEET_COLLECTION)
         acad_r = vdb.get_retriever(k=3, collection=vdb.ACADEMIC_COLLECTION)
@@ -349,6 +361,13 @@ def store_checks() -> int:
               f"got {from_sheets2}")
         check("hx711.pdf" not in from_acad2,
               "...and NOT from the academic collection", f"got {from_acad2}")
+
+        # The textless file contributed nothing, and the text-bearing ones beside it still
+        # indexed. Reaching this line at all is the regression check: before the fix,
+        # build_vector_database() raised out of Chroma on the empty chunk list.
+        check("scanned_no_text.pdf" not in from_sheets2 + from_sheets,
+              "an image-only PDF contributes no chunks and does not poison the collection",
+              f"got {sorted(set(from_sheets + from_sheets2))}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return 0
