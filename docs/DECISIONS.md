@@ -609,3 +609,71 @@ Also cleaned: `DECISIONS.md`, `lessons.md` and `todo.md` were sitting at the Pi'
 orphans of an older layout that `tar` had never deleted because **tar-over-ssh does not delete**.
 The root `DECISIONS.md` was a 487-line pre-D11 copy — a stale decision log at the top of the tree,
 looking authoritative. Verified a strict subset (0 unique lines) before removing.
+
+---
+
+## D12 — The RAG install pulls 2.4 GB of CUDA onto a machine with no GPU
+
+**2026-08-21.** The whole of `requirements-rag.txt` was missing from the Pi, so **both** grounded
+agents were running ungrounded — FIRMWARE answering datasheet questions from Gemini's training
+weights (saying so, as its prompt requires) and ACADEMIC refusing outright. LB asked to install it.
+
+**The documented command must not be run as written.** `pip install --dry-run` on the Pi, which
+installs nothing:
+
+| | download |
+|---|---|
+| `nvidia-*` wheels + `triton` (12 measured) | **2,377 MB** |
+| `torch` (PyPI, CUDA-linked) | 427 MB |
+| what is actually needed (chromadb, transformers, tokenizers, pypdf…) | ~470 MB |
+
+Plus `cuda-toolkit`, `cuda-bindings` and five more `nvidia-*` packages not sampled. Roughly
+**3.3 GB down and 6 GB+ unpacked onto an SD card, for silicon that is not in the machine.**
+`sentence-transformers` → `torch`, and on Linux/aarch64 the default PyPI torch is the CUDA build.
+
+PyTorch's CPU index resolves for this exact platform and avoids all of it:
+
+```
+torch-2.13.0+cpu-cp313-cp313-manylinux_2_28_aarch64.whl     155 MB
+Would install: Jinja2, MarkupSafe, networkx, torch+cpu      <- zero nvidia packages
+```
+
+**155 MB against 2,804 MB.** Measured after the fact: the venv went 885 M → **1.9 G**, where the
+default index would have put it near 7 G.
+
+`--extra-index-url` is now in `requirements-rag.txt`. Torch was installed from the CPU index
+*first*, so `sentence-transformers` found it already satisfied and never reached for the CUDA
+build — the ordering is the mechanism, not a precaution.
+
+**The check that proves it is not the version string.** `2.13.0+cpu` with CUDA wheels beside it
+means the index was ignored, so the real check is `ls site-packages | grep -c nvidia` → **0**.
+
+### Then the build died on LB's own datasheets
+
+```
+ValueError: Expected Embeddings to be non-empty list or numpy array, got [] in upsert.
+```
+
+A message about Chroma's internals for a problem entirely about the input file. Both Pi camera
+PDFs load as perfectly good page objects with **0 extractable characters** — image-only exports
+with no text layer. `datasheets: 2 pages -> 0 chunks`.
+
+`_build_collection` guarded `not documents` and not `not chunks`, which is **a defect introduced
+by D11 the day before**. A page is not text. The crash was the good outcome: the same guard
+missing one layer up would have written an *empty collection*, which is indistinguishable from a
+working one from the outside — the firmware agent would answer ungrounded forever while a store
+sat on disk claiming it had been built. D9's empty BOM, exactly.
+
+Textless pages are now counted, **named**, and skipped, usable files beside them still index, and
+a build that writes nothing says so loudly instead of reporting success. `verify_academic.py
+--store` carries an image-only fixture; before the fix it takes the build down.
+
+LB's two camera PDFs were removed from the Pi — the originals are on the Windows box, and real
+text-bearing PDFs come later.
+
+### Not done, and worth its own decision
+
+**`onnxruntime` is already installed** for the wake word and Piper, and Chroma ships an ONNX build
+of the same `all-MiniLM-L6-v2` model — so torch could be dropped **entirely**, not merely
+de-CUDA'd. That changes `tools/vector_db.py`'s embedding path and needs its own re-verification,
+so it is a decision rather than a rider on an install. Tracked in `tasks/todo.md`.

@@ -21,19 +21,55 @@
 # under its `[full]` extra), so a venv without this file never sees it. The imports in
 # tools/vector_db.py are inside the functions that use them for the same reason.
 #
+# ## THE CPU INDEX IS NOT OPTIONAL — measured 2026-08-21
+#
+# `sentence-transformers` -> `torch`, and on Linux/aarch64 the default PyPI torch is the
+# CUDA-linked build. It drags the entire NVIDIA stack onto a Raspberry Pi 5, which has no
+# NVIDIA GPU and never will. From `pip install --dry-run` on the Pi itself:
+#
+#   nvidia-* wheels + triton (12 measured)     2,377 MB
+#   torch (PyPI, CUDA-linked)                    427 MB
+#   ...plus cuda-toolkit, cuda-bindings, nvidia-cuda-cupti/runtime/cufile/nvjitlink/nvtx
+#
+# Roughly 3.3 GB downloaded and 6 GB+ unpacked onto an SD card, for silicon that is not in the
+# machine. The CPU index resolves for this exact platform (cp313 / aarch64 / Python 3.13.5):
+#
+#   torch-2.13.0+cpu-cp313-cp313-manylinux_2_28_aarch64.whl     155 MB
+#   Would install: Jinja2, MarkupSafe, networkx, torch+cpu      <- zero nvidia packages
+#
+# **155 MB against 2,804 MB.** The `--extra-index-url` below is what buys that, and it is why
+# this file must be installed with `-r`, never by naming the packages by hand.
+#
+# The check that proves it worked is NOT the version string — it is the absence of the wheels:
+#
+#   ls venv/lib/python3.13/site-packages | grep -c nvidia      # must be 0
+#
+# A `+cpu` torch with CUDA wheels beside it means the index was ignored and the 2.4 GB landed
+# anyway.
+#
+# NOT DONE, and worth its own decision: onnxruntime is ALREADY installed on the Pi for the wake
+# word and Piper, and Chroma ships an ONNX build of the same all-MiniLM-L6-v2 model — so torch
+# could be dropped entirely. That changes tools/vector_db.py's embedding path and needs its own
+# re-verification. Tracked in tasks/todo.md.
+#
 # ## Order of operations on the Pi
 #
 #   1. Get him talking on requirements.txt alone.
 #   2. Put datasheet PDFs under data/ (subdirectories are fine, the loader recurses), and
 #      syllabus PDFs under data/academic/ — that one directory is kept OUT of the datasheet
 #      collection, so a syllabus can never be cited as a datasheet.
-#   3. pip install -r requirements-rag.txt
+#   3. pip install -r requirements-rag.txt   # DETACHED — see docs/DEPLOY.md
 #   4. python tools/vector_db.py           # builds chroma_db/, both collections
 #   5. python tools/academic_calendar.py   # syllabi -> academic_calendar.json. Needs a key;
 #                                          # costs one API call per syllabus file, once.
 #
 # The embedding model itself is ~90MB and downloads on first use, then runs locally forever.
 # Nothing here talks to a paid API.
+
+# Torch from PyTorch's CPU index rather than PyPI. See the block above — this line is worth
+# 2.4 GB on an SD card. `--extra-index-url` rather than `--index-url` so everything else still
+# resolves from PyPI normally.
+--extra-index-url https://download.pytorch.org/whl/cpu
 
 langchain-huggingface~=1.2           # HuggingFaceEmbeddings (all-MiniLM-L6-v2)
 langchain-chroma~=1.1                # the persisted vector store

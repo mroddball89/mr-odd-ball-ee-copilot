@@ -203,3 +203,29 @@ would have had, and reported green.
 file that describes them. And mutation-test every new check — break the thing it watches and
 confirm it goes red. This one was written, run, and passed before the mutation test showed it
 could not fail. Same family as [[L4]]: green is not the same as right.
+
+---
+
+## L12 — A loaded page is not text, and a non-empty list is not non-empty content
+
+**From:** D12. `_build_collection` guarded `if not documents: return 0` and then handed the
+split result straight to Chroma. Both of LB's Pi camera PDFs are image-only — no text layer — so
+they load as two perfectly valid page objects whose `page_content` is `""`. Two documents, zero
+chunks, and `Chroma.from_documents([])` dies with *"Expected Embeddings to be non-empty list or
+numpy array, got []"*: a message about Chroma's internals for a problem entirely about the file.
+
+**Why:** the guard was on the wrong quantity. "Did the loader return anything" and "is there
+anything to embed" are different questions, and a PDF answers yes to the first and no to the
+second without any error anywhere. Container non-emptiness is not content non-emptiness — the
+same confusion as [[L5]] (`inBom` defaulting to False makes absence and exclusion one value).
+
+The crash was the lucky outcome. One layer up, the same missing guard writes an **empty
+collection**, which from the outside is indistinguishable from a working one: the retriever
+returns zero chunks, the agent says the datasheets do not cover it, and that sentence is exactly
+what it says when grounding is working fine. Related to [[L7]] and [[L10]] — a correct
+observation of the wrong thing, and nothing crashes.
+
+**How to apply:** guard the quantity you are about to *use*, not the one you were handed, at
+every step that can shrink it. And when a step can legitimately produce nothing, say which input
+produced nothing and name it — "2 pages carried no extractable text — pi_cam3.pdf" is
+actionable; a traceback out of a vector store is not.

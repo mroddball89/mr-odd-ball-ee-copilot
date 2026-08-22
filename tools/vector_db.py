@@ -229,11 +229,43 @@ def _build_collection(documents: list, collection_name: str, label: str) -> int:
 
     Returns:
         How many chunks were written. Zero means there was nothing to ingest.
+
+    ## A page is not text, and that had to be learned on the Pi
+
+    `documents` being non-empty does NOT mean there is anything to embed. A PDF with no text
+    layer — a scan, or a datasheet exported as pure vector art — loads as a perfectly good page
+    object whose `page_content` is the empty string. Both of LB's Pi camera PDFs are exactly
+    that: 2 pages, **0 extractable characters**.
+
+    Guarding only on `not documents` therefore reached `Chroma.from_documents([])`, which dies
+    with `ValueError: Expected Embeddings to be non-empty list or numpy array, got []` — a
+    message pointing at Chroma's internals for a problem that is entirely about the input file.
+    Worse is the version that does not crash: an empty collection looks identical to a working
+    one from the outside, and the firmware agent would answer ungrounded forever while a store
+    sat on disk saying it had been built. Same shape as D9's empty BOM.
+
+    So textless pages are counted and named, not silently dropped.
     """
     from langchain_chroma import Chroma                              # noqa: PLC0415
     from langchain_text_splitters import RecursiveCharacterTextSplitter    # noqa: PLC0415
 
     if not documents:
+        return 0
+
+    # Drop pages with no extractable text BEFORE splitting, and keep the count — a file that
+    # contributed nothing is the single most useful thing to report here.
+    usable = [d for d in documents if (d.page_content or "").strip()]
+    empty = len(documents) - len(usable)
+
+    if empty:
+        blank_files = sorted({Path(str((getattr(d, "metadata", {}) or {}).get(
+            "source", "?"))).name for d in documents if not (d.page_content or "").strip()})
+        print(f"   {label}: {empty} page(s) carried NO extractable text — {', '.join(blank_files)}")
+        print(f"          These are image-only PDFs. Nothing can be retrieved from them until "
+              f"they are OCR'd or replaced with text-bearing files.")
+
+    if not usable:
+        print(f"   {label}: nothing to embed — every page was empty.")
         return 0
 
     # We use small chunks (500 chars) with high overlap (150 chars)
@@ -243,8 +275,13 @@ def _build_collection(documents: list, collection_name: str, label: str) -> int:
         chunk_overlap=150,
         length_function=len,
     )
-    chunks = text_splitter.split_documents(documents)
-    print(f"   {label}: {len(documents)} pages -> {len(chunks)} chunks")
+    chunks = text_splitter.split_documents(usable)
+    print(f"   {label}: {len(usable)} usable page(s) -> {len(chunks)} chunks")
+
+    if not chunks:
+        # Belt and braces: text that is all whitespace-ish can still split to nothing.
+        print(f"   {label}: the splitter produced no chunks; nothing written.")
+        return 0
 
     Chroma.from_documents(
         documents=chunks,
@@ -278,6 +315,13 @@ def build_vector_database():
         print(f"   (nothing for the datasheets collection — put PDFs under {DATA_PATH})")
     if not syllabi:
         print(f"   (nothing for the academic collection — put syllabi under {ACADEMIC_PATH})")
+
+    if not written:
+        # Loud, because this is the state that most looks like success from the outside: the
+        # install worked, the build "ran", and every grounded answer will still be ungrounded.
+        print("\nNOTHING WAS WRITTEN. The store is empty, so `get_retriever()` still returns "
+              "None\nand both grounded agents will keep answering without documents.")
+        return
 
     print(f"Database built successfully — {written} chunks.")
 

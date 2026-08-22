@@ -167,6 +167,42 @@ The deadline banner is unaffected by any of this: `load_calendar()` returns `[]`
 `academic_calendar.json` does not exist, so a Pi with no syllabi and no torch simply never shows
 one. Absent is the normal state, not a broken install.
 
+### When you DO install it — never plain `pip install -r requirements-rag.txt`
+
+**Installed 2026-08-21.** `sentence-transformers` → `torch`, and the default PyPI torch on
+Linux/aarch64 is the CUDA build: **2,377 MB of `nvidia-*` wheels plus triton**, onto a Pi with no
+NVIDIA GPU. Install CPU torch FIRST, so the rest finds it already satisfied:
+
+```bash
+cd ~/mr-odd-ball
+( setsid venv/bin/pip install --no-input \
+    --index-url https://download.pytorch.org/whl/cpu \
+    --extra-index-url https://pypi.org/simple torch > rag_install.log 2>&1 < /dev/null & )
+# wait for it, then:
+( setsid venv/bin/pip install --no-input -r requirements-rag.txt >> rag_install.log 2>&1 < /dev/null & )
+```
+
+Detached, per the three rules above — this is a ~1 GB install and an ssh drop would SIGHUP it.
+Poll with `tail -f rag_install.log` from the desktop. To wait without self-matching, use a
+bracket so the pattern cannot match your own command line (L9):
+
+```bash
+while pgrep -f '[v]env/bin/pip' >/dev/null; do sleep 15; done
+```
+
+**Verify with the wheel list, not the version string.** A `+cpu` torch with CUDA wheels beside it
+means the index was ignored:
+
+```bash
+venv/bin/python -c "import torch; print(torch.__version__)"     # 2.13.0+cpu
+ls venv/lib/python3.13/site-packages | grep -c nvidia           # MUST be 0
+du -sh venv/                                                    # 1.9 G, not ~7 G
+```
+
+Then `venv/bin/python tools/vector_db.py`. **Read its output** — a PDF with no text layer loads
+as a valid page with zero characters, and the build now names those files rather than writing an
+empty collection that looks like a working one. See D12.
+
 ## Known: an unexplained reboot
 
 The Pi **rebooted at 14:41:43** on 2026-08-19, part-way through installing scipy and

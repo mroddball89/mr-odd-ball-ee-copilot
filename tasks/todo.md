@@ -226,13 +226,22 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
       21387s, 21541s uptime. If device 2 is the C270 that is the wake-word microphone
       dropping out and back, which would fit "he cannot reliably hear the wake word" better
       than gain does. Confirm with `lsusb -t` before chasing the mic any further.
-- [ ] Ingest datasheet PDFs, `pip install -r requirements-rag.txt`, build the store, then a
-      `verify_rag.py` that is meaningful rather than vacuous.
-- [ ] **Ingest the syllabi.** The ACADEMIC route is live and deployed but has nothing to read:
-      the RAG stack is not installed on the Pi, so it correctly refuses every question. Put
-      PDFs in `data/academic/`, `pip install -r requirements-rag.txt`, then
-      `python tools/vector_db.py` **and** `python tools/academic_calendar.py`. The second costs
-      one API call per syllabus file, once. Until then the deadline banner never fires. D11.
+- [x] ~~`pip install -r requirements-rag.txt` on the Pi~~ — **done 2026-08-21**, CPU-only torch,
+      venv 885 M -> 1.9 G with **0** nvidia packages. Retrieval proven end-to-end on the box. D12.
+- [ ] **Put real PDFs in.** The stack is installed and working but there is nothing to read:
+      LB's two Pi camera PDFs were image-only (0 extractable characters) and were removed, so
+      `data/` is empty. Drop **text-bearing** datasheet PDFs under `data/`, syllabi under
+      `data/academic/`, then `python tools/vector_db.py` — and check the printed line says
+      *usable page(s)*, not *carried NO extractable text*. Then
+      `python tools/academic_calendar.py` for the deadline banner (one API call per syllabus).
+- [ ] **Consider dropping torch entirely.** `onnxruntime` is already installed for the wake word
+      and Piper, and Chroma ships an ONNX build of the same `all-MiniLM-L6-v2`. That would take
+      the RAG extras from ~1 G to near zero on the SD card. Needs a change to
+      `tools/vector_db.py`'s embedding path and its own re-verification, so it is its own
+      decision — measure the two embedding paths against the same fixtures before switching. D12.
+- [ ] An image-only PDF is currently a dead end. If LB's real datasheets turn out to be scans,
+      the options are OCR (`ocrmypdf`, needs tesseract) or sourcing text PDFs. Decide when a
+      real one arrives rather than building for a case that may not occur.
 - [ ] Re-measure turn latency **on the Pi** — the router leg logged 9.8s there against 750ms on
       Windows, and 52.7s for a first sympy import. Both want a warm re-run.
 - [ ] Consider D3 option 3: a local model for PERSONA, which has no quota.

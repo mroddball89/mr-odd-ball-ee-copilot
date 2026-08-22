@@ -31,3 +31,8 @@ voices/
 # Whisper models are downloaded on first run. The wake model is NOT ignored — it was trained
 # on Colab from training/hey_mr_odd_ball.ipynb and losing it means retraining.
 models/whisper/
+
+# pip install logs from the RAG stack — Pi-side, regenerable
+rag_install.log
+vectordb_build.log
+install.log
