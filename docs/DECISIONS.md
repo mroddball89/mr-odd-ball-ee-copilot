@@ -582,3 +582,30 @@ Per-course filtering ("what's due in ECE 350"), recurring deadlines, and any wri
 reads the calendar and never edits it. Adding a deadline by voice means a spoken date reaching a
 file that a warning banner is driven from, and `tiny.en` is the transcriber that turned "What is
 the date?" into "What is today?" (D5).
+
+### Found while syncing the Pi: two packages that installed nowhere
+
+`stage_install.sh` existed **only on the Pi** while `docs/DEPLOY.md` instructed you to run it —
+so a deploy to a new box followed an instruction pointing at a file the repo did not contain. It
+is committed now, and the missing file was the smaller half.
+
+Its stages are hand-grouped, which is the whole point (a resolver backtrack stays isolated to one
+group). The cost is drift, and it had already happened twice: **`sympy` and `kiutils` were in
+`requirements.txt` and in no stage at all.** On a fresh Pi that means every derivative question
+answers *"ModuleNotFoundError: no module named 'sympy'"* — the exact bug `verify_agents.py` was
+written for, one layer earlier than it was looking — and every KiCad question answers with an
+install instruction, because `tools/kicad_parser.py` wraps that import by design so the HARDWARE
+agent still starts without it. Both absences are silent: the venv builds clean.
+
+`verify_agents.py` now asserts every `requirements.txt` package appears in a stage.
+
+**And that check was vacuous when first written**, which is the part worth recording. It searched
+the script's whole text, and the script's own header comment explains why sympy matters — so
+`"sympy" in text` was true with the install line deleted. Mutation-testing it (delete sympy, rerun)
+is what exposed that, and it stayed green. It now reads only lines beginning `run `, and the same
+mutation turns it red. See L11, and L4 for the previous time a green check held a bug in place.
+
+Also cleaned: `DECISIONS.md`, `lessons.md` and `todo.md` were sitting at the Pi's repo root,
+orphans of an older layout that `tar` had never deleted because **tar-over-ssh does not delete**.
+The root `DECISIONS.md` was a 487-line pre-D11 copy — a stale decision log at the top of the tree,
+looking authoritative. Verified a strict subset (0 unique lines) before removing.
