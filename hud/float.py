@@ -118,6 +118,80 @@ def add_escape_hatch(win: Gtk.ApplicationWindow, starts_fullscreen: bool) -> Non
     win.add_controller(keys)
 
 
+# How long to wait before re-trying a page that would not load, and the ceiling it backs off
+# to. 1s first because at boot the server is usually only a few seconds behind; 8s after that
+# because a server that is not coming is not going to arrive sooner for being asked harder.
+RETRY_FIRST_S = 1.0
+RETRY_MAX_S = 8.0
+
+
+def _keep_trying(view: "WebKit.WebView", url: str) -> None:
+    """Reload `url` until it actually loads, instead of showing WebKit's error page.
+
+    ## The bug this fixes, seen on a real reboot 2026-08-22
+
+        Could not connect to 127.0.0.1: Connection refused
+
+    Boot at 10:49:14, `oddball.service` reported active at 10:49:22, this window started at
+    10:49:24 — and port 8765 was not bound until several seconds after that. The unit is
+    `Type=simple`, so systemd calls it "active" the moment it has *exec'd* the interpreter;
+    binding the socket happens much later, after faster-whisper and an onnxruntime wake model
+    have loaded off an SD card.
+
+    `config/oddball-face.desktop` argued that ordering did not matter because *"the rig
+    retries its WebSocket every 2s forever"*. That is true and it is not enough: **the page
+    itself is fetched over HTTP from the same port.** When that GET fails there is no page, so
+    there is no JavaScript, so nothing retries anything — the window sits on an error string
+    until somebody notices and restarts it. The retry that was relied on lived inside the
+    thing that failed to arrive.
+
+    A desktop autostart entry cannot be ordered after a systemd user unit, so waiting is the
+    only option, and doing it here rather than in a wrapper script means every caller gets it
+    — including the by-hand invocation in docs/DEPLOY.md.
+
+    Retrying forever, deliberately, and for the same reason the rig's own socket does: this is
+    a face that is supposed to be present, and a service restart mid-session should heal
+    itself rather than need a human. Each attempt is logged, so a genuinely wrong URL is
+    visible in the journal rather than silent.
+    """
+    delay = RETRY_FIRST_S
+    # WebKit emits `load-changed(FINISHED)` AFTER `load-failed` — a failed load still
+    # "finishes". Without this flag the reset below fired on every failure and the backoff
+    # never grew: the first version logged "retrying in 1s" forever, which is how it was
+    # caught. It only looked like a working retry loop.
+    failed = False
+
+    def retry() -> bool:
+        view.load_uri(url)
+        return False                      # one-shot timeout
+
+    def on_load_failed(_view, _event, failing_uri, error) -> bool:
+        nonlocal delay, failed
+        failed = True
+        print(f"float: {failing_uri} did not load ({error.message}) — retrying in {delay:.0f}s",
+              file=sys.stderr, flush=True)
+        GLib.timeout_add(int(delay * 1000), retry)
+        delay = min(delay * 1.6, RETRY_MAX_S)
+        # TRUE suppresses WebKit's built-in error page. On a transparent window that matters:
+        # the alternative is a black-on-nothing error string floating over the desktop where
+        # the character should be, which is worse than showing nothing at all while we wait.
+        return True
+
+    def on_load_changed(_view, event) -> None:
+        nonlocal delay, failed
+        if event != WebKit.LoadEvent.FINISHED:
+            return
+        if failed:
+            failed = False                # the tail of a failure, not a success
+            return
+        if delay != RETRY_FIRST_S:
+            print("float: page loaded", file=sys.stderr, flush=True)
+        delay = RETRY_FIRST_S             # a LATER failure starts its backoff over
+
+    view.connect("load-failed", on_load_failed)
+    view.connect("load-changed", on_load_changed)
+
+
 def build_window(app: Gtk.Application, url: str, fullscreen: bool, decorated: bool,
                  width: int, height: int, transparent: bool) -> Gtk.ApplicationWindow:
     """Create the window and put a transparent WebView in it showing `url`."""
@@ -153,6 +227,7 @@ def build_window(app: Gtk.Application, url: str, fullscreen: bool, decorated: bo
     # letting the compositor tear the layer up and down is churn for no benefit.
     settings.set_hardware_acceleration_policy(WebKit.HardwareAccelerationPolicy.ALWAYS)
 
+    _keep_trying(view, url)
     view.load_uri(url)
     win.set_child(view)
 
