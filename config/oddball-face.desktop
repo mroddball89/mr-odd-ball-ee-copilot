@@ -26,9 +26,23 @@ Icon=/home/ironi/mr-odd-ball/assets/mr-odd-ball-reference.png
 Terminal=false
 X-GNOME-Autostart-enabled=true
 
-# No ordering against oddball.service on purpose. The rig retries its WebSocket every 2s
-# forever and shows his resting state until it connects, so it does not matter which of the two
-# starts first — and that is a property of the rig worth keeping rather than designing around.
+# No ordering against oddball.service — a desktop autostart entry has no way to depend on a
+# systemd user unit, so this is a constraint rather than a choice.
+#
+# THIS COMMENT USED TO SAY the ordering did not matter, "because the rig retries its WebSocket
+# every 2s forever and shows his resting state until it connects". That is true of the SOCKET
+# and it is not true of the PAGE: hud_bridge serves the rig over HTTP on the same port, so a
+# window that starts before the port is bound gets
+#
+#     Could not connect to 127.0.0.1: Connection refused
+#
+# and stays there. No page means no JavaScript means nothing retries anything — the retry
+# being relied on lived inside the thing that had failed to arrive. Seen on a real reboot
+# 2026-08-22: boot 10:49:14, unit active 10:49:22 (Type=simple reports active at exec, not at
+# listen), this window 10:49:24, port bound several seconds later still.
+#
+# `hud/float.py` now retries the page load itself with backoff, so the race is survivable from
+# either side and a mid-session service restart heals without a human. See `_keep_trying`.
 #
 # ?chat=1 rather than ?solo=1, since 2026-08-19. He is the EE copilot now, and a firmware
 # answer contains a C snippet and a register table — D32 measured Piper at ~160 wpm, so 40

@@ -356,3 +356,28 @@ velocity at contact. Mine were a linear translate and an ease.
 It also hid a real bug: `setState` starts `if (!STATES[next]) return;` and there was no
 `thinking` row, so the one state the engine sends most often had **never** animated his face.
 Building the wrong thing is how I found it, which is not a recommendation.
+
+## The retry you are relying on may live inside the thing that failed to arrive
+
+**2026-08-22.** LB rebooted the Pi and got `Could not connect to 127.0.0.1: Connection refused`
+where his face should be. `config/oddball-face.desktop` had a comment arguing that startup
+order did not matter, "because the rig retries its WebSocket every 2s forever".
+
+That was true of the **socket** and irrelevant to the **page**. `hud_bridge` serves the rig over
+HTTP on the same port, so when the GET fails there is no page, so no JavaScript, so nothing
+retries anything. The retry being depended on was inside the asset that had not loaded.
+
+**Why:** `oddball.service` is `Type=simple`, so systemd reported it active 8s after boot — at
+`exec`, not at `listen`. Binding 8765 happens much later, after faster-whisper and an
+onnxruntime model load off an SD card. The desktop entry started the window 2s after that.
+
+**How to apply:** when arguing that a startup race is benign, name the exact component that
+recovers and check it is *present* in the failure case. "It reconnects" is not a property of a
+system, it is a property of some code, and that code has to have been loaded. And for a client
+that fetches its own UI over a socket it also talks to, the fetch is the fragile half.
+
+Bonus, caught in the same hour by reading the log rather than trusting it: WebKit emits
+`load-changed(FINISHED)` **after** `load-failed`, so my "reset the backoff on success" handler
+fired on every failure and the delay stayed at 1s forever. It logged "retrying in 1s" eight
+times in a row and looked like a working retry loop. Exponential backoff that never backs off
+is a thing you only notice if you read the numbers.
