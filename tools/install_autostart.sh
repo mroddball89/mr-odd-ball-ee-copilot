@@ -59,7 +59,11 @@ status() {
     fi
     echo "== labwc rule: is the ball pinned to the corner? =="
     if grep -q "mr-odd-ball avatar rule" "$HOME/.config/labwc/rc.xml" 2>/dev/null; then
-        say "installed: $(grep -o 'MoveTo x=\"[0-9]*\" y=\"[0-9]*\"' "$HOME/.config/labwc/rc.xml" | head -1)"
+        # Single-quoted, so the double quotes in the XML are matched literally. The first
+        # version escaped them as \" inside single quotes, which greps for a BACKSLASH — it
+        # matched nothing and printed "installed:" with a blank after it. A status line that
+        # reports success and shows nothing is worse than one that reports failure.
+        say "installed: $(grep -o 'MoveTo x="[0-9]*" y="[0-9]*"' "$HOME/.config/labwc/rc.xml" | head -1)"
     else
         say "NOT installed — he will land wherever labwc puts him, mid-screen."
         say "  bash tools/install_labwc_rule.sh"
