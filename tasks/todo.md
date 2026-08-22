@@ -316,3 +316,63 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
 - [ ] Confirm `transparent=True` composites under Bookworm's Wayfire session
 - [ ] A `tools/verify_vault.py` in the house style, so the checks above are a committed harness
       rather than something run once in a session
+
+---
+
+## Stage 11 — Pi deployment: autostart, apt deps, and the gesture interpreter
+
+**2026-08-22.** Deployed to `oddball-pi` (10.0.0.96). Reasoning in D14 and D15.
+
+- [x] `sudo apt install ...` line tracked — `stage_install.sh` `dpkg-query`s all five prerequisites
+      at the top of the run and prints the exact command for whichever are missing. It does not
+      run `sudo` itself: the script runs detached, where a password prompt hangs forever.
+- [x] `config/mroddball.desktop` → `~/.config/autostart/`, installed by `install_autostart.sh`
+- [x] `tools/wait_for_ui.sh` — polls `/healthz` up to 90 s, then Execs `launch_ui.py`
+- [x] `--avatar` added to `config/oddball.service`, because the server must be in-process
+- [x] `venv/pyvenv.cfg` flipped to `include-system-site-packages = true` on the Pi, so pywebview
+      can reach the system PyGObject. One line, not a 1.9 G rebuild.
+- [x] `tools/install_gesture_venv.sh` — the Python 3.12 sidecar venv, built and working
+- [x] `get_gesture()` reworked to **always** run out-of-process
+- [x] Latency measured, charted, data + script committed
+
+### Verified ON THE PI
+
+| check | result |
+|---|---|
+| deploy, both `PIPESTATUS` | `0 0` |
+| `desktop-file-validate config/mroddball.desktop` | VALID |
+| `GET /healthz`, `GET /ui` | 200, `{"ok":true,"state":"sleeping"}` |
+| `bridge.set_state()` → `/ws/state`, in-process | `sleeping, thinking, speaking, idle` |
+| vault writes and reads | ok |
+| sidecar venv | Python 3.12.14, mediapipe 0.10.18, **runs** |
+| `--backend` from the main 3.13 venv | worker says `NONE`, parent survives |
+| approval latency | 2,217 ms median of 10 (min 2,197, max 2,271) |
+| main venv after cleanup | mediapipe and opencv-contrib removed |
+
+### What didn't work
+
+- **mediapipe 1.0.1 installs on Python 3.13 and cannot run there.** SIGKILL at XNNPACK delegate
+  creation, every vision task, no OOM and 6.4 GB free. D14 said the opposite on the strength of
+  a `pip --dry-run`; D15 retracts it. LB's original instinct — a 3.12 interpreter — was correct.
+- **The first sidecar tried in-process first and fell back.** On the Pi the fallback was
+  unreachable: the process died constructing the detector it was about to decide not to use. A
+  fallback after an uncatchable failure is not a fallback.
+- **`import webview` at module scope** in `launch_ui.py` — fixed the day before, same class of
+  bug, worth noting it recurred in a different file.
+
+### Still open
+
+- [ ] **`sudo apt install gir1.2-webkit2-4.1`** — the ONLY prerequisite still missing on the Pi.
+      Needs LB's password; the other four are already installed. Until then `launch_ui.py` opens
+      nothing and the autostart entry logs to `journalctl --user -t mroddball`.
+- [ ] `bash tools/install_autostart.sh` on the Pi, once the apt package is in — deliberately not
+      run yet, because its preflight would warn about the missing webkit typelib.
+- [ ] Persistent gesture worker: pay the 1.0 s `import mediapipe` once instead of per approval.
+      Would take 2,217 ms → ~850 ms. Not built; 2.2 s at a prompt that already stops to ask is
+      tolerable, and it trades a subprocess call for a lifecycle to manage.
+- [ ] Measure detection rate vs `WARMUP_FRAMES`. It is 4 (602 ms of the 2,217) and cutting it
+      without that measurement is guessing.
+- [ ] Overlay RSS vs a Chromium window on the same page — still not measured.
+- [ ] Confirm `transparent=True` composites under the labwc session.
+- [ ] `tools/verify_vault.py` and `tools/verify_gesture.py` in the house style, so the classifier
+      cases and the vault traversal guard are committed harnesses rather than session scratch.

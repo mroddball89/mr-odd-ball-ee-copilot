@@ -86,17 +86,16 @@ run search ddgs duckduckgo-search
 # as a failed install.
 run ui     fastapi uvicorn pywebview
 
-# Gesture approval. mediapipe >= 1.0 ships one py3-none aarch64 wheel, so this DOES install on
-# the Pi's Python 3.13 — verified with `pip install --dry-run` on the box (D14). An earlier
-# version of this comment said it was expected to fail; that was checked against the 0.10.x
-# series only, and was wrong.
+# Gesture approval is NOT a pip stage. Corrected 2026-08-22 (D15).
 #
-# opencv is not named here on purpose: mediapipe pulls opencv-contrib-python, and installing
-# opencv-python beside it makes two distributions fight over the `cv2` import name.
+# mediapipe 1.0.1 installs on this venv and then SIGKILLs at XNNPACK delegate creation; the only
+# version that RUNS here is 0.10.18, which needs a <=3.12 interpreter. So it lives in its own
+# small venv and gesture_control.py shells out to it:
 #
-# Still its own stage, and still optional: if it fails, get_gesture() returns NO_CAMERA and
-# approval falls back to the keyboard. Separate from `ui` so it cannot take fastapi down.
-run vision mediapipe
+#     bash tools/install_gesture_venv.sh
+#
+# Putting it in this venv is worse than leaving it out — it pulls 111 MB of opencv-contrib and
+# makes --backend report a backend that kills the process when used.
 
 echo "=== ALL STAGES DONE $(date +%H:%M:%S)"
 echo
@@ -104,7 +103,9 @@ echo
 # The gesture model is 7.8 MB, gitignored, and does not arrive in the tarball — same class as
 # the whisper models. Fetched here rather than left to the docs because a missing model is a
 # SILENT loss of the feature: get_gesture() reports NO_CAMERA, which reads as a camera fault.
-if [ -f venv/bin/python ] && venv/bin/python -c 'import mediapipe' 2>/dev/null; then
+# Fetched unconditionally: it is the SIDECAR venv that needs mediapipe, not this one, and the
+# download itself needs neither.
+if [ -f venv/bin/python ] && [ ! -f models/hand_landmarker.task ]; then
   echo "=== fetching the hand landmarker model"
   venv/bin/python tools/gesture_control.py --fetch-model || \
     echo "    fetch failed — rerun it by hand; gesture approval is off until it lands"
@@ -120,6 +121,10 @@ fi
 echo "Now run the harness — it is what catches a package that installed nowhere:"
 echo "  venv/bin/python tools/verify_agents.py"
 echo
-echo "Then check the two new subsystems report for themselves:"
-echo "  venv/bin/python tools/gesture_control.py --backend    # expect: backend tasks"
+echo "Then build the gesture sidecar venv — mediapipe cannot live in this one (D15):"
+echo "  bash tools/install_gesture_venv.sh"
+echo
+echo "And check the new subsystems report for themselves:"
+echo "  venv/bin/python tools/gesture_control.py --backend    # expect: worker says NONE"
 echo "  venv/bin/python -m ui.server --demo &                 # then curl :8000/healthz"
+echo "  bash tools/install_autostart.sh                       # boot: service + both windows"
