@@ -369,10 +369,14 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
       `/ws/state` from `sleeping` to `listening`.
 - [x] Line endings — the deploy shipped CRLF shell scripts and broke `install_autostart.sh` on
       the Pi. Working copy normalised to LF; see the new section in DEPLOY.md.
-- [ ] **`sudo apt install gir1.2-webkit2-4.1`** — the ONLY thing still outstanding. Needs LB's
-      password; the other four apt prerequisites are already installed. Until it is in,
-      `launch_ui.py` opens no window and the autostart entry logs the reason to
-      `journalctl --user -t mroddball`. Everything behind it is done and verified.
+- [x] `sudo apt install gir1.2-webkit2-4.1` — done by LB, `2.52.5-1~deb13u1`. All five apt
+      prerequisites now present.
+- [x] **The window opens.** `launch_ui.py` running on the Pi, `/healthz` reports `clients: 1`,
+      and a full turn drove `sleeping -> thinking -> speaking -> sleeping` on `/ws/state` with
+      the real window attached. Stage 10 and 11 are complete.
+- [ ] Look at it. Nothing above is a claim about pixels — whether `transparent=True` actually
+      gives a transparent surface under labwc, and whether a 120px ball at 300x300 on-top is
+      the right size, needs LB's eyes on the screen. A screenshot belongs in `media/captures/`.
 - [ ] Persistent gesture worker: pay the 1.0 s `import mediapipe` once instead of per approval.
       Would take 2,217 ms → ~850 ms. Not built; 2.2 s at a prompt that already stops to ask is
       tolerable, and it trades a subprocess call for a lifecycle to manage.
