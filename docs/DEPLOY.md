@@ -225,10 +225,23 @@ sudo apt install libportaudio2 pipewire-alsa python3-gi gir1.2-webkit2-4.1 pytho
 | `python3-gi-cairo` | the transparent surface has no renderer |
 
 **Checked on the box, 2026-08-22:** `python3-gi`, `python3-gi-cairo`, `libportaudio2` and
-`pipewire-alsa` are already installed — they came in with `hud/float.py`. **`gir1.2-webkit2-4.1`
-is NOT**, and it is the one the avatar needs. The Pi has `gir1.2-webkit-6.0` and
-`libwebkitgtk-6.0-4` instead, which is the GTK4 WebKit `float.py` uses; pywebview's GTK backend
-asks for the GTK3 WebKit2 4.1 typelib by name and will not take the 6.0 one in its place.
+`pipewire-alsa` were already installed — they came in with `hud/float.py`. `gir1.2-webkit2-4.1`
+was the only one missing, and it is the one the avatar needs: the Pi has `gir1.2-webkit-6.0`
+and `libwebkitgtk-6.0-4`, which is the GTK4 WebKit `float.py` uses, and pywebview's GTK backend
+asks for the GTK3 WebKit2 4.1 typelib **by name** and will not take the 6.0 one in its place.
+
+**Installed and confirmed working**, `2.52.5-1~deb13u1`. With it in, `Gtk 3.0` and `WebKit2 4.1`
+both import from the venv and `launch_ui.py` opens the window. All five are now present.
+
+One harmless line appears on every launch and is not worth chasing:
+
+```
+dbind-WARNING: AT-SPI: Error retrieving accessibility bus address:
+  org.freedesktop.DBus.Error.ServiceUnknown: The name org.a11y.Bus was not provided
+```
+
+That is GTK looking for an accessibility bus this headless-ish session does not run. The window
+opens regardless.
 
 `stage_install.sh` now checks all five with `dpkg-query` at the top of the run and prints the
 exact `apt install` line for whichever are missing. It does **not** install them: the script is
@@ -376,11 +389,32 @@ checked fact, which is the same argument the rig already makes by retrying its W
 instead of being ordered after the bridge.
 
 ```bash
-curl -s localhost:8000/healthz          # {"ok":true,"state":"sleeping","clients":0}
+curl -s localhost:8000/healthz          # {"ok":true,"state":"sleeping","clients":1}
 tools/wait_for_ui.sh --timeout 10       # open the window now, without a reboot
 pkill -f launch_ui.py                   # close it — it is frameless, there is no button
 journalctl --user -t mroddball          # why it did not appear at login
 ```
+
+`clients` in `/healthz` is the honest test that the window is actually attached, not merely
+running: it counts live `/ws/state` subscribers.
+
+**Opening it by hand over ssh needs the session environment**, which an ssh shell does not
+inherit — the same trap as `XDG_RUNTIME_DIR` for audio:
+
+```bash
+env WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 DISPLAY=:0     tools/wait_for_ui.sh --timeout 20
+```
+
+The autostart entry needs none of that — it runs inside the session already.
+
+**Verified live on 2026-08-22**, with the real window attached: a typed `hey mr odd ball` on the
+rig's 8765 socket took the avatar `sleeping -> listening`, and asking him a question drove the
+full sequence `sleeping -> thinking -> speaking -> sleeping`. So the ball rolls while he thinks
+and bounces while he talks, from the same `set_state()` call that drives the main rig.
+
+Not verified from here: **what it looks like.** labwc composites, so `transparent=True` should
+give a real transparent surface rather than an opaque square, but that is a claim about pixels
+and nobody has looked at the screen yet.
 
 It is deliberately not respawned when killed. A presence indicator that comes back when you
 dismiss it is a nuisance rather than a feature.
