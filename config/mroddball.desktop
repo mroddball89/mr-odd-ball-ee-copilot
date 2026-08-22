@@ -1,0 +1,59 @@
+[Desktop Entry]
+Type=Application
+Name=Mr Odd Ball Avatar
+GenericName=Desktop avatar
+Comment=The floating ball. Rolls while he thinks, bounces while he speaks.
+Categories=Utility;
+
+# Installed to ~/.config/autostart/mroddball.desktop by tools/install_autostart.sh.
+#
+# ## This entry does NOT start the FastAPI server, and that is the whole design
+#
+# The obvious autostart line is "start the server, sleep 5, start the window". It produces a
+# ball that never moves.
+#
+# State is published IN-PROCESS — `orchestrator/hud_bridge.set_state()` mirrors into
+# `ui/avatar_state.py`, and `ui/server.py` reads from there. A server started as its own
+# process serves the page perfectly and then sits on "sleeping" forever, because nothing in
+# THAT process ever calls publish(). The page would look like a UI bug; it would be an
+# architecture mismatch.
+#
+# So the server belongs to the assistant, and `config/oddball.service` now runs
+# `main.py --voice --avatar` to put it there. This entry is only the WINDOW.
+#
+# ## Which makes the wait a real requirement, not a courtesy
+#
+# Two things race at boot and neither can be ordered against the other from here: a desktop
+# autostart entry has no way to depend on a systemd user unit. The unit also loads
+# faster-whisper off an SD card, so :8000 can be a good 20-30 seconds behind the desktop
+# appearing — a bare `sleep 5` would usually lose.
+#
+# `tools/wait_for_ui.sh` polls /healthz until it answers, with a timeout, and only then execs
+# launch_ui.py. Polling beats sleeping for the same reason the rig retries its WebSocket
+# rather than being ordered after the bridge: the dependency becomes a fact that is checked
+# instead of a duration that was guessed.
+#
+# Absolute paths, NOT %h. Desktop entries expand %f %F %u %U %i %c %k and nothing else —
+# systemd's %h means nothing here and would be passed through as a literal.
+#
+# venv/bin/python, unlike config/oddball-face.desktop. That entry runs hud/float.py, which
+# needs SYSTEM PyGObject and so must use /usr/bin/python3. This one runs launch_ui.py, which
+# needs pywebview out of the venv. pywebview ALSO reaches for system gi at runtime, which is
+# why the venv is created with --system-site-packages (see docs/DEPLOY.md).
+Exec=/home/ironi/mr-odd-ball/tools/wait_for_ui.sh
+Path=/home/ironi/mr-odd-ball
+Icon=/home/ironi/mr-odd-ball/assets/mr-odd-ball-reference.png
+
+Terminal=false
+X-GNOME-Autostart-enabled=true
+
+# 300x300, frameless, transparent, always on top — set in launch_ui.py, not here; a desktop
+# entry cannot size a pywebview window.
+#
+# `transparent=True` needs a compositing window manager. Bookworm/trixie's labwc session
+# composites. Without one the window is opaque rather than broken — cosmetic, so nothing here
+# tries to detect it.
+#
+# THE WAY OUT: the window is frameless and has no close button. `pkill -f launch_ui.py`.
+# It is deliberately NOT restarted if you kill it — this is a presence indicator, and one that
+# respawns when dismissed is a nuisance rather than a feature.

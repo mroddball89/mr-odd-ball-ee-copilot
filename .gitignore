@@ -16,6 +16,14 @@ chroma_db/
 sd_card_memory.json
 quiz_data.json
 
+# The Markdown vault is LB's own long-term notes, written by tools/knowledge_vault.py — his
+# data, not source, same call as sd_card_memory.json. Deliberately NOT ignored wholesale
+# though: the folder itself is tracked via the .gitkeep, because a vault that vanishes on a
+# fresh clone looks like a missing feature rather than an empty notebook.
+vault/**
+!vault/
+!vault/.gitkeep
+
 # Extracted from LB's syllabi by `python tools/academic_calendar.py`. His coursework, and a
 # rebuildable artifact like chroma_db/ — absent is the normal state, not a broken install.
 data/academic/academic_calendar.json
@@ -31,6 +39,11 @@ voices/
 # Whisper models are downloaded on first run. The wake model is NOT ignored — it was trained
 # on Colab from training/hey_mr_odd_ball.ipynb and losing it means retraining.
 models/whisper/
+
+# The mediapipe hand landmarker, 7.8 MB, fetched from Google's published model store by
+# `python tools/gesture_control.py --fetch-model`. Same call as the whisper models: a
+# re-downloadable third-party artifact, not something we made. stage_install.sh fetches it.
+models/hand_landmarker.task
 
 # pip install logs from the RAG stack — Pi-side, regenerable
 rag_install.log

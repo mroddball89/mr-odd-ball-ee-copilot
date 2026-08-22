@@ -40,6 +40,8 @@ from engine.models import AGENT_MODEL
 from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Response
 from engine.split import SPOKEN_INSTRUCTION, split
+from tools.knowledge_vault import (VAULT_INSTRUCTION, VAULT_TOOLS, followup_prompt,
+                                   run_vault_calls)
 from tools.memory_manager import format_memory_for_llm
 from tools.vector_db import format_chunks, get_retriever
 
@@ -76,7 +78,7 @@ REG_WRITE(GPIO_ENABLE_REG, BIT13);
 ```
 
 User Question: {question}
-""" + SPOKEN_INSTRUCTION
+""" + VAULT_INSTRUCTION + SPOKEN_INSTRUCTION
 
 
 def run_firmware_agent(query: str) -> str:
@@ -131,7 +133,17 @@ def _answer(query: str) -> tuple[str, list[dict]]:
         question=query,
     )
 
-    # 5. Execute the agent and return the text response
-    response = llm.invoke(prompt)
+    # 5. Execute the agent. The vault tools are bound here — this agent had no tools at all
+    #    before, so this is the first tool-call path it has.
+    response = llm.bind_tools(VAULT_TOOLS).invoke(prompt)
+
+    # 6. If it reached for the vault, run what it asked for and answer again with the result.
+    #    The second invoke uses the UNBOUND `llm`, which is what bounds the loop at one round:
+    #    a model that can still see the tools can call them again, and "remember this" has no
+    #    natural stopping point. Retrieval sources are unaffected — they came from step 2.
+    vault_results = run_vault_calls(getattr(response, "tool_calls", None))
+    if vault_results:
+        LOG.info("vault: %s", ", ".join(name for name, _text in vault_results))
+        response = llm.invoke(followup_prompt(prompt, vault_results))
 
     return extract_text_content(response.content), sources

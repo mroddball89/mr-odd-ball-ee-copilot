@@ -229,3 +229,26 @@ observation of the wrong thing, and nothing crashes.
 every step that can shrink it. And when a step can legitimately produce nothing, say which input
 produced nothing and name it — "2 pages carried no extractable text — pi_cam3.pdf" is
 actionable; a traceback out of a vector store is not.
+
+## A wheel-tag query answers a question about one release SERIES, not about a package
+
+**2026-08-22 (D14).** I queried PyPI for `mediapipe` aarch64 wheels, saw `cp39`-`cp312`, and
+wrote up "this cannot install on the Pi's Python 3.13" as a measured platform limit. It was
+true of the `0.10.x` series and false of the package: `1.0.1` ships one
+`py3-none-manylinux_2_28_aarch64` wheel that installs on any Python 3.
+
+**Why:** LB read the write-up and asked for a Python 3.12 venv rebuild on the strength of it —
+on a Debian trixie box with no `python3.12` package, no `uv` and no `pyenv`. The wrong finding
+would have cost an interpreter build and a 1.9 G venv rebuild, to pin a November 2024 release
+and inherit its old API forever.
+
+**How to apply:** sort the releases, look at the NEWEST, and check whether the tag *shape*
+changed. `py3-none` where `cp3xx` used to be is a packaging decision with consequences. A major
+version bump is exactly when a maintainer changes ABI tags, drops APIs, or both — here it did
+both, because 1.x also removed `mp.solutions`.
+
+And the worse half: the wrong finding was written up *persuasively* — a table, a stated
+provenance, an all-caps warning. Confidence and formatting made a partial check read as
+settled, and it propagated straight into a work request. **Write up what was actually queried**
+("the 0.10.x wheels"), not the generalisation it appears to support. A finding stated more
+broadly than it was checked is the kind that gets acted on before anyone rechecks it.

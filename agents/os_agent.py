@@ -271,13 +271,31 @@ def run_os_agent(query: str) -> str:
 
     Deliberately NOT the path the voice loop takes. It still reads stdin, which is correct for
     a terminal session and impossible everywhere else.
+
+    ## The camera, added 2026-08-21
+
+    A thumbs up at the camera counts as the `y`. `tools/gesture_control.py` owns that decision
+    and only a thumbs up returns True — no camera, no hand, an open palm and any exception all
+    fall through to `input()`, so the worst a broken camera can do is make LB type the letter
+    he was already typing. It never *declines* on his behalf either; the keyboard still gets
+    asked.
+
+    What it does not change: the blocklist in `tools/os_controller.py` runs regardless of how
+    approval arrived, and the exact command is on screen before the question. A gesture
+    replaces the keystroke, not the review. Set `ODDBALL_GESTURE=0` to keep the camera shut.
     """
     proposed = propose_os_action(query)
     if proposed.pending is None:
         return proposed.raw or proposed.speech
 
+    # The exact command is printed BEFORE approval is asked for, whichever way it arrives.
+    # That ordering is the property D4 is about and the camera does not change it.
     print("\n⚠️ SECURITY CHECK: The AI wants to execute:")
     print(f"   > {proposed.pending.shown}")
-    if input("   Allow execution? (y/n): ").strip().lower() == "y":
+    print("   👍 thumbs up at the camera to approve, or answer below.")
+
+    from tools.gesture_control import approve_by_gesture_or_keyboard
+
+    if approve_by_gesture_or_keyboard("   Allow execution? (y/n): "):
         return resume_os_action(proposed.pending).raw
     return "Action aborted by the user. No terminal commands were executed."

@@ -677,3 +677,227 @@ text-bearing PDFs come later.
 of the same `all-MiniLM-L6-v2` model — so torch could be dropped **entirely**, not merely
 de-CUDA'd. That changes `tools/vector_db.py`'s embedding path and needs its own re-verification,
 so it is a decision rather than a rider on an install. Tracked in `tasks/todo.md`.
+
+## D13 — A vault, a floating ball and a thumbs up: three additions, three guarded imports
+
+**2026-08-21.** Three features landed together on `oddball-integration`, and what they have in
+common is more interesting than what any of them does: **none of them may cost the voice loop
+anything when its dependencies are absent.** Every import is guarded, and each degrades to the
+behaviour that existed the day before.
+
+| feature | missing dependency | what LB loses | what still works |
+|---|---|---|---|
+| Markdown vault | none — stdlib + `langchain_core` | — | — |
+| desktop avatar | `fastapi`, `uvicorn`, `pywebview` | the floating ball | `hud/face-preview.html` on 8765, unchanged |
+| gesture approval | `opencv-python`, `mediapipe` | thumbs-up approval | typing `y`, exactly as before |
+
+### The vault is not a second conversation log
+
+`tools/memory_manager.py` keeps the last 40 turns and rotates. That is the whole of his memory,
+and it means a part number LB settled on this morning is gone by tonight. `tools/knowledge_vault.py`
+is the other half: Markdown files under `vault/`, written only when asked, never rotated,
+greppable with `grep` and diffable in git.
+
+No index, no embeddings. The search is a substring scan over a folder that will hold dozens of
+files, not millions — an index here is a moving part bought with nothing. `tools/vector_db.py`
+is the other end of that trade and stays where it is; it exists for hundreds of pages of PDF,
+which is the case a substring scan genuinely cannot serve.
+
+Bound to **HARDWARE, FIRMWARE and GENERAL/persona** as the *same two tool objects*, imported
+from one module, so three agents cannot end up writing to three folders. Two things it is
+careful about, both because a model supplies the arguments:
+
+- **Paths.** `vault / "../../.ssh/authorized_keys"` resolves fine and writes fine. Both
+  `filename` and `folder` are flattened to a single safe segment and the result is asserted to
+  still be inside the vault. Verified: `folder="../../etc"`, `filename="../../../pwned.md"`
+  lands at `vault/etc/pwned.md`.
+- **Size.** `read_from_vault` output goes straight into a prompt. Capped at 24k characters, and
+  it *says* when it truncated — a prompt quietly cut in half is one the model answers
+  confidently from the wrong evidence.
+
+FIRMWARE and PERSONA had no tool-call path at all before this. Both now run a **bounded
+two-step**: tools bound on the first invoke, and the second invoke uses the *unbound* model.
+That unbinding is the loop bound — a model that can still see the tools can call them again,
+and "remember this" has no natural stopping point.
+
+### Not Chromium, and not a second source of state
+
+The overlay is `pywebview` over the system WebKit view. A Chromium window for a 120px ball is
+~250 MB and a core of a Pi 5 already running whisper, piper and onnxruntime — the entire budget,
+spent on a circle.
+
+The harder question was **state**. There are now two surfaces showing what he is doing: the full
+character rig on 8765 and the overlay on 8000. Two surfaces reading two sources is exactly how
+they come to disagree, and a face that lies about the microphone is the single most misleading
+thing this rig can do (D41's argument, one surface further).
+
+So neither surface owns the state. `HudBridge.set_state()` — already the one writer — mirrors
+into `ui/avatar_state.py`, which is **stdlib only on purpose**: if the fan-out lived in
+`ui/server.py`, that mirror would drag FastAPI onto the import path of the voice loop, and a box
+without it would fail to start the assistant rather than merely lack a ball.
+
+Verified end to end: one `bridge.set_state()` call, `['sleeping', 'thinking', 'speaking', 'idle']`
+out of the `/ws/state` socket, replayed state on connect, and the subscriber released on
+disconnect across three open/close cycles.
+
+**One defect found and fixed in review.** The websocket handler blocked on `await queue.get()`,
+so a closed window was not noticed until the *next* state change — `/healthz` reported clients
+that were not there, and opening and closing the overlay while he rested counted up. A task now
+races the receive side, and the count returns to 0 immediately.
+
+### The obvious thumbs-up test approves a wave
+
+This is the part worth keeping. The natural test is *"thumb tip above the index knuckle and
+above the wrist"*:
+
+```python
+if thumb_tip < index_mcp and thumb_tip < wrist:
+    return "THUMBS_UP"
+```
+
+**An open palm passes it.** Hand up, fingers spread, the thumb is above both landmarks. So the
+obvious test turns a wave at the camera into an approval — and on `agents/os_agent.py`'s path,
+what it approves is a shell command.
+
+`THUMBS_UP` therefore additionally requires all four fingers **curled** (each tip below its own
+PIP joint), and `OPEN_PALM` is tested first so the two are mutually exclusive by construction.
+The classifier is a pure function of 21 landmarks, so it is tested with no camera at all — six
+cases, including the one above, all green.
+
+Failure directions are asymmetric and every one falls safe: no camera, no hand, an open palm,
+an exception → the keyboard is still asked. Only a clear thumbs up short-circuits it, and the
+gesture never *declines* on LB's behalf either. The blocklist in `tools/os_controller.py` runs
+regardless of how approval arrived, and the exact command is still printed before the question.
+**A gesture replaces the keystroke, not the review.** `ODDBALL_GESTURE=0` keeps the camera shut.
+
+### mediapipe does not have a wheel for the Pi's Python
+
+Not discovered on the Pi — read off the wheel index before shipping the requirement, which is
+the cheap order to do it in:
+
+- mediapipe publishes aarch64 wheels for **cp39–cp312**
+- the Pi runs **Python 3.13.5** (`requirements.txt` has said so since the merge)
+
+So `pip install mediapipe` there finds nothing, and there is no source build worth attempting on
+an SD card. It is the second entry in `stage_install.sh`'s own stated trap — a package in
+`requirements.txt` and not in the stage list installs *nowhere*, silently. It has its own stage
+now, `vision`, deliberately separate from `ui` so mediapipe cannot take FastAPI down with it,
+and a non-zero RC on that line is **the documented case, not a broken box**. `opencv-python` has
+a cp313 aarch64 wheel and installs on its own.
+
+Two apt packages pip also cannot supply, in the same class as `libportaudio2`:
+`python3-gi gir1.2-webkit2-4.1 python3-gi-cairo`. Without them `import webview` succeeds and
+`webview.start()` then fails looking for a toolkit.
+
+### Not measured yet, and not to be written up as if it were
+
+Everything above was verified on the Windows authoring box. **No number in this entry came off
+the Pi.** Three that need to, before any of it is narrated:
+
+1. camera-open + inference latency per approval — the claim is ~40–80 ms inference with the
+   camera open dominating, and that is an estimate, not a measurement
+2. overlay RSS against a Chromium window showing the same page — the 250 MB figure is the
+   published Chromium baseline, not this page on this box
+3. whether `transparent=True` composites under Bookworm's Wayfire session in practice
+
+Until those exist under `media/data/`, this is a design decision with a verified integration,
+not a measured result.
+
+## D14 — I checked one release series and called it a platform limit
+
+**2026-08-22.** D13 shipped `mediapipe>=0.10.14` with a long comment explaining that gesture
+control could not work on the Pi, because mediapipe's aarch64 wheels stop at cp312 and the Pi
+runs Python 3.13.5. LB read that, took it at face value — reasonably, it was stated as measured
+— and asked for the venv to be rebuilt on Python 3.12 so the feature would work.
+
+**The finding was wrong, and the fix it implied was the expensive one.** Both halves came from
+querying the PyPI JSON API for `mediapipe` and looking at the `cp3xx` tags on the aarch64
+wheels. That much was accurate. What it missed is that the answer only held for the `0.10.x`
+series, and there is a `1.x`:
+
+| | `mp.solutions.hands` | aarch64 wheel | Python |
+|---|---|---|---|
+| 0.10.18 | yes | cp39–cp312 | 3.12 and below |
+| 0.10.20 – 0.10.35 | yes | **none at all** | — |
+| **1.0.1** | **removed** | `py3-none-manylinux_2_28_aarch64` | **any 3.x** |
+
+`py3-none` is ABI-independent — mediapipe 1.x stopped building per-interpreter wheels. It
+installs on the Pi's existing venv. Verified there, not inferred from the tag:
+
+```
+$ venv/bin/pip install --dry-run --no-input mediapipe
+Would install ... mediapipe-1.0.1 opencv-contrib-python-5.0.0.93 ...
+```
+
+### What the wrong answer would have cost
+
+Debian ships exactly one Python 3 per release and trixie's is 3.13. On this Pi:
+
+```
+$ apt-cache policy python3.12       # returns nothing whatsoever
+$ command -v uv pyenv               # none
+```
+
+So "just use 3.12" is not a flag, it is: source an interpreter Debian does not package, build
+or install it, rebuild a 1.9 G venv against it, re-verify every harness — to pin a mediapipe
+from November 2024 and inherit its 0.10.x API forever. All of it avoidable, and none of it
+would have been questioned, because the document said the platform made it necessary.
+
+### The rule this earns
+
+**A wheel-tag query answers a question about one release series, not about a package.** The
+series is the variable most likely to move, and a `requires_python` floor or an ABI-tag change
+is exactly the kind of thing a maintainer does at a major version. Sort the releases, look at
+the newest, and check whether the tags changed shape — `py3-none` appearing where `cp3xx` used
+to be is a packaging decision with consequences, not a detail.
+
+The second-order lesson is worse and worth naming: **the finding was written up persuasively.**
+It had a table, a measured provenance, and an explicit "READ THIS BEFORE THE PI INSTALL FAILS
+AND YOU BLAME THE PIN". Confidence and formatting made a partial check read as a settled fact,
+and it propagated straight into a work request. A measurement's write-up should carry what was
+actually queried — here, "the 0.10.x wheels" — not the generalisation it seemed to support.
+
+### The port, which is the part that was real work
+
+mediapipe 1.x removed `mp.solutions` entirely, so `GestureRecognizer` had to move to
+`mediapipe.tasks.python.vision.HandLandmarker`. `tools/gesture_control.py` now supports both:
+
+- Tasks preferred, and the only one that installs on 3.13
+- legacy `Hands` if that is what is present, so a 3.12 box pinned to 0.10.18 is unaffected
+- **one `_classify()`**, shared, because both APIs return the same 21 normalised landmarks in
+  the same order. The fork costs a constructor, not a second copy of the decision logic — which
+  matters, because that logic is the part with the safety property in it (D13).
+
+The Tasks path needs `models/hand_landmarker.task`, 7.8 MB, gitignored and fetched by
+`--fetch-model`. `stage_install.sh` fetches it after the `vision` stage, because a missing model
+degrades to `NO_CAMERA` — indistinguishable from a camera fault, and it sends you to the wrong
+place. `--backend` reports which API loaded, whether the model is there, and why not if not.
+
+Measured while porting: `detect()` on a blank 640x480 frame is **3 ms**. The 40–80 ms figure
+D13 quoted for inference was an estimate and is withdrawn with the rest of it; the camera open
+dominates either way, which is why the frame is grabbed and the device released per call.
+
+### Also settled in the same pass
+
+**`opencv-python` is no longer a dependency.** mediapipe pulls `opencv-contrib-python`, a
+superset providing the same `cv2`. Listing both makes two distributions fight over one import
+name, and D13 listed both.
+
+**The venv needs `--system-site-packages`,** which is the one real Pi-side change here.
+pywebview reaches for PyGObject at `webview.start()`; PyGObject is a Debian system package and
+is not pip-installable into a sealed venv. `hud/float.py` dodges this by running on
+`/usr/bin/python3` — `launch_ui.py` cannot, because it needs pywebview *from* the venv. One line
+in `venv/pyvenv.cfg` rather than a 1.9 G rebuild.
+
+**`gir1.2-webkit2-4.1` is the one apt package actually missing** on this Pi. `python3-gi`,
+`python3-gi-cairo`, `libportaudio2` and `pipewire-alsa` were already in from the `float.py`
+work; the box has `gir1.2-webkit-6.0` (GTK4) and pywebview's GTK backend asks for the GTK3
+WebKit2 4.1 typelib by name. `stage_install.sh` now `dpkg-query`s all five and prints the
+`apt install` line for whatever is missing — it does not run `sudo` itself, because the script
+is run detached and a password prompt in a detached job hangs forever.
+
+### Not measured, still
+
+D13 listed three Pi-side measurements as outstanding and they remain outstanding. The 3 ms
+above is Windows, on a blank frame, and is a floor rather than a figure. Nothing here should be
+narrated as a Pi result until it is one.

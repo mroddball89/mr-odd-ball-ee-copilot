@@ -5,6 +5,8 @@ from engine.llm_text import extract_text_content
 from engine.split import SPOKEN_INSTRUCTION
 from tools.trace_calculator import calculate_ipc2221_trace_width
 from tools.kicad_parser import analyze_kicad_pcb, extract_kicad_bom
+from tools.knowledge_vault import (VAULT_INSTRUCTION, VAULT_TOOLS, followup_prompt,
+                                   run_vault_calls)
 from tools.memory_manager import format_memory_for_llm
 
 HARDWARE_PROMPT_TEMPLATE = """
@@ -41,7 +43,7 @@ Result: 3x 10k R_0805_2012Metric R1, R2, R4
 AI: Yes — three of them, R1, R2 and R4, all 0805.
 
 User Question: {question}
-""" + SPOKEN_INSTRUCTION
+""" + VAULT_INSTRUCTION + SPOKEN_INSTRUCTION
 
 # The tools return complete, correct answers — and ones that cannot be said out loud. The trace
 # calculator carries "°C" and a bracketed millimetre conversion; the KiCad tools return a
@@ -76,7 +78,11 @@ Answer the user's question in one or two short sentences, using only what is abo
 # NameError several lines later — reported to LB as a crash in the hardware agent rather than
 # as "the model asked for a tool that does not exist". With one tool that could not happen.
 # With three it can.
-TOOLS = [calculate_ipc2221_trace_width, extract_kicad_bom, analyze_kicad_pcb]
+#
+# The two vault tools are appended rather than listed: they are the SAME two objects the
+# firmware and persona agents bind, imported from one place, so the three agents cannot end up
+# writing to three different folders or describing the tool three different ways.
+TOOLS = [calculate_ipc2221_trace_width, extract_kicad_bom, analyze_kicad_pcb] + VAULT_TOOLS
 _BY_NAME = {t.name: t for t in TOOLS}
 
 # How much of a tool result is shown to the summarising model. A 200-part BOM is thousands of
@@ -111,6 +117,17 @@ def run_hardware_agent(query: str) -> str:
     response = llm_with_tools.invoke(prompt)
 
     if response.tool_calls:
+        # Vault calls are taken first and separately. They are not measurements, so the
+        # SUMMARY_PROMPT_TEMPLATE below — which is written entirely around "a hardware tool
+        # measured this, quote it exactly" — is the wrong frame for them: it would order the
+        # model to quote numbers out of a note that has none.
+        vault_results = run_vault_calls(response.tool_calls)
+        if vault_results:
+            summary = extract_text_content(
+                llm.invoke(followup_prompt(prompt, vault_results)).content)
+            joined = "\n\n".join(text for _name, text in vault_results)
+            return f"{summary}\n\nTool Execution Result: {joined}"
+
         tool_call = response.tool_calls[0]
         chosen = _BY_NAME.get(tool_call.get("name", ""))
         if chosen is None:
