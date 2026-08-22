@@ -228,6 +228,11 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
       than gain does. Confirm with `lsusb -t` before chasing the mic any further.
 - [ ] Ingest datasheet PDFs, `pip install -r requirements-rag.txt`, build the store, then a
       `verify_rag.py` that is meaningful rather than vacuous.
+- [ ] **Ingest the syllabi.** The ACADEMIC route is live and deployed but has nothing to read:
+      the RAG stack is not installed on the Pi, so it correctly refuses every question. Put
+      PDFs in `data/academic/`, `pip install -r requirements-rag.txt`, then
+      `python tools/vector_db.py` **and** `python tools/academic_calendar.py`. The second costs
+      one API call per syllabus file, once. Until then the deadline banner never fires. D11.
 - [ ] Re-measure turn latency **on the Pi** — the router leg logged 9.8s there against 750ms on
       Windows, and 52.7s for a first sympy import. Both want a warm re-run.
 - [ ] Consider D3 option 3: a local model for PERSONA, which has no quota.

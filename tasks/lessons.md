@@ -183,3 +183,23 @@ it. The absence was real; the inference was not.
 the place it would be — `find`, the package's own docs, or ask the program (`strace`, a `--help`
 that names its config path). Related to [[L7]]: both are correct observations of the wrong
 thing, and neither crashes.
+
+---
+
+## L11 — A substring check over a whole file matches the comment explaining it
+
+**From:** D11. A new harness check asserted that every package in `requirements.txt` appears in
+`stage_install.sh`, by searching the script's full text. Mutation-tested by deleting `sympy`
+from its install stage: **the check stayed green.** The script's own header comment explains
+*why sympy matters*, so `"sympy" in text` was true with the install line gone.
+
+**Why:** documentation about a thing contains the name of the thing. Any substring search over
+a file that includes prose is really searching two languages at once — the code and the
+commentary about the code — and the commentary is written precisely where the code is most
+load-bearing. The check was strictly worse than nothing: it occupied the slot a real check
+would have had, and reported green.
+
+**How to apply:** parse the lines that *do* something (`startswith("run ")`) rather than the
+file that describes them. And mutation-test every new check — break the thing it watches and
+confirm it goes red. This one was written, run, and passed before the mutation test showed it
+could not fail. Same family as [[L4]]: green is not the same as right.

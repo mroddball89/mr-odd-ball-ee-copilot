@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import re
 import sys
 from pathlib import Path
 
@@ -161,6 +162,45 @@ for mod_name, attr in TOOLS.items():
         check(hasattr(mod, attr), f"{mod_name}.{attr}")
     except Exception as exc:                                          # noqa: BLE001
         check(False, f"{mod_name}.{attr}", f"{type(exc).__name__}: {exc}")
+
+# ...and that the Pi's staged installer would actually INSTALL them.
+#
+# `stage_install.sh` groups packages by hand so a resolver backtrack is isolated to one group.
+# The cost of hand-grouping is drift: a package added to requirements.txt and not added there
+# is installed **nowhere**, and nothing reports it — the venv builds clean and the gap surfaces
+# later as a spoken error on the one route that needed it.
+#
+# That is not hypothetical. `sympy` and `kiutils` were both missing from every stage when this
+# check was written (2026-08-21), which on a fresh box means every derivative question answers
+# "ModuleNotFoundError" and every KiCad question answers with an install instruction. This is
+# the same failure shape as the sympy bug in this file's docstring, one layer earlier.
+#
+# Read ONLY the `run` lines, never the whole file. Searching the raw text was the first
+# version and it was vacuous: this script's own header comment explains why sympy matters, so
+# `"sympy" in text` was true with the install line deleted. Mutation-testing it — removing
+# sympy from its stage — is what exposed that, and the check stayed green. A check that cannot
+# go red is not a check, which is the lesson this file already teaches about the sandbox.
+_root = Path(__file__).resolve().parents[1]
+_reqs = (_root / "requirements.txt").read_text(encoding="utf-8")
+_stages = "\n".join(
+    line for line in (_root / "stage_install.sh").read_text(encoding="utf-8").splitlines()
+    if line.strip().startswith("run "))
+
+_wanted = []
+for _line in _reqs.splitlines():
+    _line = _line.split("#")[0].strip()
+    if not _line:
+        continue
+    # Name is everything before the first version specifier or extras bracket.
+    _name = re.split(r"[<>=!~\[;]", _line)[0].strip()
+    if _name:
+        _wanted.append(_name)
+
+_uncovered = [p for p in _wanted if p not in _stages]
+check(not _uncovered,
+      "every requirements.txt package appears in a stage_install.sh stage",
+      "" if not _uncovered else
+      f"INSTALLED NOWHERE on a fresh Pi: {', '.join(_uncovered)} — add them to a stage")
 
 # =========================================================================================
 section("3. the tools can actually DO their job")

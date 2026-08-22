@@ -36,7 +36,8 @@ to keep in step, only a second directory to fall back to.
 cd ~/OneDrive/Desktop/EE_copilot_project/MR_ODD_BALL
 tar czf - --exclude=venv --exclude=__pycache__ --exclude='*.pyc' --exclude=.git \
           --exclude=.env --exclude=voices --exclude=chroma_db --exclude=raw_downloads \
-          --exclude=captures . \
+          --exclude=captures --exclude=sd_card_memory.json --exclude=quiz_data.json \
+          --exclude=install.log . \
   | ssh oddball-pi "mkdir -p ~/mr-odd-ball && tar xzf - -C ~/mr-odd-ball"
 echo "PIPESTATUS: ${PIPESTATUS[@]}"      # BOTH must be 0
 ```
@@ -45,7 +46,31 @@ echo "PIPESTATUS: ${PIPESTATUS[@]}"      # BOTH must be 0
 failed outright still reports success. `~/oddball/CLAUDE.md` records this biting twice.
 
 `sd_card_memory.json` rides along despite being gitignored — `tar` does not read `.gitignore`.
-Delete it on the Pi so the box starts with its own memory and its own 15-day backup clock.
+On the **first** deploy, delete it on the Pi so the box starts with its own memory and its own
+15-day backup clock. On a **re-deploy, exclude it instead** — shipping the authoring machine's
+copy overwrites the Pi's real conversation log and resets its backup clock. Same for
+`quiz_data.json`. Added to the command above.
+
+### tar does not delete, so a re-deploy leaves orphans
+
+A file removed in a commit stays on the Pi forever. On 2026-08-21 that meant `DECISIONS.md`,
+`lessons.md` and `todo.md` were still sitting at the repo root from an older layout, and the
+root `DECISIONS.md` was a stale pre-D11 copy of the decision log — authoritative-looking, and
+wrong. Same hazard the two-directory split exists to avoid, arriving inside one directory.
+
+After a deploy that removed or moved any file, check for orphans:
+
+```bash
+git ls-files | LC_ALL=C sort > /tmp/git_files.txt
+ssh oddball-pi "cd ~/mr-odd-ball && find . -type f -not -path './venv/*' \
+  -not -path '*/__pycache__/*' -not -path './voices/*' -not -path './chroma_db/*' \
+  | sed 's|^\./||' | LC_ALL=C sort" > /tmp/pi_files.txt
+comm -13 /tmp/git_files.txt /tmp/pi_files.txt      # on the Pi, not in git
+```
+
+Expect `.env`, `venv/`, `models/whisper/`, `sd_card_memory.json`, `quiz_data.json`,
+`install.log` and `/tmp` logs. Anything else is an orphan — confirm it holds nothing unique
+(`diff` against its tracked twin) before removing it.
 
 ## What does NOT come in the tarball, and where to get it
 
