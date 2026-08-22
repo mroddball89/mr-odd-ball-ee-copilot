@@ -46,6 +46,50 @@ echo "PIPESTATUS: ${PIPESTATUS[@]}"      # BOTH must be 0
 **Check `PIPESTATUS`, always.** The pipeline's exit status comes from `ssh`, so a `tar` that
 failed outright still reports success. `~/oddball/CLAUDE.md` records this biting twice.
 
+### `git status` clean does NOT mean the tarball is clean
+
+Bit on 2026-08-22 and it is a property of this deploy method, not a one-off. `tar` ships the
+**working-copy bytes**; git shows you the **normalised** ones. With `* text=auto eol=lf` in
+`.gitattributes`, a working file full of CRLF hashes identically to its LF blob — so
+`git status` is clean, `git diff` is empty, and the tarball still carries `\r` onto the Pi:
+
+```
+tools/install_autostart.sh: line 25: $'\r': command not found
+tools/install_autostart.sh: line 26: set: pipefail: invalid option name
+```
+
+`.gitattributes` already predicted this exact failure and it happened anyway, because the
+protection it offers is on the git path and the deploy does not use the git path. Any Windows
+tool that rewrites a file — an editor, a script doing `Path.write_text()` — reintroduces CRLF
+silently, and nothing in the git workflow will tell you.
+
+Check the working copy directly before a deploy, not `git status`:
+
+```bash
+for f in stage_install.sh tools/*.sh config/*.desktop config/*.service; do
+  grep -qU $'\r' "$f" && echo "CRLF  $f"
+done
+```
+
+To fix, strip the CRs from the working copy — the blobs are already LF, so this shows up as
+nothing to commit:
+
+```bash
+python - <<'EOF'
+import subprocess, pathlib
+TEXT = {".py",".sh",".md",".txt",".toml",".csv",".html",".svg",".json",".service",".desktop"}
+for name in subprocess.run(["git","ls-files"],capture_output=True,text=True).stdout.split("\n"):
+    p = pathlib.Path(name)
+    if name and p.is_file() and p.suffix.lower() in TEXT:
+        raw = p.read_bytes()
+        if b"\r\n" in raw:
+            p.write_bytes(raw.replace(b"\r\n", b"\n")); print("fixed", name)
+EOF
+```
+
+Shell scripts and `.desktop` entries are where it bites first: a `#!/usr/bin/env bash\r` gives
+`bad interpreter`, and a desktop entry's `Exec=` line carries a trailing `^M` into the command.
+
 `sd_card_memory.json` rides along despite being gitignored — `tar` does not read `.gitignore`.
 On the **first** deploy, delete it on the Pi so the box starts with its own memory and its own
 15-day backup clock. On a **re-deploy, exclude it instead** — shipping the authoring machine's
