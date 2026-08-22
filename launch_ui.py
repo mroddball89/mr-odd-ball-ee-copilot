@@ -55,6 +55,16 @@ import urllib.request
 UI_URL = "http://127.0.0.1:8000/ui"
 HEALTH_URL = "http://127.0.0.1:8000/healthz"
 
+# The window. 150x150 since 2026-08-22.
+#
+# WINDOW_TITLE is not cosmetic — `tools/install_labwc_rule.sh` matches on it to pin the window
+# to the bottom-right corner and strip its decorations. Change it here and the rule stops
+# applying, silently, and the ball goes back to the middle of the screen with a title bar. The
+# installer writes the same string into the rule, so re-running it is the fix.
+WINDOW_TITLE = "Mr. Odd Ball"
+WINDOW_W = 150
+WINDOW_H = 150
+
 
 def _server_is_up(timeout: float = 1.0) -> bool:
     """True if something is answering on 8000.
@@ -113,12 +123,19 @@ def start_ui():
     import webview
 
     window = webview.create_window(
-        title='Mr. Odd Ball',
+        title=WINDOW_TITLE,
         url=UI_URL,
         frameless=True,
         transparent=True,
-        width=300,
-        height=300,
+        # 150x150, down from 300x300 on 2026-08-22. A 300px ball parked in the middle of the
+        # screen sat on top of the chat panel and read as an application rather than as a
+        # presence. `ui/avatar.html` sizes everything in vmin, so the ball and both animations
+        # scale with this number rather than needing to be re-tuned alongside it.
+        width=WINDOW_W,
+        height=WINDOW_H,
+        # on_top is REQUESTED here and GRANTED by the compositor, not by us. labwc disallows
+        # X11 always-on-top by default, so this line did nothing until the window rule set
+        # `allowAlwaysOnTop="yes"` — see tools/install_labwc_rule.sh.
         on_top=True
     )
     webview.start()

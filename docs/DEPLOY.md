@@ -419,6 +419,74 @@ and nobody has looked at the screen yet.
 It is deliberately not respawned when killed. A presence indicator that comes back when you
 dismiss it is a nuisance rather than a feature.
 
+### Pinning him to the corner — a labwc rule, because Wayland forbids the alternative
+
+**Wayland lets no client place its own window.** Not a labwc quirk, the protocol: there is no
+"put me at 1746,906" request for an ordinary toplevel. `hud/float.py` has the same constraint
+and simply accepts wherever it lands. So the placement has to come from the compositor.
+
+```bash
+bash tools/install_labwc_rule.sh            # install / update, then reload labwc
+bash tools/install_labwc_rule.sh --show     # print it, write nothing
+bash tools/install_labwc_rule.sh --remove   # take it out again
+```
+
+It writes `~/.config/labwc/rc.xml`, computing the corner from the **live** output size rather
+than a hardcoded 1920x1080 — re-run it after a resolution change. Verified on the box: the
+window reports `Absolute upper-left 1746,906` at `150x150`, exactly what the rule asked for.
+
+Three things the script is careful about, each of which would be a bad afternoon:
+
+- **A user `rc.xml` REPLACES the system one, it does not merge.** `/etc/xdg/labwc/rc.xml` is
+  183 lines of Pi OS defaults — keybindings, theme, mouse behaviour. Writing a minimal file
+  would silently discard all of it and present as "the desktop changed for no reason". The
+  script copies the system default as its base when no user file exists.
+- **It validates the XML before handing it to the compositor,** and reverts from the backup if
+  the edit is malformed. labwc falls back to defaults on a parse error, so one bad tag changes
+  the whole desktop with nothing pointing at the cause.
+- **It reloads with `SIGHUP`, not `labwc --reconfigure`.** `--reconfigure` reads `LABWC_PID`,
+  which is exported into the desktop *session* and is not in an ssh shell's environment — it
+  exits 1 with `[ERROR] LABWC_PID not set`. It is only a wrapper around `kill -HUP $LABWC_PID`
+  anyway.
+
+`SnapToEdge` looks like the right action and is not: it **resizes** the window to fill a
+quarter of the output, which would turn a 150px ball into a 960x540 one. `MoveTo` is the one.
+
+Two properties in the rule are not cosmetic:
+
+- `allowAlwaysOnTop="yes"` — **labwc disallows X11 always-on-top requests by default**, so
+  `on_top=True` in `launch_ui.py` had been doing nothing at all. The ball only looked like it
+  was on top because it happened to be mapped last.
+- `skipTaskbar="yes"` — a presence indicator with a taskbar button is incongruous. Drop the
+  attribute if you would rather alt-tab to him.
+
+`fixedPosition` is deliberately **not** set: it would nail him down properly and also disable
+interactive move, leaving no way to shift him without editing the file. `Super+drag` still
+works; the rule only decides where he starts.
+
+The rule applies **when the window is mapped**, so an already-open ball does not move. Restart
+it — and note the bracket, or `pkill -f` matches your own ssh command line and kills it:
+
+```bash
+pkill -f '[l]aunch_ui.py'
+tools/wait_for_ui.sh --timeout 20
+```
+
+### The window is 150x150 and the CSS is in vmin
+
+Down from 300x300 on 2026-08-22: a 300px ball mid-screen sat on top of the chat panel and read
+as an application rather than a presence.
+
+`ui/avatar.html` sizes **everything** in `vmin` — ball, roll travel, bounce height, glow — with
+one invariant at the top of the file:
+
+    --ball/2 + --roll + --glow  <=  50vmin        27 + 14 + 7 = 48
+
+The first version hardcoded a 120px ball with a `translateX(±80px)` roll. Dropped into a 150px
+window that animation throws the ball completely outside the viewport: he would vanish while
+thinking, which reads as a crash. Measured after the change, over four frames of each
+animation, the ball spans x 11..143 and y 15..126 of a 150px window — inside at every extreme.
+
 ### `--system-site-packages`, and why the venv had to change
 
 `pywebview` reaches for PyGObject at `webview.start()`. PyGObject is a Debian *system* package

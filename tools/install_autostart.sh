@@ -57,6 +57,13 @@ status() {
     else
         say "not installed"
     fi
+    echo "== labwc rule: is the ball pinned to the corner? =="
+    if grep -q "mr-odd-ball avatar rule" "$HOME/.config/labwc/rc.xml" 2>/dev/null; then
+        say "installed: $(grep -o 'MoveTo x=\"[0-9]*\" y=\"[0-9]*\"' "$HOME/.config/labwc/rc.xml" | head -1)"
+    else
+        say "NOT installed — he will land wherever labwc puts him, mid-screen."
+        say "  bash tools/install_labwc_rule.sh"
+    fi
     echo "== does the unit actually carry --avatar? =="
     if [ -f "$UNIT_DIR/$UNIT" ]; then
         if grep -q -- '--avatar' "$UNIT_DIR/$UNIT"; then
@@ -178,6 +185,14 @@ do_install() {
   tools/wait_for_ui.sh, which polls http://127.0.0.1:8000/healthz for up to 90s before opening
   the window — the assistant loads whisper off an SD card and can be 20-30s behind the desktop,
   and a desktop entry has no way to be ordered after a systemd unit.
+
+  He is pinned to the bottom-right corner by a labwc window rule, because Wayland lets no
+  client place its own window. That rule is NOT installed by this script — it edits
+  ~/.config/labwc/rc.xml, which is your desktop, not ours:
+
+    bash tools/install_labwc_rule.sh          150x150, bottom-right, undecorated, on top
+    bash tools/install_labwc_rule.sh --show   print it without writing anything
+    bash tools/install_labwc_rule.sh --remove take it back out
 
     curl -s localhost:8000/healthz         is the server up, and what state is it holding
     tools/wait_for_ui.sh --timeout 10      open the window now, without waiting for a reboot
