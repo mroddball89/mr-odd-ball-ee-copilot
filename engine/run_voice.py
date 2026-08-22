@@ -231,6 +231,14 @@ async def main(argv: list[str] | None = None) -> int:
                          "question gets the reflex tier's fallback line. Starts in seconds "
                          "and needs no GGUF — the fastest way to tell a model problem from a "
                          "pipeline problem.")
+    ap.add_argument("--avatar", action="store_true",
+                    help="also serve the floating desktop avatar on http://127.0.0.1:8000/ui, "
+                         "then open it with `python launch_ui.py`. In THIS process on purpose: "
+                         "state is published in-process (ui/avatar_state.py), so a separately "
+                         "started server would show a ball that never moves.")
+    ap.add_argument("--avatar-port", type=int, default=8000, metavar="PORT",
+                    help="port for --avatar (default 8000). The character rig is unaffected; "
+                         "it stays on hud.port.")
     ap.add_argument("--no-gate", action="store_true",
                     help="leave the microphone open while he speaks. Only useful for measuring "
                          "what the gate is worth — without it he can hear himself, and any "
@@ -275,6 +283,24 @@ async def main(argv: list[str] | None = None) -> int:
     server = await bridge.start()
     loop = asyncio.get_running_loop()
     await bridge.broadcast({"type": "state", "value": rest})
+
+    # The floating desktop avatar, opt-in. It runs in this process because that is the only
+    # arrangement where it sees live state — `HudBridge.set_state` mirrors into
+    # `ui/avatar_state.py`, and a server started separately would publish nothing.
+    #
+    # Failure here is logged and swallowed: FastAPI and uvicorn are UI extras, and a box that
+    # never installed them must still get an assistant with a voice.
+    if args.avatar:
+        try:
+            from ui.server import serve_in_thread
+            serve_in_thread(port=args.avatar_port)
+            from ui.avatar_state import publish as publish_avatar
+            publish_avatar(rest)
+            LOG.info("avatar: python launch_ui.py   (or open "
+                     "http://127.0.0.1:%d/ui)", args.avatar_port)
+        except Exception as exc:                                          # noqa: BLE001
+            LOG.warning("--avatar could not start (%s: %s). "
+                        "pip install fastapi uvicorn pywebview", type(exc).__name__, exc)
 
     stop = threading.Event()
     idle_handle: asyncio.TimerHandle | None = None

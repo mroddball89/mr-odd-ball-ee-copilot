@@ -33,6 +33,8 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from engine.models import PERSONA_MODEL
 from engine.llm_text import extract_text_content
+from tools.knowledge_vault import (VAULT_INSTRUCTION, VAULT_TOOLS, followup_prompt,
+                                   run_vault_calls)
 from tools.memory_manager import format_memory_for_llm
 
 # Verbatim from brains/local.py. Do not "improve" the wording — it is the character.
@@ -59,6 +61,12 @@ because a symbol is read aloud as its name and that is never what you meant.
 
 LB says: {question}
 """
+    + VAULT_INSTRUCTION
+    + """
+Saying something out loud from the vault is still SPEECH: one to three short sentences, no
+markdown, no file paths. "I've written that down" is the whole confirmation — do not read the
+folder and filename aloud.
+"""
 )
 
 
@@ -79,4 +87,16 @@ def run_persona_agent(query: str) -> str:
     prompt_template = ChatPromptTemplate.from_template(PERSONA_PROMPT_TEMPLATE)
     prompt = prompt_template.format(chat_history=history, question=query)
 
-    return extract_text_content(llm.invoke(prompt).content)
+    # This is also the GENERAL route — `engine/core.py` sends both here — which is why the
+    # vault is bound to the character rather than to a separate catch-all agent. "Remember
+    # that I'm using the 2N3904" is a thing LB says in passing, not a hardware query, and it
+    # would otherwise route to PERSONA and be forgotten in forty turns.
+    #
+    # Same bounded two-step as the firmware agent: tools on the first pass, off on the second.
+    response = llm.bind_tools(VAULT_TOOLS).invoke(prompt)
+
+    vault_results = run_vault_calls(getattr(response, "tool_calls", None))
+    if vault_results:
+        response = llm.invoke(followup_prompt(prompt, vault_results))
+
+    return extract_text_content(response.content)

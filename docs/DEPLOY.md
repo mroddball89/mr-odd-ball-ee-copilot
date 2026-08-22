@@ -1,7 +1,8 @@
 # Putting him on the Pi
 
-_Last updated: 2026-08-19 — written during the first deploy of the merged copilot, so
-everything here is what actually happened rather than what should have._
+_Last updated: 2026-08-22 — written during the first deploy of the merged copilot and extended
+for the avatar, the vault and gesture approval. Everything here is what actually happened
+rather than what should have._
 
 ## The box
 
@@ -37,7 +38,7 @@ cd ~/OneDrive/Desktop/EE_copilot_project/MR_ODD_BALL
 tar czf - --exclude=venv --exclude=__pycache__ --exclude='*.pyc' --exclude=.git \
           --exclude=.env --exclude=voices --exclude=chroma_db --exclude=raw_downloads \
           --exclude=captures --exclude=sd_card_memory.json --exclude=quiz_data.json \
-          --exclude=install.log . \
+          --exclude=install.log --exclude=vault --exclude='*.task' . \
   | ssh oddball-pi "mkdir -p ~/mr-odd-ball && tar xzf - -C ~/mr-odd-ball"
 echo "PIPESTATUS: ${PIPESTATUS[@]}"      # BOTH must be 0
 ```
@@ -80,6 +81,8 @@ Expect `.env`, `venv/`, `models/whisper/`, `sd_card_memory.json`, `quiz_data.jso
 | `voices/` | `cp ~/oddball/voices/en_US-joe-medium.onnx* voices/` |
 | `models/whisper/` | `cp -r ~/oddball/models/whisper models/` — or let faster-whisper re-download |
 | `venv/` | built on the box; wheels are architecture-specific |
+| `models/hand_landmarker.task` | `venv/bin/python tools/gesture_control.py --fetch-model` (7.8 MB) |
+| `vault/` | LB's own notes; the Pi keeps its own, excluded from the tar above |
 
 `models/hey_mr_odd_ball.onnx` **is** committed and does arrive — it is the trained wake word,
 790 KB, and losing it means a Colab run.
@@ -117,10 +120,28 @@ and Tier 3 was never actually reachable there. Do not copy it and assume you hav
 
 ```bash
 cd ~/mr-odd-ball
-python3 -m venv venv
+python3 -m venv --system-site-packages venv
 venv/bin/pip install --upgrade pip
 setsid nohup ./stage_install.sh > install.log 2>&1 < /dev/null &
 ```
+
+**`--system-site-packages` is new as of 2026-08-22 and it is for `pywebview`.** PyGObject is a
+Debian *system* package (`python3-gi`) and is not pip-installable into a plain venv, so a
+sealed venv gives `launch_ui.py` a `ModuleNotFoundError: No module named 'gi'` at
+`webview.start()` — the same trap `hud/float.py` sidesteps by running on `/usr/bin/python3`.
+`launch_ui.py` cannot do that, because it needs `pywebview` *from the venv*. So the venv has to
+be able to see both.
+
+The existing venv was built without it. Rather than rebuild 1.9 G, `--system-site-packages` can
+be turned on in place by editing one line in `venv/pyvenv.cfg`:
+
+```bash
+sed -i 's/^include-system-site-packages = false/include-system-site-packages = true/' venv/pyvenv.cfg
+venv/bin/python -c 'import gi; print("gi ok")'
+```
+
+This is the one place the merged repo departs from "a lean venv on purpose". It is scoped to
+making `gi` visible; nothing is installed into the venv by it.
 
 Then, from the desktop, poll `install.log`. Three things were learned the hard way:
 
@@ -141,6 +162,162 @@ into the HDMI card while the speaker sits silent.
 
 `openwakeword` installs with `--no-deps`; it declares `tflite-runtime`, which publishes no
 wheels for Python 3.12+, and we never load tflite (`framework = "onnx"` in the config).
+
+## The apt packages pip cannot give you
+
+Five, and every one of them fails the same nasty way: the Python import succeeds and the thing
+breaks later, at runtime, with nothing pointing back here.
+
+```bash
+sudo apt install libportaudio2 pipewire-alsa python3-gi gir1.2-webkit2-4.1 python3-gi-cairo
+```
+
+| package | what breaks without it |
+|---|---|
+| `libportaudio2` | `sounddevice` imports and finds no device |
+| `pipewire-alsa` | playback "succeeds" into HDMI while the Bluetooth speaker sits silent |
+| `python3-gi` | `webview.start()` dies looking for a GUI toolkit |
+| `gir1.2-webkit2-4.1` | pywebview's GTK backend has no web view to put in the window |
+| `python3-gi-cairo` | the transparent surface has no renderer |
+
+**Checked on the box, 2026-08-22:** `python3-gi`, `python3-gi-cairo`, `libportaudio2` and
+`pipewire-alsa` are already installed — they came in with `hud/float.py`. **`gir1.2-webkit2-4.1`
+is NOT**, and it is the one the avatar needs. The Pi has `gir1.2-webkit-6.0` and
+`libwebkitgtk-6.0-4` instead, which is the GTK4 WebKit `float.py` uses; pywebview's GTK backend
+asks for the GTK3 WebKit2 4.1 typelib by name and will not take the 6.0 one in its place.
+
+`stage_install.sh` now checks all five with `dpkg-query` at the top of the run and prints the
+exact `apt install` line for whichever are missing. It does **not** install them: the script is
+run detached and unattended, and `sudo` in a detached job either blocks forever on a password
+prompt or succeeds silently where it should have asked.
+
+## Gesture approval: mediapipe 1.x, and NOT a Python downgrade
+
+**Read this before anyone acts on the older note about Python 3.12.** That note is wrong and is
+retracted — the full correction is D14.
+
+The claim was that mediapipe's aarch64 wheels stop at cp312, so the Pi's Python 3.13.5 could
+never install it and the venv would have to be rebuilt on 3.12. It was checked against the
+0.10.x series only, and the series moved underneath it:
+
+| | `mp.solutions.hands` | aarch64 wheel | Python |
+|---|---|---|---|
+| mediapipe 0.10.18 | yes | cp39–cp312 | 3.12 and below |
+| mediapipe 0.10.20+ | yes | **none at all** | — |
+| **mediapipe 1.0.1** | **removed** | `py3-none-manylinux_2_28_aarch64` | **any 3.x** |
+
+`py3-none` is ABI-independent. Verified on the box itself:
+
+```
+$ venv/bin/pip install --dry-run --no-input mediapipe
+Would install ... mediapipe-1.0.1 opencv-contrib-python-5.0.0.93 ...
+```
+
+It resolves cleanly on the venv that is already there. **Do not rebuild the venv on 3.12 for
+this.** It would also be an expensive mistake to try: Debian 13 (trixie) ships exactly one
+Python 3 and it is 3.13 — `apt-cache policy python3.12` on this Pi returns nothing at all, and
+neither `uv` nor `pyenv` is installed. Getting a 3.12 there means sourcing an interpreter
+Debian does not package, then rebuilding a 1.9 G venv against it, in order to pin a mediapipe
+from November 2024.
+
+What the change cost instead: mediapipe 1.x removed `mp.solutions`, so
+`tools/gesture_control.py` was ported to the Tasks API. It supports **both** now —
+`HandLandmarker` preferred, legacy `Hands` if that is what is installed — sharing one
+`_classify()`, because both APIs return the same 21 normalised landmarks in the same order. An
+existing 3.12 box pinned to 0.10.18 keeps working unchanged.
+
+### The model file, which does not arrive in the tarball
+
+The Tasks API needs `models/hand_landmarker.task`, 7.8 MB, gitignored — same class as the
+whisper models.
+
+```bash
+venv/bin/python tools/gesture_control.py --fetch-model
+venv/bin/python tools/gesture_control.py --backend      # expect: backend tasks
+```
+
+`stage_install.sh` fetches it automatically after the `vision` stage. Fetched there rather than
+left to the docs because a missing model is a *silent* loss of the feature: `get_gesture()`
+returns `NO_CAMERA`, which reads as a camera fault and sends you to the wrong place entirely.
+
+`--backend` is the one command to run when gesture approval is not working. It reports which
+mediapipe API loaded, whether the model is present, and why not if not.
+
+**opencv-python is deliberately not installed.** mediapipe pulls `opencv-contrib-python`, a
+superset providing the same `cv2`; installing both makes two distributions fight over one
+import name.
+
+## The floating avatar
+
+Three pieces, and the split between them is the part worth understanding:
+
+| | where it runs | started by |
+|---|---|---|
+| the FastAPI server | **inside the assistant** | `oddball.service`, via `--avatar` |
+| the state | in-process, from `hud_bridge.set_state()` | — |
+| the window | the desktop session | `~/.config/autostart/mroddball.desktop` |
+
+**The server is not its own service, and must not become one.** State is published in-process:
+`orchestrator/hud_bridge.set_state()` mirrors into `ui/avatar_state.py`, and `ui/server.py`
+reads from there. A separately started server serves the page perfectly and then shows a ball
+that never moves — it would look like a UI bug and be an architecture mismatch. So
+`config/oddball.service` carries `--avatar`, and the window is the only thing autostarted.
+
+```bash
+bash tools/install_autostart.sh            # installs all three, rewrites paths to this checkout
+bash tools/install_autostart.sh --status   # includes: does the unit actually carry --avatar
+```
+
+The autostart entry Execs `tools/wait_for_ui.sh`, which polls `/healthz` for up to 90 s before
+opening the window. **A `sleep 5` would lose this race** — the assistant loads faster-whisper
+off an SD card and `:8000` can be 20–30 s behind the desktop appearing, and a desktop entry has
+no way to be ordered after a systemd user unit. The poll turns a guessed duration into a
+checked fact, which is the same argument the rig already makes by retrying its WebSocket
+instead of being ordered after the bridge.
+
+```bash
+curl -s localhost:8000/healthz          # {"ok":true,"state":"sleeping","clients":0}
+tools/wait_for_ui.sh --timeout 10       # open the window now, without a reboot
+pkill -f launch_ui.py                   # close it — it is frameless, there is no button
+journalctl --user -t mroddball          # why it did not appear at login
+```
+
+It is deliberately not respawned when killed. A presence indicator that comes back when you
+dismiss it is a nuisance rather than a feature.
+
+### `--system-site-packages`, and why the venv had to change
+
+`pywebview` reaches for PyGObject at `webview.start()`. PyGObject is a Debian *system* package
+and is not pip-installable into a plain venv, so a sealed venv gives
+`ModuleNotFoundError: No module named 'gi'`. `hud/float.py` dodges this by running on
+`/usr/bin/python3`; `launch_ui.py` cannot, because it needs `pywebview` *from the venv*.
+
+Confirmed on the box: `/usr/bin/python3 -c 'import gi'` gives 3.50.0, `venv/bin/python` gives
+`ModuleNotFoundError`, and `venv/pyvenv.cfg` says `include-system-site-packages = false`.
+
+New venvs get `python3 -m venv --system-site-packages venv`. The existing 1.9 G venv does not
+need rebuilding — flip the one line:
+
+```bash
+sed -i 's/^include-system-site-packages = false/include-system-site-packages = true/' \
+    ~/mr-odd-ball/venv/pyvenv.cfg
+venv/bin/python -c 'import gi; print("gi ok")'
+```
+
+This is the one place the merged repo departs from "a lean venv on purpose". It is scoped to
+making `gi` visible and installs nothing. venv packages still shadow system ones, so it does
+not change which numpy or scipy is used.
+
+## The vault
+
+`vault/` is LB's long-term Markdown memory (D13), written by the HARDWARE, FIRMWARE and
+GENERAL agents. **It is his data, in the same class as `sd_card_memory.json`** — gitignored
+except for a `.gitkeep`, and it must be **excluded from a re-deploy** or the authoring box's
+copy overwrites the Pi's. Already in the tar command above.
+
+```bash
+venv/bin/python tools/knowledge_vault.py --list
+```
 
 ## sympy IS installed, and that was not obvious
 

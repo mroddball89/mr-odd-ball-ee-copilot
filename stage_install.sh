@@ -34,6 +34,37 @@
 cd "$HOME/mr-odd-ball" || exit 1
 PIP="venv/bin/pip"
 
+# ---------------------------------------------------------------------------------------
+# The apt packages pip cannot supply. NOT installed here — this script is run detached and
+# unattended, and `sudo` in a detached job either blocks forever on a password prompt or
+# succeeds silently on a box where it should have asked. It CHECKS and reports instead, at
+# the top, where the answer is still on screen when the pip stages finish.
+#
+# Each one fails in the same nasty way: the Python import succeeds and the thing breaks at
+# runtime, hours later, with no pointer back here.
+#
+#   libportaudio2     PortAudio itself. Without it sounddevice imports and finds no device.
+#   pipewire-alsa     ALSA's route to the PipeWire sink the Bluetooth speaker lives on.
+#                     Without it playback "succeeds" into HDMI while the speaker sits silent.
+#   python3-gi        \
+#   gir1.2-webkit2-4.1 > pywebview's GTK backend. `import webview` succeeds without them and
+#   python3-gi-cairo  /  webview.start() then dies looking for a toolkit (launch_ui.py).
+# ---------------------------------------------------------------------------------------
+APT_NEEDED=(libportaudio2 pipewire-alsa python3-gi gir1.2-webkit2-4.1 python3-gi-cairo)
+MISSING=()
+for pkg in "${APT_NEEDED[@]}"; do
+  dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed" || MISSING+=("$pkg")
+done
+if [ ${#MISSING[@]} -gt 0 ]; then
+  echo "=== APT PACKAGES MISSING — pip cannot provide these, install them yourself:"
+  echo "      sudo apt install ${MISSING[*]}"
+  echo "=== continuing with the pip stages; the gap is above, not below."
+  echo
+else
+  echo "=== apt prerequisites all present"
+  echo
+fi
+
 run() {
   local name="$1"; shift
   echo "=== STAGE $name START $(date +%H:%M:%S)"
@@ -50,7 +81,45 @@ run tools  langchain-community langchain-text-splitters langchain-experimental
 run agents 'sympy>=1.13' 'kiutils>=1.4.8'
 run search ddgs duckduckgo-search
 
+# The desktop avatar (ui/server.py + launch_ui.py). Its own stage because it is OPTIONAL: the
+# assistant runs without it, every import of it is guarded, and a failure here must not read
+# as a failed install.
+run ui     fastapi uvicorn pywebview
+
+# Gesture approval. mediapipe >= 1.0 ships one py3-none aarch64 wheel, so this DOES install on
+# the Pi's Python 3.13 — verified with `pip install --dry-run` on the box (D14). An earlier
+# version of this comment said it was expected to fail; that was checked against the 0.10.x
+# series only, and was wrong.
+#
+# opencv is not named here on purpose: mediapipe pulls opencv-contrib-python, and installing
+# opencv-python beside it makes two distributions fight over the `cv2` import name.
+#
+# Still its own stage, and still optional: if it fails, get_gesture() returns NO_CAMERA and
+# approval falls back to the keyboard. Separate from `ui` so it cannot take fastapi down.
+run vision mediapipe
+
 echo "=== ALL STAGES DONE $(date +%H:%M:%S)"
 echo
+
+# The gesture model is 7.8 MB, gitignored, and does not arrive in the tarball — same class as
+# the whisper models. Fetched here rather than left to the docs because a missing model is a
+# SILENT loss of the feature: get_gesture() reports NO_CAMERA, which reads as a camera fault.
+if [ -f venv/bin/python ] && venv/bin/python -c 'import mediapipe' 2>/dev/null; then
+  echo "=== fetching the hand landmarker model"
+  venv/bin/python tools/gesture_control.py --fetch-model || \
+    echo "    fetch failed — rerun it by hand; gesture approval is off until it lands"
+  echo
+fi
+
+if [ ${#MISSING[@]} -gt 0 ]; then
+  echo "REMINDER — these apt packages are still missing:"
+  echo "  sudo apt install ${MISSING[*]}"
+  echo
+fi
+
 echo "Now run the harness — it is what catches a package that installed nowhere:"
 echo "  venv/bin/python tools/verify_agents.py"
+echo
+echo "Then check the two new subsystems report for themselves:"
+echo "  venv/bin/python tools/gesture_control.py --backend    # expect: backend tasks"
+echo "  venv/bin/python -m ui.server --demo &                 # then curl :8000/healthz"

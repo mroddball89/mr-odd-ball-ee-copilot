@@ -50,6 +50,15 @@ from websockets.http11 import Response
 
 LOG = logging.getLogger("oddball.hud")
 
+# The desktop avatar's state channel. Stdlib only — importing it does NOT pull FastAPI in, so
+# the voice loop still starts on a box where the UI extras were never installed. Guarded all
+# the same: a missing `ui/` costs the floating ball, never the assistant.
+try:
+    from ui.avatar_state import publish as _publish_avatar
+except Exception:                                                          # noqa: BLE001
+    def _publish_avatar(_name: str) -> None:                               # type: ignore[misc]
+        return None
+
 HUD_DIR = Path(__file__).resolve().parents[1] / "hud"
 
 # Only these are ever served. A directory of two files does not need a general static server,
@@ -217,7 +226,19 @@ class HudBridge:
 
     # convenience wrappers, so callers never hand-build the envelope
     def set_state(self, name: str) -> None:
+        """Set his state on the rig — and on the desktop avatar, from the one call.
+
+        The avatar (`ui/avatar.html`, served on port 8000) is a second surface showing the
+        same thing, and two surfaces reading two sources is how they come to disagree. There
+        is exactly one writer of state in this program and it is the engine; this line is the
+        mirror, not a second copy.
+
+        `ui.avatar_state` is stdlib-only by design, so this import cannot drag FastAPI onto
+        the voice loop's critical path — see that module's header. It is still guarded,
+        because a missing `ui/` must cost the floating ball and nothing else.
+        """
         self.broadcast_threadsafe({"type": "state", "value": name})
+        _publish_avatar(name)
 
     def play_gesture(self, name: str) -> None:
         self.broadcast_threadsafe({"type": "gesture", "value": name})

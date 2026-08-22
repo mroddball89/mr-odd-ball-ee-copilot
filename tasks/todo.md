@@ -245,3 +245,74 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
 - [ ] Re-measure turn latency **on the Pi** — the router leg logged 9.8s there against 750ms on
       Windows, and 52.7s for a first sympy import. Both want a warm re-run.
 - [ ] Consider D3 option 3: a local model for PERSONA, which has no quota.
+
+---
+
+## Stage 10 — The vault, the desktop avatar, and gesture approval
+
+**2026-08-21.** Three features on `oddball-integration`. Full reasoning in `docs/DECISIONS.md` D13.
+
+- [x] `tools/knowledge_vault.py` — Markdown long-term memory under `vault/`, with a path-traversal
+      guard and a 24k-character cap on what one search may put into a prompt
+- [x] Bound `save_to_vault` / `read_from_vault` to **HARDWARE, FIRMWARE and GENERAL/persona** as
+      the same two tool objects; FIRMWARE and PERSONA gained their first tool-call path, bounded
+      at one round by unbinding the tools on the second invoke
+- [x] `ui/avatar.html` — the floating ball: roll while thinking, bounce while speaking, dimmed
+      while asleep, greyed when the socket is gone, with backoff reconnect
+- [x] `ui/server.py` — FastAPI. `GET /ui`, `GET /healthz`, `WS /ws/state`
+- [x] `ui/avatar_state.py` — stdlib-only fan-out, so `hud_bridge` can mirror state into the
+      overlay without dragging FastAPI onto the voice loop's import path
+- [x] `HudBridge.set_state()` mirrors to the avatar — **one writer of state, two surfaces**
+- [x] `launch_ui.py` — frameless transparent pywebview window, not Chromium
+- [x] `engine/run_voice.py --avatar [--avatar-port]`, in-process because state is published
+      in-process; `python main.py --avatar` forwards it
+- [x] `tools/gesture_control.py` — thumbs up at the camera instead of typing `y`
+- [x] Wired into the terminal security checks in `agents/os_agent.py` and `agents/web_agent.py`
+- [x] `requirements.txt` + `stage_install.sh` — separate `ui` and `vision` stages
+
+### Review
+
+**Verified, on the Windows authoring box:**
+
+| check | result |
+|---|---|
+| every touched file byte-compiles | 13/13 |
+| all five agents import; vault bound as the same objects | pass |
+| three prompts format and name both tools | pass |
+| vault: write, append, search by name, search by body, miss | pass |
+| vault: `folder="../../etc"`, `filename="../../../pwned.md"` | contained at `vault/etc/pwned.md` |
+| gesture classifier, 6 cases, no camera | 6/6 |
+| `get_gesture()` / `gesture_approves()` with no camera | `NO_CAMERA` / `False` |
+| `GET /ui`, `/healthz`, `/` redirect | 200 |
+| `bridge.set_state()` → `/ws/state` | `sleeping, thinking, speaking, idle` |
+| subscribers released on disconnect, ×3 cycles | 0 clients each time |
+| `verify_chat.py` (HudBridge — the edited file) | 39/39 |
+| `verify_os_guard.py` | 75/75 |
+| `verify_engine.py` | 97/97 |
+| `verify_typed.py` | 81/81 |
+| `verify_speakable.py` | 59/59 |
+
+### What didn't work
+
+- **The obvious thumbs-up test approves an open palm.** `thumb_tip < index_mcp and thumb_tip <
+  wrist` is true of any raised hand. On the OS path that turns a wave into an approved shell
+  command. Fixed by requiring all four fingers curled and testing `OPEN_PALM` first; the case is
+  now row 3 of the classifier test.
+- **The `/ws/state` handler leaked subscribers.** Blocked on `await queue.get()`, so a closed
+  window went unnoticed until the next state change and `/healthz` over-counted. A task now races
+  the receive side.
+- **`import webview` at the top of `launch_ui.py`** meant a box without pywebview got a bare
+  `ModuleNotFoundError` and the "is anything even serving `/ui`?" check never ran — the least
+  useful of three possible messages, printed instead of the most useful. Import moved inside.
+
+### Still open — needs the Pi, and no number here came off it
+
+- [ ] **mediapipe has no cp313 aarch64 wheel** and the Pi is on 3.13.5, so gesture approval is
+      expected to be *uninstalled* there. Decide: leave it (keyboard still approves) or move the
+      copilot to a 3.12 venv. `opencv-python` installs fine either way.
+- [ ] `sudo apt install python3-gi gir1.2-webkit2-4.1 python3-gi-cairo` before `launch_ui.py`
+- [ ] Measure camera-open + inference latency per approval → `media/data/`
+- [ ] Measure overlay RSS vs. a Chromium window on the same page → `media/data/`
+- [ ] Confirm `transparent=True` composites under Bookworm's Wayfire session
+- [ ] A `tools/verify_vault.py` in the house style, so the checks above are a committed harness
+      rather than something run once in a session
