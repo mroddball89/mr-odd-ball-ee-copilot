@@ -133,9 +133,14 @@ one that would not exist if the harness only verified imports.
 ## Torch is NOT installed, deliberately
 
 `requirements.txt` does not pull `sentence-transformers`, and therefore does not pull torch.
-The RAG stack lives in `requirements-rag.txt` and is only needed to run `tools/vector_db.py`.
-Without it `get_retriever()` returns None, the firmware agent answers ungrounded and says so,
-and every other route is untouched. See the header of that file.
+The RAG stack lives in `requirements-rag.txt` and is only needed to run `tools/vector_db.py`
+and `tools/academic_calendar.py`. Without it `get_retriever()` returns None, the firmware agent
+answers ungrounded and says so, the academic agent says it does not know, and every other route
+is untouched. See the header of that file.
+
+The deadline banner is unaffected by any of this: `load_calendar()` returns `[]` when
+`academic_calendar.json` does not exist, so a Pi with no syllabi and no torch simply never shows
+one. Absent is the normal state, not a broken install.
 
 ## Known: an unexplained reboot
 

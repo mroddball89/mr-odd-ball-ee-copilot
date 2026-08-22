@@ -485,3 +485,100 @@ human can close it.
   passed on Windows and failed on the Pi.
 - **A regex that stripped `%f` before unescaping `%%`**, turning `%%f` into `%` instead of `%f`.
   Field codes need one left-to-right pass. The harness caught it.
+
+---
+
+## D11 — Syllabi get their own collection, and the deadline banner is global
+
+**2026-08-21.** LB asked for two architectural corrections — remove a tier system in favour of
+a router, and make knowledge agents retrieve locally before generating. **Both were already
+built** (D1 removed the tiers on 2026-08-19; `agents/firmware_agent.py` has queried ChromaDB
+before calling Gemini since the same day). Checked before changing anything, and recorded here
+because "it already works" is a finding, not a non-event: the request was aimed at a version of
+the repo that no longer exists.
+
+What was genuinely missing was the **ACADEMIC route**. `agents/lab_agent.py` was a 0-byte stub,
+in no enum and no dispatch table.
+
+### The syllabus lives in a second collection, not a second store and not one pool
+
+`tools/vector_db.py` embedded everything under `data/` into one Chroma collection. Dropping
+syllabi in there would have let a course outline ground a firmware answer: semantic search ranks
+by similarity alone and has no idea what kind of document a chunk came from.
+
+Two named collections in the same store — `datasheets` (everything except `data/academic/`) and
+`academic` — rather than one pool with a metadata filter. **A filter is a thing you can forget
+to pass; a collection is not.** `get_retriever(k, collection=...)` defaults to `datasheets`, so
+the existing firmware call site did not change and a caller who omits the argument gets the safe
+one.
+
+The exclusion is by resolved **path**, not by substring. `"academic" in source` would also drop
+`data/sensors/academic_press_sensor.pdf` — losing a datasheet because of its filename, silently.
+Verified in both directions against a throwaway store built from that exact adversarial name.
+
+**This renames the pre-existing collection** (Chroma's default was `langchain`), so an old store
+reads as empty rather than failing. `chroma_db/` is gitignored and rebuilding is already the
+documented step after adding PDFs.
+
+### The academic agent is stricter than the firmware agent, on purpose
+
+The firmware agent may fall back on its own knowledge when the datasheets fall short, provided
+it says so. That is right for firmware: an ESP32 register is public record and checkable.
+
+**A syllabus is not public record.** There is no general knowledge about when LB's midterm is,
+so a fluent answer is a *fabricated* one with nothing to check it against — and it is the worst
+shape in this repo, the same one D8 and D9 both document: a confident number nobody would
+question. "Your project is due the 24th" is exactly that. So the prompt is LB's directive
+unhedged — answer from the provided context ONLY, otherwise say you do not know. No
+"but generally". There is no generally.
+
+### Dates are extracted once, because the banner had to be free
+
+Retrieval is the wrong tool for "what's due Friday": asked for what is due soonest, a semantic
+search returns the paragraph that reads most like the question, not the one with the nearest
+date. So `tools/academic_calendar.py` extracts dates into `academic_calendar.json` as a **build
+step** — one Gemini call per syllabus file, paid on the day a syllabus is added.
+
+That split is what makes the next decision affordable at all.
+
+### The banner is global — LB's call, against the first proposal
+
+It was first scoped to ACADEMIC-routed turns. LB overruled that: it fires on **every** turn, like
+`_with_backup_reminder`, whether he asked about firmware, the time, or nothing at all. He is
+right, and the reason is the one that makes reminders worth having — scoped to coursework
+questions, he would only ever see it when he was already thinking about coursework. A deadline
+warning that fires while he is debugging firmware at 2am is the one that earns its place.
+
+It costs **a JSON read and no API call**, which is the only reason it can sit on the turn path
+under D3's 20-requests-per-day ceiling. A check that cost a request could not go there at any
+price. Shown and never spoken, for `_with_backup_reminder`'s reason: an alarm read aloud in the
+middle of an unrelated answer is startling.
+
+Because the check is global, `academic_agent.py` deliberately does **not** append its own
+deadline card — otherwise the one route where LB is already discussing coursework is the one
+that shows it twice.
+
+**Scope, stated rather than assumed:** it reaches routed and free turns, and *not* quiz mode or
+a pending approval's yes/no. Those are conversations already in progress rather than fresh
+questions, and it is exactly where the backup reminder already draws the line. Worth knowing it
+is a line, not an oversight — if LB wants it inside the quiz lock too, that is one more call.
+
+### What was verified
+
+`tools/verify_agents.py` — 52/52 offline, no key needed (D7). The route-coverage assertion
+(`set(ROUTE_TARGETS) == set(AgentRoute)`) is what forces a new enum member to be wired into
+`_dispatch` rather than merely importable. Beyond the harness, three properties were proved
+directly:
+
+| property | how |
+|---|---|
+| the banner shows on a **non**-academic, **zero-API-call** turn, unspoken | UTILITY turn with `router_agent` patched to raise — nothing reached the router |
+| retrieve **then** generate, on the `academic` collection, with the strict directive in the prompt | call order recorded against a fake LLM |
+| a syllabus cannot be retrieved from `datasheets`, or a datasheet from `academic` | real embeddings, real Chroma, throwaway store, adversarial filename |
+
+### Deliberately not built
+
+Per-course filtering ("what's due in ECE 350"), recurring deadlines, and any write path — he
+reads the calendar and never edits it. Adding a deadline by voice means a spoken date reaching a
+file that a warning banner is driven from, and `tiny.en` is the transcriber that turned "What is
+the date?" into "What is today?" (D5).

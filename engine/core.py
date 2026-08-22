@@ -33,7 +33,10 @@ It deliberately does NOT hold the conversation history. That already lives in
    said is the answer to that and must never be routed as a fresh question.
 2. Quiz mode short-circuits the router. Same reason `main.py` did it: while locked, everything
    is an answer to the question on the table.
-3. Otherwise route, dispatch, split, log, and check the backup clock.
+3. Otherwise route, dispatch, split, log, and run the two reminders — the backup clock and
+   the coursework deadline check. Both are appended to the SHOWN half of any routed or free
+   turn, and neither reaches quiz mode or a permission answer, which are conversations already
+   in progress rather than fresh questions.
 """
 
 from __future__ import annotations
@@ -207,6 +210,7 @@ class Engine:
             t.agent_s = time.monotonic() - t0
 
         response = self._with_backup_reminder(response, t)
+        response = self._with_deadline_reminder(response, t)
         add_message("assistant", response.raw or response.speech)
         return response
 
@@ -290,6 +294,44 @@ class Engine:
                 "drive before the SD card is the only copy of it.")],
             route=response.route, pending=response.pending, raw=response.raw)
 
+    # How far ahead a deadline has to be before it stops being LB's problem today. His number.
+    DEADLINE_WARNING_DAYS = 3
+
+    def _with_deadline_reminder(self, response: Response, t: Turnlog) -> Response:
+        """Coursework due within three days, on the card stack — **on every turn**.
+
+        Global on purpose, and LB's explicit call. The alternative was to show it only on
+        ACADEMIC-routed turns, which sounds tidier and is exactly wrong: he sees the warning
+        only when he was already thinking about his coursework. A deadline reminder that fires
+        when you are debugging firmware at 2am is the one that earns its place.
+
+        Shown, never spoken, for the same reason as `_with_backup_reminder`: an alarm read
+        aloud in the middle of an unrelated answer is startling, and this is a reminder rather
+        than an emergency. It costs a JSON read and no API call, which is the property that
+        lets it sit on the turn path at all — see `tools/academic_calendar.py`.
+        """
+        from tools.academic_calendar import format_deadlines, get_upcoming_deadlines
+
+        try:
+            upcoming = get_upcoming_deadlines(days=self.DEADLINE_WARNING_DAYS)
+        except Exception:                              # noqa: BLE001
+            # A reminder is not worth a failed turn. `load_calendar` already swallows a
+            # malformed file; this catches anything past it.
+            LOG.exception("deadline check failed; answering without it")
+            return response
+
+        if not upcoming:
+            return response
+
+        t.extras.append(f"deadline reminder ({len(upcoming)})")
+        title = ("Due today" if any(e["days_away"] == 0 for e in upcoming)
+                 else f"Due within {self.DEADLINE_WARNING_DAYS} days")
+        return Response(
+            speech=response.speech,
+            cards=list(response.cards) + [
+                Card(CardKind.ERROR, title, format_deadlines(upcoming))],
+            route=response.route, pending=response.pending, raw=response.raw)
+
     def _dispatch(self, route: AgentRoute, text: str, t: Turnlog) -> Response:
         """Hand the question to the one agent that should answer it."""
         if route is AgentRoute.QUIZ:
@@ -312,6 +354,13 @@ class Engine:
             # identical to a grounded one is what the retrieval was added to prevent.
             from agents.firmware_agent import run_firmware_agent_response
             return run_firmware_agent_response(text)
+
+        if route is AgentRoute.ACADEMIC:
+            # Same shape as FIRMWARE and for the same reason — the Sources card names which
+            # syllabus and page the answer came from. It matters more here: there is no public
+            # record of LB's course to check an ungrounded answer against.
+            from agents.academic_agent import run_academic_agent_response
+            return run_academic_agent_response(text)
 
         if route is AgentRoute.HARDWARE:
             from agents.hardware_agent import run_hardware_agent
