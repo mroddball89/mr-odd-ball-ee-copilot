@@ -362,11 +362,17 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
 
 ### Still open
 
-- [ ] **`sudo apt install gir1.2-webkit2-4.1`** — the ONLY prerequisite still missing on the Pi.
-      Needs LB's password; the other four are already installed. Until then `launch_ui.py` opens
-      nothing and the autostart entry logs to `journalctl --user -t mroddball`.
-- [ ] `bash tools/install_autostart.sh` on the Pi, once the apt package is in — deliberately not
-      run yet, because its preflight would warn about the missing webkit typelib.
+- [x] `bash tools/install_autostart.sh` run on the Pi — unit + both desktop entries installed,
+      `--avatar` confirmed present, `Linger=yes`
+- [x] `systemctl --user restart oddball` — the live process now carries `--avatar` and answers
+      on :8000. Verified live: a typed wake on the rig's 8765 socket drove the avatar's
+      `/ws/state` from `sleeping` to `listening`.
+- [x] Line endings — the deploy shipped CRLF shell scripts and broke `install_autostart.sh` on
+      the Pi. Working copy normalised to LF; see the new section in DEPLOY.md.
+- [ ] **`sudo apt install gir1.2-webkit2-4.1`** — the ONLY thing still outstanding. Needs LB's
+      password; the other four apt prerequisites are already installed. Until it is in,
+      `launch_ui.py` opens no window and the autostart entry logs the reason to
+      `journalctl --user -t mroddball`. Everything behind it is done and verified.
 - [ ] Persistent gesture worker: pay the 1.0 s `import mediapipe` once instead of per approval.
       Would take 2,217 ms → ~850 ms. Not built; 2.2 s at a prompt that already stops to ask is
       tolerable, and it trades a subprocess call for a lifecycle to manage.

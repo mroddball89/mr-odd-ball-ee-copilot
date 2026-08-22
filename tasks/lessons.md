@@ -276,3 +276,24 @@ The corollary about ordering: my first sidecar tried in-process and fell back on
 the Pi the fallback was unreachable, because the process died constructing the thing it was
 about to decide not to use. Fallbacks after an uncatchable failure are not fallbacks. Found by
 running it.
+
+## `git status` clean does not mean the deployed bytes are clean
+
+**2026-08-22.** I rewrote two shell scripts with Python's `Path.write_text()` on Windows, which
+turned them into CRLF. `git status` stayed clean, `git diff` was empty, and the tar-over-ssh
+deploy carried the `\r` onto the Pi, where `install_autostart.sh` died with
+`$'\r': command not found`.
+
+**Why:** `.gitattributes` has `* text=auto eol=lf` and had a comment predicting this exact
+failure. It still happened, because that protection lives on the **git** path and the deploy
+does not use the git path — `tar` ships working-copy bytes while git shows normalised ones. A
+CRLF working file hashes identically to its LF blob, so every git-shaped check says fine.
+
+**How to apply:** when the deploy mechanism is not `git clone` or `git pull`, git's cleanliness
+is not evidence about what ships. Check the actual bytes before deploying anything that a
+kernel or a parser reads strictly — shell shebangs, `.desktop` entries, systemd units:
+
+    for f in *.sh config/*.desktop config/*.service; do grep -qU $'\r' "$f" && echo "CRLF $f"; done
+
+And prefer the Edit tool or `sed -i` over Python `write_text()` for files that run on Linux;
+`write_text()` uses the platform's newline translation unless you pass `newline="\n"`.
