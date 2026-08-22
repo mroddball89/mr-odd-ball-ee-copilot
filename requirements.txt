@@ -111,32 +111,27 @@ pywebview>=5.3
 
 # Gesture approval — a thumbs up at the camera instead of typing y (tools/gesture_control.py).
 #
-# >= 1.0, AND THE LOWER BOUND IS THE WHOLE POINT. Corrected 2026-08-22; see D14.
+# NOTHING IS LISTED HERE, AND THAT IS THE ENTRY. Corrected twice; see D14 then D15.
 #
-# The first version of this line said `mediapipe>=0.10.14` on the reasoning that aarch64 wheels
-# stop at cp312 and the Pi is on 3.13.5. Both halves of that were checked against the 0.10.x
-# series only, and the series moved:
+# mediapipe does not go in the main venv. It goes in a SEPARATE Python 3.12 venv built by
+#     bash tools/install_gesture_venv.sh
+# and `tools/gesture_control.py` shells out to it for one token per approval.
 #
-#   0.10.18   last release with an aarch64 wheel at all       cp39-cp312   has mp.solutions
-#   0.10.20+  NO aarch64 wheels whatsoever                                 has mp.solutions
-#   1.0.1     mediapipe-1.0.1-py3-none-manylinux_2_28_aarch64  ANY py3     mp.solutions REMOVED
+# Why, measured on the Pi 2026-08-22:
 #
-# `py3-none` is ABI-independent, so 1.0.1 installs on the Pi's existing 3.13.5 venv — verified
-# with `pip install --dry-run` on the box itself, which resolves it cleanly. No Python
-# downgrade is needed and none should be done for this.
+#   mediapipe 1.0.1   on py3.13   installs cleanly, then SIGKILLs at XNNPACK delegate
+#                                 creation. Every vision task. No OOM, 6.4 GB free.
+#   mediapipe 0.10.18 on py3.12   works. Both its APIs work. 88 ms/frame.
+#   mediapipe 0.10.20+            publishes no aarch64 wheel at all.
 #
-# The floor is >=1.0 rather than unpinned because a resolver free to pick 0.10.x on a 3.12 box
-# would silently select the API that `tools/gesture_control.py` treats as the FALLBACK. That
-# module supports both — Tasks preferred, Solutions if that is what is installed — so an
-# existing 3.12 environment pinned to 0.10.18 keeps working. New installs get 1.x.
+# So the only mediapipe that runs here needs a <=3.12 interpreter, and the main venv is 3.13.5
+# because faster-whisper, ctranslate2, piper and onnxruntime were all verified there. Moving
+# 1.9 GB of working audio stack to chase one leaf feature is the wrong trade; a 400 MB sidecar
+# venv is the right one.
 #
-# The Tasks API needs a model file that pip does not carry, 7.8 MB, gitignored like the
-# whisper models:
+# Installing mediapipe into THIS venv is actively harmful, not merely useless: it drags in
+# opencv-contrib-python (111 MB + deps) and makes `--backend` report a backend that will kill
+# the process the moment it is used.
+#
+# The sidecar also needs a model file that pip does not carry, 7.8 MB, gitignored:
 #     python tools/gesture_control.py --fetch-model
-#
-# NOTE opencv-python is deliberately NOT listed. mediapipe pulls `opencv-contrib-python`, which
-# is a superset and provides the same `cv2` module — installing both makes two distributions
-# fight over the same import name. gesture_control.py only needs VideoCapture and cvtColor,
-# which contrib has. If mediapipe is absent, cv2 goes too, and the module degrades to
-# NO_CAMERA — which is the correct behaviour anyway.
-mediapipe>=1.0                       # Tasks HandLandmarker: 21 landmarks, ~3ms/frame inference

@@ -49,3 +49,7 @@ models/hand_landmarker.task
 rag_install.log
 vectordb_build.log
 install.log
+
+# The gesture sidecar venv (tools/install_gesture_venv.sh) — a Python 3.12 interpreter and
+# mediapipe, ~400MB, rebuildable in two minutes. Built on the box; wheels are arch-specific.
+.venv-gesture/

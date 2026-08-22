@@ -252,3 +252,27 @@ provenance, an all-caps warning. Confidence and formatting made a partial check 
 settled, and it propagated straight into a work request. **Write up what was actually queried**
 ("the 0.10.x wheels"), not the generalisation it appears to support. A finding stated more
 broadly than it was checked is the kind that gets acted on before anyone rechecks it.
+
+## "It installs" is not "it runs" — verify by executing the path that uses it
+
+**2026-08-22 (D15).** Hours after writing the lesson above, I made its sibling. I proved
+`mediapipe` was fine on the Pi's Python 3.13 with `pip install --dry-run` **on the box**, told
+LB in bold not to rebuild his venv on 3.12, and was wrong: it installs, imports, and then
+SIGKILLs the process when the detector is constructed. `import mediapipe` succeeds. The call
+one line later kills you.
+
+**Why:** LB had asked for the 3.12 venv. I talked him out of it with a real measurement that
+answered the wrong question — *will pip resolve this?* rather than *does the feature work?*
+Twice in one day I took a true, narrow result and stated it one step wider than it was checked.
+
+**How to apply:** a dependency is verified when **the code path that uses it has been
+executed**, on the target box. Not resolved, not imported — run. For anything with a native
+backend, the construction call is the test, and it belongs in the installer's `--check`, not in
+a document. And when a crash cannot be caught — SIGKILL cannot — the fix is not a better
+`try`/`except`, it is running the thing in a child process so its death is a returncode instead
+of taking the caller with it.
+
+The corollary about ordering: my first sidecar tried in-process and fell back on failure. On
+the Pi the fallback was unreachable, because the process died constructing the thing it was
+about to decide not to use. Fallbacks after an uncatchable failure are not fallbacks. Found by
+running it.

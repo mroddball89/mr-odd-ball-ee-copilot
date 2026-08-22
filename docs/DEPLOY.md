@@ -191,61 +191,117 @@ exact `apt install` line for whichever are missing. It does **not** install them
 run detached and unattended, and `sudo` in a detached job either blocks forever on a password
 prompt or succeeds silently where it should have asked.
 
-## Gesture approval: mediapipe 1.x, and NOT a Python downgrade
+## Gesture approval: a second, small Python 3.12 venv
 
-**Read this before anyone acts on the older note about Python 3.12.** That note is wrong and is
-retracted — the full correction is D14.
+**This section was wrong twice before it was right. The short version:** mediapipe lives in its
+own venv beside the main one, because the only version that runs on this Pi needs Python 3.12
+and the main venv is 3.13.5. Full history in D14 and D15.
 
-The claim was that mediapipe's aarch64 wheels stop at cp312, so the Pi's Python 3.13.5 could
-never install it and the venv would have to be rebuilt on 3.12. It was checked against the
-0.10.x series only, and the series moved underneath it:
+```bash
+bash tools/install_gesture_venv.sh          # ~2 minutes, no sudo, ~400 MB
+bash tools/install_gesture_venv.sh --check  # is it there AND does it run
+venv/bin/python tools/gesture_control.py --backend
+```
 
-| | `mp.solutions.hands` | aarch64 wheel | Python |
+`--backend` from the main venv is the one command to run when gesture approval misbehaves. It
+reports this interpreter, the model file, which worker will open the camera, what that worker
+answered, and the worker's own view of itself.
+
+### What was measured, on the box, 2026-08-22
+
+| mediapipe | interpreter | installs | **runs** |
 |---|---|---|---|
-| mediapipe 0.10.18 | yes | cp39–cp312 | 3.12 and below |
-| mediapipe 0.10.20+ | yes | **none at all** | — |
-| **mediapipe 1.0.1** | **removed** | `py3-none-manylinux_2_28_aarch64` | **any 3.x** |
+| 1.0.1 (`py3-none` aarch64 wheel) | 3.13.5 | yes, cleanly | **no — SIGKILL** |
+| 0.10.18 (cp39–cp312 wheels) | 3.12.14 | yes | **yes**, 88 ms/frame |
+| 0.10.20+ | — | no aarch64 wheel at all | — |
 
-`py3-none` is ABI-independent. Verified on the box itself:
+The 1.0.1 failure is worth recognising because it is silent and looks like nothing:
 
 ```
-$ venv/bin/pip install --dry-run --no-input mediapipe
-Would install ... mediapipe-1.0.1 opencv-contrib-python-5.0.0.93 ...
+$ venv/bin/python tools/gesture_control.py --backend
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+Killed
+exit=137
 ```
 
-It resolves cleanly on the venv that is already there. **Do not rebuild the venv on 3.12 for
-this.** It would also be an expensive mistake to try: Debian 13 (trixie) ships exactly one
-Python 3 and it is 3.13 — `apt-cache policy python3.12` on this Pi returns nothing at all, and
-neither `uv` nor `pyenv` is installed. Getting a 3.12 there means sourcing an interpreter
-Debian does not package, then rebuilding a 1.9 G venv against it, in order to pin a mediapipe
-from November 2024.
+Every `mediapipe.tasks.vision` task dies there — `HandLandmarker` and `GestureRecognizer`
+alike — with **no OOM, no throttling and 6.4 GB free**. mediapipe wraps that construction in
+`CallWithCoreDumpProtection`, which converts a fatal signal into SIGKILL to suppress the core
+dump, so the underlying fault is masked and exit 137 is all you ever see.
 
-What the change cost instead: mediapipe 1.x removed `mp.solutions`, so
-`tools/gesture_control.py` was ported to the Tasks API. It supports **both** now —
-`HandLandmarker` preferred, legacy `Hands` if that is what is installed — sharing one
-`_classify()`, because both APIs return the same 21 normalised landmarks in the same order. An
-existing 3.12 box pinned to 0.10.18 keeps working unchanged.
+### The interpreter comes from uv, because Debian will not give you one
+
+Debian 13 ships exactly one Python 3 and it is 3.13. On this box `apt-cache policy python3.12`
+returns **nothing at all**, and neither `uv` nor `pyenv` was installed. `install_gesture_venv.sh`
+uses `uv`, which downloads a prebuilt python-build-standalone aarch64 3.12 in seconds with no
+compiler and no root:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh    # once; lands in ~/.local/bin
+```
+
+pyenv also works and takes about twenty minutes of compiling instead.
+
+### Why not just rebuild the main venv on 3.12
+
+That was the first plan and it is the wrong trade. The main venv is 1.9 GB of faster-whisper,
+ctranslate2, piper, onnxruntime and the LangChain stack, all verified on 3.13.5. Rebuilding it
+to move **one leaf feature** risks the thing that actually talks — and if a single cp312 wheel
+turns out to be missing, the assistant is down rather than the camera. The sidecar is 400 MB,
+builds in two minutes, and is deleted with `--remove` if it ever stops earning its place.
+
+**Do not `pip install mediapipe` into the main venv.** It is worse than leaving it out: it pulls
+111 MB of `opencv-contrib-python`, and it makes the in-process backend *look* available while
+being a landmine.
+
+### It always runs in a child process, even when it could not crash
+
+`get_gesture()` never constructs mediapipe in the caller's interpreter. It spawns
+`tools/gesture_control.py --once` and reads one token off stdout, with a 20 s ceiling.
+
+That is crash isolation, not tidiness, and this Pi is why. A SIGKILL cannot be caught by
+`try`/`except` — an in-process construction that dies takes the **assistant** with it, at an
+OS-approval prompt, which is the worst place in the program for it to happen. A child that dies
+is a returncode. Every failure — non-zero exit, timeout, unparseable output, missing
+interpreter — becomes `NO_CAMERA`, and `NO_CAMERA` falls through to the keyboard.
 
 ### The model file, which does not arrive in the tarball
 
-The Tasks API needs `models/hand_landmarker.task`, 7.8 MB, gitignored — same class as the
-whisper models.
+`models/hand_landmarker.task`, 7.8 MB, gitignored — same class as the whisper models.
+`stage_install.sh` fetches it; by hand it is:
 
 ```bash
 venv/bin/python tools/gesture_control.py --fetch-model
-venv/bin/python tools/gesture_control.py --backend      # expect: backend tasks
 ```
 
-`stage_install.sh` fetches it automatically after the `vision` stage. Fetched there rather than
-left to the docs because a missing model is a *silent* loss of the feature: `get_gesture()`
-returns `NO_CAMERA`, which reads as a camera fault and sends you to the wrong place entirely.
+A missing model degrades to `NO_CAMERA`, which reads as a camera fault and sends you to the
+wrong place, so it is fetched by the installer rather than left to this document.
 
-`--backend` is the one command to run when gesture approval is not working. It reports which
-mediapipe API loaded, whether the model is present, and why not if not.
+### An approval costs 2.2 seconds, and only 102 ms of that is detection
 
-**opencv-python is deliberately not installed.** mediapipe pulls `opencv-contrib-python`, a
-superset providing the same `cv2`; installing both makes two distributions fight over one
-import name.
+Median of 10 trials on the Pi, end to end from the assistant's venv:
+
+```
+interpreter start          22 ms
+import mediapipe        1,009 ms   <- paid per approval; the child is built and thrown away
+build HandLandmarker       55 ms
+open camera               204 ms
+4 warmup frames           602 ms   <- 150 ms each: the webcam gives ~6.6 fps, not the 15 asked
+inference                  47 ms
+-----------------------------------
+TOTAL                   2,217 ms   (min 2,197, max 2,271 — very tight)
+```
+
+`media/charts/gesture-approval-latency.svg`, with both CSVs beside it in `media/data/`.
+
+The fix, if it becomes annoying, is a **persistent worker**: pay the 1.0 s import once and hold
+a pipe open, which would bring an approval to roughly 850 ms. Not done — it turns a subprocess
+call into a lifecycle to manage, and 2.2 s at a prompt that has already stopped to ask a
+question is tolerable. Tracked in `tasks/todo.md`.
+
+`WARMUP_FRAMES` is deliberately not tuned down to reclaim the 602 ms. The first frames off a
+freshly opened camera are auto-exposure garbage, and there is no measurement of detection rate
+versus warmup count to trade against. Guessing there is exactly the mistake D14 is about.
 
 ## The floating avatar
 

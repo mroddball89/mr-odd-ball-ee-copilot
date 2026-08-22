@@ -14,38 +14,74 @@ Returns exactly one of `THUMBS_UP`, `OPEN_PALM`, `NONE` or `NO_CAMERA`. Wired in
 terminal security prompts in `agents/os_agent.py` and `agents/web_agent.py`: a thumbs up is a
 yes, and anything else falls through to the keyboard.
 
-## Two mediapipe APIs, because the wheel situation forced it (D14)
+## Two mediapipe APIs and a sidecar, because the Pi forced all three (D14, D15)
 
 mediapipe **1.x removed `mp.solutions`** — the legacy Solutions API — and replaced it with
 `mediapipe.tasks`. It also stopped building per-interpreter wheels: 1.0.1 ships one
-`py3-none-manylinux_2_28_aarch64.whl`, which installs on **any** Python 3, the Pi's 3.13.5
-included. The last 0.10.x with an aarch64 wheel at all is 0.10.18, capped at cp312.
+`py3-none-manylinux_2_28_aarch64.whl` that installs on **any** Python 3.
 
-So the two are not "old and new", they are a real fork in what you can install:
+It installs on the Pi's 3.13.5 and then **does not run there.** Measured on the box: every
+`vision` task — `HandLandmarker` and `GestureRecognizer` alike — is SIGKILLed the moment the
+XNNPACK delegate comes up, with no OOM, no throttling and 6.4 GB free. mediapipe wraps that
+construction in `CallWithCoreDumpProtection`, which converts a fatal signal into SIGKILL to
+suppress the core dump, so the real fault is masked and exit 137 is all you get.
 
-| | `mp.solutions.hands` | aarch64 wheel | Python |
-|---|---|---|---|
-| mediapipe 0.10.18 | yes | cp39–cp312 | ≤ 3.12 |
-| mediapipe 1.0.1 | **gone** | `py3-none` | any 3.x |
+| | APIs present | aarch64 wheel | installs on 3.13 | **runs on this Pi** |
+|---|---|---|---|---|
+| 0.10.18 | `solutions` **and** `tasks` | cp39–cp312 | no | **yes** — both of them |
+| 0.10.20+ | both | none at all | — | — |
+| 1.0.1 | `tasks` only | `py3-none` | yes | **no** — SIGKILL |
 
-This module supports **both**, preferring Tasks. That is not hedging: it is what lets the Pi
-run gesture control on the venv it already has, while a 3.12 box pinned to 0.10.18 keeps
-working unchanged. `_classify()` is shared — both APIs hand back the same 21 normalised
-landmarks in the same order, so the decision logic never had to be written twice.
+Note what the failing variable is: **the mediapipe version, not the API.** 0.10.18 carries both
+`mp.solutions` and `mp.tasks`, and on this Pi both work. It is 1.0.1 specifically that dies.
+
+So there are three paths and this module supports all of them, in this order:
+
+1. **Tasks in-process** — mediapipe 1.x. Correct wherever it runs; not this Pi.
+2. **Solutions in-process** — mediapipe 0.10.18, on a Python <= 3.12 interpreter.
+3. **A sidecar** — `ODDBALL_GESTURE_PYTHON` names a *second* interpreter that has a working
+   mediapipe, and this module shells out to it for one token. That is what lets the Pi keep
+   its 3.13 venv for whisper, piper and ctranslate2 while gesture detection runs on a small
+   3.12 venv beside it, instead of rebuilding 1.9 GB to move one leaf feature.
+
+`_classify()` is shared by 1 and 2 — both APIs hand back the same 21 normalised landmarks in
+the same order, so the decision logic with the safety property in it exists once. The sidecar
+runs this same file, so it shares that logic too, by being it.
 
 The Tasks path needs a model file, `models/hand_landmarker.task` (7.8 MB). It is NOT fetched
 automatically at approval time — a security prompt is the last place to start a download. It
 is gitignored and re-downloadable, exactly like the whisper models; `--fetch-model` gets it.
 
-## Pi budget
+## Pi budget — measured, and it is 2.2 seconds
 
-640x480 at a 15fps cap, one frame per call, camera opened and released around it. The camera
-open dominates — measured 3 ms for `detect()` on a blank frame — which is why the landmarker
-is built once at module level and reused rather than rebuilt per call.
+One approval, end to end from the assistant's venv, median of 10 trials on the Pi:
 
-The camera is NOT held open between calls. An approval prompt happens a few times an hour and
-a held `VideoCapture` is a device nobody else can use. Reopening costs ~200-400ms and buys the
-device back.
+    interpreter start          22 ms
+    import mediapipe        1,009 ms   <-- paid per approval, because of the child process
+    build HandLandmarker       55 ms
+    open camera               204 ms
+    4 warmup frames           602 ms   <-- 150 ms each; the webcam gives ~6.6fps, not 15
+    inference                  47 ms
+    ------------------------------------
+    TOTAL                   2,217 ms   (min 2,197, max 2,271 — very tight)
+
+**Only 102 ms of that is detection.** The rest is a whole Python interpreter and a mediapipe
+import, thrown away and rebuilt every time, because the work cannot happen in this process.
+`media/charts/gesture-approval-latency.svg` plots it; the CSVs are beside it.
+
+The obvious improvement is a **persistent worker** — pay the 1.0 s import once and keep a pipe
+open — which would bring an approval to roughly 850 ms. Not done: it turns a subprocess call
+into a lifecycle to manage, and 2.2 s at a prompt that already stops to ask a question is
+tolerable. Tracked in `tasks/todo.md`.
+
+`WARMUP_FRAMES` is deliberately NOT tuned down to save the 602 ms. The first frames off a
+freshly opened camera are auto-exposure garbage and a black frame reliably detects no hand —
+so cutting it is a trade of reliability for latency, and there is no measurement of detection
+rate versus warmup count to make that trade on. Guessing here would be the exact mistake D14
+is about.
+
+The camera is NOT held open between calls. An approval happens a few times an hour and a held
+`VideoCapture` is a device nobody else can use.
 
 ## The thumbs-up test is stricter than the obvious one, and it has to be
 
@@ -71,12 +107,14 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 
 LOG = logging.getLogger("oddball.gesture")
 
 __all__ = ["GestureRecognizer", "get_gesture", "gesture_approves",
-           "approve_by_gesture_or_keyboard", "MODEL_PATH", "MODEL_URL", "fetch_model"]
+           "approve_by_gesture_or_keyboard", "MODEL_PATH", "MODEL_URL", "fetch_model",
+           "sidecar_python"]
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -113,6 +151,98 @@ FINGERS = (
 # Windows authoring box, where `--text` mode is used for debugging agents and opening a webcam
 # on every approval prompt is friction with no purpose.
 _DISABLED = os.environ.get("ODDBALL_GESTURE", "1").strip().lower() in ("0", "false", "no", "off")
+
+# A second interpreter that has a working mediapipe, for when THIS one does not (see the
+# header). Named by env, or found at the conventional path below, which is where
+# `tools/install_gesture_venv.sh` puts it.
+_SIDECAR_DEFAULT = REPO_ROOT / ".venv-gesture" / ("Scripts/python.exe" if os.name == "nt"
+                                                  else "bin/python")
+SIDECAR_PYTHON = os.environ.get("ODDBALL_GESTURE_PYTHON", "").strip()
+
+# Set in the child's environment by `_ask_sidecar`, so the sidecar can never shell out again.
+# Without it a misconfigured ODDBALL_GESTURE_PYTHON pointing at this same interpreter would
+# fork forever, at a security prompt, which is the worst possible place for it.
+_IS_SIDECAR = os.environ.get("ODDBALL_GESTURE_SIDECAR", "") == "1"
+
+# How long the sidecar gets. It opens a camera and runs one inference: ~0.5s of work, and the
+# budget is generous because a Pi under load is slow, not broken. It is still a hard ceiling —
+# an approval prompt that hangs on a wedged subprocess is worse than one that falls to the
+# keyboard.
+SIDECAR_TIMEOUT_S = 20.0
+
+_VALID = ("THUMBS_UP", "OPEN_PALM", "NONE", "NO_CAMERA")
+
+
+def sidecar_python() -> str:
+    """Which interpreter should actually open the camera. Never "" in the parent.
+
+    `ODDBALL_GESTURE_PYTHON` wins, then the conventional `.venv-gesture` beside the repo, then
+    **this interpreter** — because the work happens in a child process either way (see
+    `_ask_sidecar`), and "no sidecar configured" must not mean "do it here".
+
+    Returns "" only in the child, where it means: stop, do the work.
+    """
+    if _IS_SIDECAR:
+        return ""
+    if SIDECAR_PYTHON:
+        return SIDECAR_PYTHON
+    if _SIDECAR_DEFAULT.exists():
+        return str(_SIDECAR_DEFAULT)
+    return sys.executable
+
+
+def _ask_sidecar(python: str) -> str:
+    """Run one gesture read in `python` and return its answer.
+
+    ## This is crash isolation, and on this Pi it is not optional
+
+    mediapipe 1.x on Python 3.13 does not raise when its vision task comes up — **it SIGKILLs
+    the process** (D15). No `try`/`except` can catch that. Constructing the detector in the
+    assistant's own interpreter therefore risks killing the voice loop *at a security prompt*,
+    which is precisely the worst place in the program for it to happen.
+
+    So the camera is opened in a **child process, always**, even when no separate sidecar
+    interpreter is configured and the child is a second copy of this one. A child that dies is
+    a returncode, not a corpse where the assistant used to be. The cost is one process spawn
+    per approval — a few times an hour, against a call that already opens a camera.
+
+    The child runs THIS FILE with `--once`, so the classifier — the part with the safety
+    property in it — is shared by being the same code, not by being copied.
+
+    Any failure at all is `NO_CAMERA`: a non-zero exit, a timeout, an unparseable answer, a
+    missing interpreter. A subprocess that misbehaves must never produce an approval.
+    """
+    import subprocess
+
+    env = dict(os.environ, ODDBALL_GESTURE_SIDECAR="1")
+    try:
+        done = subprocess.run(
+            [python, str(Path(__file__).resolve()), "--once"],
+            capture_output=True, text=True, timeout=SIDECAR_TIMEOUT_S,
+            cwd=str(REPO_ROOT), env=env, check=False)
+    except subprocess.TimeoutExpired:
+        LOG.warning("gesture read timed out after %.0fs", SIDECAR_TIMEOUT_S)
+        return "NO_CAMERA"
+    except (OSError, subprocess.SubprocessError) as exc:
+        LOG.warning("gesture worker failed to run (%s: %s)", type(exc).__name__, exc)
+        return "NO_CAMERA"
+
+    if done.returncode != 0:
+        # -9/137 is the documented mediapipe-1.x-on-this-Pi failure. Naming it here is what
+        # stops the next person rediscovering it from a silent keyboard fallback — and it is
+        # the whole reason this runs in a child at all.
+        killed = done.returncode in (137, -9)
+        LOG.warning("gesture worker exited %d%s", done.returncode,
+                    " (SIGKILL — mediapipe cannot run in that interpreter; see D15)"
+                    if killed else "")
+        return "NO_CAMERA"
+
+    answer = (done.stdout or "").strip().splitlines()
+    token = answer[-1].strip() if answer else ""
+    if token not in _VALID:
+        LOG.warning("gesture worker said %r, which is not a gesture", token[:40])
+        return "NO_CAMERA"
+    return token
 
 
 def fetch_model(dest: Path = MODEL_PATH) -> Path:
@@ -315,9 +445,20 @@ def _recognizer() -> GestureRecognizer:
 
 
 def get_gesture() -> str:
-    """What the camera sees right now. Never raises; returns 'NO_CAMERA' on any failure."""
+    """What the camera sees right now. **Never raises, never dies, never blocks forever.**
+
+    Always out-of-process in the parent — see `_ask_sidecar` for why that is a requirement and
+    not an optimisation. In the child (`--once`), this is the in-process read.
+    """
     if _DISABLED:
         return "NO_CAMERA"
+
+    python = sidecar_python()
+    if python:
+        return _ask_sidecar(python)
+
+    # The child. This is the only place mediapipe is ever constructed, and if it takes the
+    # process down with it, the parent sees a returncode.
     try:
         return _recognizer().get_gesture()
     except Exception as exc:                                              # noqa: BLE001
@@ -369,6 +510,10 @@ def main(argv: list[str] | None = None) -> int:
                     help=f"download {MODEL_PATH.name} (~7.8 MB) and exit")
     ap.add_argument("--backend", action="store_true",
                     help="report which mediapipe API is in use, and exit")
+    ap.add_argument("--once", action="store_true",
+                    help="print exactly one gesture token on stdout and exit. This is the "
+                         "sidecar protocol — the parent reads the last stdout line, so nothing "
+                         "else may go there.")
     ap.add_argument("--watch", action="store_true", help="keep reading until ctrl-C")
     ap.add_argument("--interval", type=float, default=1.0, metavar="S",
                     help="seconds between reads under --watch (default 1.0)")
@@ -381,30 +526,59 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {path}  ({path.stat().st_size / 1e6:.2f} MB)")
         return 0
 
-    rec = _recognizer()
+    if args.once:
+        # stdout carries the token and nothing else; mediapipe is noisy, but on stderr.
+        print(get_gesture())
+        return 0
+
+    worker = sidecar_python()
+
     if args.backend:
-        print(f"  backend:   {rec.backend or '(none)'}")
-        print(f"  available: {rec.available}")
+        print(f"  this interpreter: {sys.executable}")
+        print(f"  model:            {MODEL_PATH} "
+              f"{'present' if MODEL_PATH.exists() else 'MISSING'}")
+        print(f"  disabled:         {_DISABLED} (ODDBALL_GESTURE)")
+        if worker:
+            # Deliberately NOT constructing the detector here. On a box where mediapipe
+            # cannot run, doing so would kill this very process — which is exactly the
+            # failure `--backend` exists to diagnose, and a diagnostic that dies of the fault
+            # it is reporting on is useless.
+            own = Path(worker).resolve() == Path(sys.executable).resolve()
+            print(f"  camera worker:    {worker}{'  (same interpreter)' if own else ''}")
+            print(f"  worker says:      {_ask_sidecar(worker)}")
+            print()
+            print("  --- as reported from inside the worker ---")
+            import subprocess
+            probe = subprocess.run(
+                [worker, str(Path(__file__).resolve()), "--backend"],
+                capture_output=True, text=True, check=False,
+                cwd=str(REPO_ROOT), env=dict(os.environ, ODDBALL_GESTURE_SIDECAR="1"))
+            for line in (probe.stdout or "").splitlines():
+                print(f"  {line}")
+            if probe.returncode != 0:
+                print(f"  worker --backend exited {probe.returncode}"
+                      f"{'  (SIGKILL — mediapipe cannot run there; see D15)' if probe.returncode in (137, -9) else ''}")
+            return 0
+
+        rec = _recognizer()
+        print(f"  backend:          {rec.backend or '(none)'}")
+        print(f"  available:        {rec.available}")
         if rec.why:
-            print(f"  why not:   {rec.why}")
-        print(f"  model:     {MODEL_PATH} {'present' if MODEL_PATH.exists() else 'MISSING'}")
-        print(f"  disabled:  {_DISABLED} (ODDBALL_GESTURE)")
+            print(f"  why not:          {rec.why}")
         return 0 if rec.available else 1
 
-    if not rec.available:
-        print(f"  gesture control is off: {rec.why}")
-        return 1
     if _DISABLED:
         print("  ODDBALL_GESTURE=0 is set, so get_gesture() will report NO_CAMERA.")
 
     if not args.watch:
-        print(f"  {rec.get_gesture()}")
+        print(f"  {get_gesture()}")
         return 0
 
-    print(f"  watching on the {rec.backend} backend — thumbs up, open palm, ctrl-C to stop")
+    print(f"  watching via {worker or 'this interpreter'} — thumbs up, open palm, "
+          f"ctrl-C to stop")
     try:
         while True:
-            print(f"  {time.strftime('%H:%M:%S')}  {rec.get_gesture()}")
+            print(f"  {time.strftime('%H:%M:%S')}  {get_gesture()}")
             time.sleep(args.interval)
     except KeyboardInterrupt:
         return 0

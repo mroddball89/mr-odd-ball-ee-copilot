@@ -901,3 +901,126 @@ is run detached and a password prompt in a detached job hangs forever.
 D13 listed three Pi-side measurements as outstanding and they remain outstanding. The 3 ms
 above is Windows, on a blank frame, and is a floor rather than a figure. Nothing here should be
 narrated as a Pi result until it is one.
+
+## D15 — "It installs" is not "it runs", and I made the same class of error twice in a day
+
+**2026-08-22.** D14, written hours earlier, retracted D13's claim that mediapipe could not work
+on the Pi's Python 3.13. Its evidence was `pip install --dry-run` **on the box itself**,
+resolving `mediapipe-1.0.1` cleanly, and it concluded — in bold — *"Do not rebuild the venv on
+3.12 for this."*
+
+Then the code ran:
+
+```
+$ venv/bin/python tools/gesture_control.py --backend
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+Killed
+exit=137
+```
+
+**mediapipe 1.0.1 installs on Python 3.13 and cannot execute there.** Every
+`mediapipe.tasks.vision` task — `HandLandmarker` and `GestureRecognizer` alike — is SIGKILLed
+the instant the XNNPACK delegate comes up. Not an exception; the process is gone.
+
+Ruled out on the box, in this order: OOM (6.4 GB available, `systemd-oomd` inactive, nothing in
+the journal), thermal or undervoltage throttling (`vcgencmd get_throttled` → `0x0`), and the
+model file (a completely different task with a different model dies identically).
+
+What it actually is: mediapipe wraps that construction in `CallWithCoreDumpProtection`, which
+converts a fatal signal into SIGKILL specifically so no core is written. The real fault is
+masked by design, and exit 137 is all the diagnostic there is. Three
+`madvise(MADV_NOHUGEPAGE) failed on altstack: Invalid argument` lines precede it, which is that
+protection layer failing to set itself up against this kernel and glibc.
+
+### So LB was right, and I talked him out of it with a measurement
+
+He asked for a Python 3.12 venv. I produced a table, a dry-run transcript and a paragraph about
+what a 3.12 rebuild would cost, and told him it was unnecessary. The dry-run was real. It
+answered a question — *will pip resolve this?* — that was not the question that mattered.
+
+**Two corrections in one day, both the same shape:** a real measurement, generalised one step
+past what it covered. D14 was "these wheel tags" read as "this package". D15 is "it installs"
+read as "it works". The second is worse, because D14's own lesson was written and committed
+before this one happened.
+
+The rule, and it is now the first check in `install_gesture_venv.sh --check`:
+
+> **A dependency is verified when the code path that uses it has been executed.** Not when it
+> resolves, not when it imports. `import mediapipe` succeeds on the Pi's 3.13 — it is
+> *constructing the detector* that kills the process, one call later.
+
+### What shipped instead: a sidecar, and crash isolation as architecture
+
+Measured on the Pi:
+
+| mediapipe | interpreter | installs | runs |
+|---|---|---|---|
+| 1.0.1 | 3.13.5 | yes | **no — SIGKILL** |
+| 0.10.18 | 3.12.14 | yes | **yes**, 88 ms/frame |
+| 0.10.20+ | any | no aarch64 wheel at all | — |
+
+Note the failing variable is the **version, not the API**: 0.10.18 carries both `mp.solutions`
+and `mp.tasks`, and on this Pi both work. 1.0.1 specifically is the one that dies.
+
+Rebuilding the main venv on 3.12 — LB's original request, and now clearly *possible* — is still
+the wrong trade. It is 1.9 GB of faster-whisper, ctranslate2, piper and onnxruntime, all
+verified on 3.13.5, and a missing cp312 wheel anywhere in it takes down the thing that actually
+talks in order to fix the camera. So: `.venv-gesture`, 400 MB, Python 3.12 from `uv`,
+mediapipe 0.10.18 and nothing else. `tools/install_gesture_venv.sh` builds it in two minutes.
+Debian ships no `python3.12` at all on trixie, which is why the interpreter comes from `uv`'s
+prebuilt standalone builds rather than apt.
+
+**And `get_gesture()` now always runs in a child process — even when it could not possibly
+crash.** That is the part worth keeping. A SIGKILL cannot be caught, so an in-process detector
+that dies takes the assistant with it *at an OS approval prompt*, which is the worst place in
+this program for a sudden exit. The first version of the sidecar got this wrong: it tried
+in-process first and fell back, so on the Pi the fallback was unreachable — the process died
+constructing the thing it was about to decide not to use. Caught by running it, not by reading
+it.
+
+Every failure mode collapses to `NO_CAMERA` and `NO_CAMERA` falls to the keyboard: non-zero
+exit, 20 s timeout, unparseable stdout, missing interpreter. A worker that misbehaves cannot
+produce an approval.
+
+### The cost, measured rather than estimated
+
+An approval is **2,217 ms** (median of 10; min 2,197, max 2,271 — very tight):
+
+```
+interpreter start          22 ms
+import mediapipe        1,009 ms   <- per approval; the child is built and thrown away
+build HandLandmarker       55 ms
+open camera               204 ms
+4 warmup frames           602 ms   <- 150 ms each: the webcam gives ~6.6 fps, not the 15 asked
+inference                  47 ms
+```
+
+**102 ms of 2,217 is detection.** The thing that looks expensive is not the expensive thing.
+`media/charts/gesture-approval-latency.svg`, data and script beside it.
+
+D13 estimated "~40–80 ms per frame on a Pi 5 CPU" and quoted a 3 ms figure measured on Windows
+against a blank frame. Both are withdrawn. The real inference is 47 ms and it was never the
+number that mattered.
+
+A persistent worker would pay the 1.0 s import once and bring an approval to roughly 850 ms.
+Not built: it turns a subprocess call into a lifecycle to manage, and 2.2 s at a prompt that has
+already stopped to ask a question is tolerable. Tracked.
+
+`WARMUP_FRAMES` stays at 4 rather than being cut to reclaim 600 ms. The first frames off a
+freshly opened camera are auto-exposure garbage, and there is no measurement of detection rate
+against warmup count to trade on. Cutting it on the reasoning that "2 is probably enough" would
+be D14 for the third time.
+
+### Two smaller things confirmed on the box
+
+**The venv needed `--system-site-packages`.** pywebview reaches for PyGObject at
+`webview.start()`; PyGObject is a Debian system package, not pip-installable into a sealed venv.
+`/usr/bin/python3 -c 'import gi'` gives 3.50.0 and `venv/bin/python` gave
+`ModuleNotFoundError`. One line in `venv/pyvenv.cfg`, not a 1.9 GB rebuild.
+
+**`gir1.2-webkit2-4.1` is the only apt package actually missing.** `python3-gi`,
+`python3-gi-cairo`, `libportaudio2` and `pipewire-alsa` were already installed from the
+`float.py` work. The box has `gir1.2-webkit-6.0` (GTK4, what `float.py` uses) and pywebview's
+GTK backend asks for the GTK3 WebKit2 4.1 typelib by name. `stage_install.sh` `dpkg-query`s all
+five and prints the `apt install` line for whatever is missing; it does not run `sudo` itself,
+because the script runs detached and a password prompt in a detached job hangs forever.
