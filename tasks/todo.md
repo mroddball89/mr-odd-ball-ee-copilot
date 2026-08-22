@@ -409,3 +409,62 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
       the move to XWayland.
 - [ ] `tools/verify_vault.py` and `tools/verify_gesture.py` in the house style, so the classifier
       cases and the vault traversal guard are committed harnesses rather than session scratch.
+
+
+---
+
+## Stage 12 — Scrap the second face; animate the one that already exists
+
+**2026-08-22.** LB: *"I already have a main frontend UI rendering my character. I do NOT want a
+separate glowing blue orb in the corner."* He is right. Full write-up in D17.
+
+- [x] Deleted `ui/`, `launch_ui.py`, `config/mroddball.desktop`, `tools/wait_for_ui.sh`,
+      `tools/install_labwc_rule.sh`, the `--avatar` flag and its in-process server, the
+      `hud_bridge.set_state` mirror, and fastapi/uvicorn/pywebview from requirements
+- [x] Reverted the labwc rule on the Pi, then removed `~/.config/labwc/rc.xml` once it was
+      byte-identical to the system default — the box is back to how I found it
+- [x] Removed the orphans on the Pi (tar does not delete) and the autostart entry
+- [x] **`thinking` added to `STATES`** — it was missing, so `setState("thinking")` hit the
+      `if (!STATES[next]) return` guard and his face had **never** reacted to thinking
+- [x] `enter:"roll", loop:1` on `thinking`; `enter:"bounce", loop:1` on `speaking` — the rig's
+      OWN existing gestures, not new ones
+- [x] `loop` support in `sampleGesture`, safe because every channel returns to exactly 0 at p=1
+- [x] Panel button + `t` keyboard shortcut, because `verify-rig.mjs` asserts STATES keys match
+      the buttons and every state is reachable from the keyboard
+
+### Verified
+
+| check | result |
+|---|---|
+| `tools/verify-rig.mjs` | 38/38, 15 states loaded |
+| STATES keys match panel buttons | pass |
+| every state reachable from the keyboard | pass |
+| roll and bounce keep him inside the viewBox | pass, worst margin 11.0px |
+| `verify_chat` / `verify_engine` / `verify_typed` | 39/39, 97/97, 81/81 |
+| live turn on the Pi | `sleeping -> thinking -> speaking` |
+| thinking, 3 frames | moved **43px** horizontally, size varied **107px** |
+| speaking, 3 frames | moved **11.1px** vertically, 0.7px horizontally |
+| port 8000 | not listening |
+| unit ExecStart | no `--avatar` |
+
+`media/captures/2026-08-22-face-thinking-speaking.png`.
+
+### What didn't work — kept, not deleted
+
+The whole floating-avatar subsystem, D13-D16. It worked; it was the wrong thing. The captures
+stay in `media/captures/` (`2026-08-22-avatar-render-before-after.png`,
+`2026-08-22-avatar-on-desktop.png`, `2026-08-22-avatar-corner.png`) because a dead end that
+gets quietly deleted is a lesson nobody can check. The WebKit findings in D16 are still true
+and still useful if a pywebview window is ever wanted for something else.
+
+### Still open
+
+- [ ] `--system-site-packages` is still on in the Pi's venv. It was turned on for pywebview,
+      which is gone. Harmless and reverting has its own risk, so it stays — noted so it is not
+      a mystery later.
+- [ ] `gir1.2-webkit2-4.1` is still installed on the Pi. Dropped from `stage_install.sh`'s
+      list; nothing asks for it now. Left in place, harmless.
+- [ ] Should `thinking` really tumble a full 540 degrees on repeat for a long Gemini call? It
+      is what was asked for and it looks right for a 1-3s call. If it grates over a 10s one,
+      the gentler option is a new `rock` gesture (small travel, no spin) rather than tuning
+      `roll`, which `happy` also uses via `finish`.

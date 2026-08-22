@@ -325,3 +325,34 @@ Related: `pkill -f launch_ui.py` over ssh kills its own command line, because th
 matches the remote `bash -c` string. Use `pkill -f '[l]aunch_ui.py'`. DEPLOY.md already
 documented the bracket trick for `pgrep` and I did not apply it to `pkill`; it cost three
 silent no-op deploys that looked like the window failing to start.
+
+## Before adding a surface, find out what already renders that thing
+
+**2026-08-22 (D17).** I built a floating avatar ball — a window, a FastAPI server, a state
+broadcaster, two WebKit env vars, a labwc rule — next to `hud/face-preview.html`, which is
+1565 lines of SVG that **already renders the character**, already has fifteen states, already
+has `roll` and `bounce` gestures better than the ones I wrote, and was already connected to the
+same bridge. The real Mr Odd Ball is visible in every screenshot I took to prove the ball
+worked. Four rounds of genuine debugging went into a component that should not have existed.
+
+**Why:** I read `hud/face-preview.html` on the first exploration pass and catalogued it
+correctly as "the full character rig". Then I treated the new avatar as *additional* and never
+revisited that assumption, through four decision entries. The directive said "implement a
+floating overlay UI" and it was reasonable to read that as new; it was not reasonable to build,
+deploy, debug and pin it without once asking whether the thing it drew already existed.
+
+**How to apply:** when a request implies a new visual surface, grep for what renders that
+subject **before** writing any of it, and say out loud what you found — "there is already an
+X; do you want it animated, or a second one?" Duplicating a surface is worse than duplicating
+logic: the user sees both, and they disagree.
+
+The corollary that saved it: once I did look, the feature was four small edits, because the
+existing thing had the hooks (`T.enter` fires a gesture on state entry) and the animations
+(`roll`, `travel:150 spin:540`; `bounce`, `rise:70 bounces:3 damp:1.5`) already. **The existing
+implementation is usually better than the one you would write** — its roll ties spin to
+displacement so he unwinds on the way back, and its bounce is a raised cosine with zero
+velocity at contact. Mine were a linear translate and an ease.
+
+It also hid a real bug: `setState` starts `if (!STATES[next]) return;` and there was no
+`thinking` row, so the one state the engine sends most often had **never** animated his face.
+Building the wrong thing is how I found it, which is not a recommendation.

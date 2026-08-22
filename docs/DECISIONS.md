@@ -1116,3 +1116,105 @@ The ball lands **on top of the chat panel**. Wayland lets no client place its ow
 labwc decides, and `hud/float.py` has the same constraint (D41's note about `gtk4-layer-shell`
 not being installable here). Moving him is `Super+drag`. Whether 300x300 always-on-top in the
 middle of the screen is the right presence at all is LB's call, not a measurement.
+
+## D17 — I built a second character next to the one that already existed
+
+**2026-08-22.** D13 through D16 are the story of a floating avatar: a 120px gradient ball in a
+pywebview window, a FastAPI server to feed it state, a stdlib-only broadcaster so the mirror
+would not drag FastAPI onto the voice loop, two WebKit environment variables, a labwc window
+rule to pin it to a corner. All of it worked. All of it is now deleted.
+
+**`hud/face-preview.html` already renders the character.** It is 1565 lines of SVG and an eased
+render loop; it has fifteen states, a gesture system, live lip-sync, and it was already
+connected to `hud_bridge`. The screenshots I took to prove the ball worked have the real Mr Odd
+Ball in them, four times, at the top of every frame. I did not see it, because I had decided in
+the first ten minutes that the avatar was an *additional* small face and never revisited that.
+
+LB: *"I already have a main frontend UI rendering my character. I do NOT want a separate
+glowing blue orb in the corner."*
+
+### What the rig already had, that I reimplemented badly
+
+```js
+bounce:  { dur:1.70, attack:.30, rise:70,  bounces:3, damp:1.5, zoom:.86, mouth:.10 },
+roll:    { dur:1.90, attack:.30, travel:150, spin:540, zoom:.70, eye:.10 },
+```
+
+**The two animations LB asked for were already in the file, as named gestures**, better than
+mine: my roll was `translateX` plus a `rotate`, this one ties spin to *displacement* so he
+winds up going out and unwinds coming back; my bounce was a `translateY` ease, this one is a
+raised cosine so vertical velocity is zero at every ground contact and there is no impact cusp.
+Both are covered by `tools/verify-rig.mjs`, which proves they keep him inside the viewBox.
+
+`setState` already had the hook to fire one: `if (T.enter) playGesture(T.enter)` — *"a state can
+fire a gesture, never the reverse."*
+
+So the entire feature was four edits: a `thinking` row, `enter`/`loop` on two states, a
+five-line restart in the sampler, and a panel button.
+
+### And the rig had a real bug, which the orb had been hiding
+
+```js
+function setState(next) {
+  if (!STATES[next]) return;
+```
+
+**There was no `thinking` state.** `hud_bridge` broadcasts exactly five names and
+`engine/turn.py` sends the literal string `"thinking"` — which hit that guard and returned.
+**His face has never once reacted to him thinking.** The three rows that look like they cover
+it (`local`, `claude`, `gemini`) are reachable only from the dev panel; the tier system they
+belong to went in the merge (D1).
+
+I did not find that by reading the rig. I found it because building a second face forced me to
+ask what the first one did with the state, and by then I had already built the second face.
+
+### Looping a one-shot gesture, safely
+
+`enter` fires once. LB wants rolling *while* thinking, so states may now declare `loop:1`, and
+`sampleGesture` restarts the gesture at completion instead of clearing it.
+
+That is only seamless because every channel in the generic sampler is periodic and lands on
+exactly zero at `p=1` — `tx` and `spin` are `sin(2πp)`, `ty` is a damped raised cosine over a
+whole number of bounces, `zoom` is derived from those. The rig's own comment says it out loud:
+*"Out, through centre, back — so a roll returns him exactly where he started."* A gesture with
+its own `sample()` — `finish` — makes no such promise, which is why `loop` is opt-in per state
+and defaults to 0.
+
+Measured on the Pi from a real turn, three frames of each state, tracking his body colour
+`#2B5599` read out of the rig's own CSS:
+
+| state | horizontal | vertical | size |
+|---|---|---|---|
+| thinking | **43 px** | 6.5 px | **107 px** — rolls out, spins, shrinks |
+| speaking | 0.7 px | **11.1 px** | 23 px — bounces in place |
+
+Cleanly distinguishable, and the right way round. `media/captures/2026-08-22-face-thinking-speaking.png`.
+
+### What was deleted
+
+`ui/` entirely, `launch_ui.py`, `config/mroddball.desktop`, `tools/wait_for_ui.sh`,
+`tools/install_labwc_rule.sh`, the `--avatar` flag and its in-process server, the
+`hud_bridge.set_state` mirror, and `fastapi` / `uvicorn` / `pywebview` from requirements. The
+labwc rule was reverted on the Pi first and `~/.config/labwc/rc.xml` removed once it was
+byte-identical to the system default, so the box is back to how I found it.
+
+`gir1.2-webkit2-4.1` — the apt package LB installed at my request — is dropped from
+`stage_install.sh`'s list. It is pywebview's alone; `float.py` uses the GTK4 WebKit 6.0 that
+was already there. Left installed on the Pi, where it is harmless.
+
+The captures from the dead end stay in `media/captures/`. A failed experiment that gets quietly
+deleted is a lesson nobody can check.
+
+### The rule
+
+**Before adding a surface, find out what renders that thing today.** Not "is there a related
+file" — I had `hud/face-preview.html` open on the first pass and catalogued it as "the full
+character rig with the chat column", which is exactly right and should have ended the idea of a
+second face on the spot.
+
+The directive said "implement a transparent floating overlay UI", and it was reasonable to read
+that as new. What was not reasonable was building it, deploying it, debugging its renderer,
+pinning it to a corner, and writing four decision entries about it, without once asking whether
+the character it drew already existed somewhere in the repo. Four rounds of real debugging —
+D14, D15, D16, and the placement work — went into a component that should not have been built.
+The debugging was sound. The thing being debugged should not have existed.

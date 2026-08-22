@@ -80,34 +80,13 @@ scikit-learn>=1,<2
 requests>=2.0,<3
 
 # =======================================================================================
-# The desktop avatar and gesture approval. Added 2026-08-21.
+# Gesture approval. Added 2026-08-21.
 #
-# ALL FOUR ARE OPTIONAL AT RUNTIME and every import of them is guarded, which is deliberate
-# and is the reason they are last in this file:
-#
-#   no fastapi/uvicorn -> `--avatar` logs a warning and the assistant runs without a ball
-#   no opencv/mediapipe -> get_gesture() returns NO_CAMERA and approval falls to the keyboard
-#
-# A missing UI extra must never cost the voice loop. The stdlib-only `ui/avatar_state.py`
-# exists precisely so `orchestrator/hud_bridge.py` can mirror state into the overlay without
-# importing FastAPI on the critical path.
+# There was briefly a `fastapi` / `uvicorn` / `pywebview` block here, for a floating avatar
+# window. It is gone: the rig in hud/face-preview.html already renders the character, so the
+# ball was a second copy of him sitting in the corner of his own desktop (D17). The rolling
+# and bouncing now animate the real face and need no new dependency at all.
 # =======================================================================================
-
-fastapi>=0.115                       # serves ui/avatar.html at /ui, and the /ws/state socket
-uvicorn>=0.34                        # the ASGI server; ui/server.py runs it in a daemon thread
-
-# NOT Chromium. A Chromium window for a 120px ball is ~250MB and a core of a Pi 5 that is
-# already running whisper, piper and onnxruntime. pywebview wraps the system WebKit view,
-# which the desktop already has resident.
-#
-# TWO THINGS THAT ARE NOT IN THIS FILE, in the same class as libportaudio2 above — pip installs
-# pywebview happily and `webview.start()` then fails looking for a GUI toolkit:
-#
-#   sudo apt install python3-gi gir1.2-webkit2-4.1 python3-gi-cairo
-#
-# `transparent=True` also needs a compositing WM. Bookworm's Wayfire session composites; a
-# bare X11 session with no compositor gives an opaque window instead. Cosmetic, not broken.
-pywebview>=5.3
 
 # Gesture approval — a thumbs up at the camera instead of typing y (tools/gesture_control.py).
 #

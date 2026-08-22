@@ -70,18 +70,7 @@ WorkingDirectory=%h/mr-odd-ball
 #
 # Cost: a 16kHz mono WAV per captured utterance, ~50KB for 1.6s. At the observed 0.45 wakes a
 # minute that is ~2MB/hour against 97GB free. `captures/` is gitignored.
-# --avatar added 2026-08-22. It serves the floating ball's page and state socket on
-# 127.0.0.1:8000 FROM THIS PROCESS, which is the only arrangement where the ball moves: state
-# is published in-process by `orchestrator/hud_bridge.set_state()` into `ui/avatar_state.py`.
-# A separately started server would serve the page and then sit on "sleeping" forever.
-#
-# This does NOT open a window and does not need a display — same property as the rest of the
-# unit. `~/.config/autostart/mroddball.desktop` opens the window once the desktop is up, and
-# either can run without the other.
-#
-# If fastapi/uvicorn are not installed the flag logs a warning and the assistant carries on,
-# so this is safe to leave in the unit on a box that never installed the UI extras.
-ExecStart=%h/mr-odd-ball/venv/bin/python main.py --voice --avatar --log %h/mr-odd-ball/oddball.log --save-captures %h/mr-odd-ball/captures
+ExecStart=%h/mr-odd-ball/venv/bin/python main.py --voice --log %h/mr-odd-ball/oddball.log --save-captures %h/mr-odd-ball/captures
 
 # ExecStart was orchestrator/run_wake.py until 2026-08-19. It is main.py --voice now: the
 # assistant and the EE copilot are one program, and main.py is its entry point. The flags are

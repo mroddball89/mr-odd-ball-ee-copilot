@@ -46,11 +46,15 @@ PIP="venv/bin/pip"
 #   libportaudio2     PortAudio itself. Without it sounddevice imports and finds no device.
 #   pipewire-alsa     ALSA's route to the PipeWire sink the Bluetooth speaker lives on.
 #                     Without it playback "succeeds" into HDMI while the speaker sits silent.
-#   python3-gi        \
-#   gir1.2-webkit2-4.1 > pywebview's GTK backend. `import webview` succeeds without them and
-#   python3-gi-cairo  /  webview.start() then dies looking for a toolkit (launch_ui.py).
+#   python3-gi        PyGObject. hud/float.py renders his face with it, and it is a SYSTEM
+#   python3-gi-cairo  package — not pip-installable into a plain venv, which is why float.py
+#                     runs on /usr/bin/python3 rather than venv/bin/python.
+#
+# `gir1.2-webkit2-4.1` was here too, for a pywebview window that no longer exists (D17). It
+# was pywebview's alone — float.py uses the GTK4 WebKit 6.0 the Pi already had — so it is
+# dropped from the list. Leaving it installed on the Pi is harmless; nothing asks for it.
 # ---------------------------------------------------------------------------------------
-APT_NEEDED=(libportaudio2 pipewire-alsa python3-gi gir1.2-webkit2-4.1 python3-gi-cairo)
+APT_NEEDED=(libportaudio2 pipewire-alsa python3-gi python3-gi-cairo)
 MISSING=()
 for pkg in "${APT_NEEDED[@]}"; do
   dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed" || MISSING+=("$pkg")
@@ -80,11 +84,6 @@ run wake   --no-deps 'openwakeword>=0.6.0'
 run tools  langchain-community langchain-text-splitters langchain-experimental
 run agents 'sympy>=1.13' 'kiutils>=1.4.8'
 run search ddgs duckduckgo-search
-
-# The desktop avatar (ui/server.py + launch_ui.py). Its own stage because it is OPTIONAL: the
-# assistant runs without it, every import of it is guarded, and a failure here must not read
-# as a failed install.
-run ui     fastapi uvicorn pywebview
 
 # Gesture approval is NOT a pip stage. Corrected 2026-08-22 (D15).
 #
@@ -124,7 +123,6 @@ echo
 echo "Then build the gesture sidecar venv — mediapipe cannot live in this one (D15):"
 echo "  bash tools/install_gesture_venv.sh"
 echo
-echo "And check the new subsystems report for themselves:"
+echo "And check gesture approval reports for itself:"
 echo "  venv/bin/python tools/gesture_control.py --backend    # expect: worker says NONE"
-echo "  venv/bin/python -m ui.server --demo &                 # then curl :8000/healthz"
-echo "  bash tools/install_autostart.sh                       # boot: service + both windows"
+echo "  bash tools/install_autostart.sh                       # boot: service + his face"

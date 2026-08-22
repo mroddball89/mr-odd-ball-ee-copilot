@@ -726,6 +726,11 @@
     <span class="lbl">state — click, or press 1–8</span>
     <button class="state" data-s="idle"     style="--dot:#7C8AA5" aria-pressed="false"><i class="dot"></i>idle <span class="key">1</span></button>
     <button class="state" data-s="listening" style="--dot:#5FD9A4" aria-pressed="false"><i class="dot"></i>listening <span class="key">2</span></button>
+    <!-- The generic thinking pose — the one the engine actually broadcasts. The three
+         tier rows beside it are dev-panel only; the tier system went in the merge (D1).
+         tools/verify-rig.mjs asserts STATES keys match these buttons exactly, so a state
+         without a button here fails the harness rather than going unnoticed. -->
+    <button class="state" data-s="thinking" style="--dot:#E8A33D" aria-pressed="false"><i class="dot"></i>thinking <span class="key">T</span></button>
     <button class="state" data-s="local"    style="--dot:#4C7FE0" aria-pressed="false"><i class="dot"></i>thinking · local <span class="key">3</span></button>
     <button class="state" data-s="claude"   style="--dot:#E8A33D" aria-pressed="false"><i class="dot"></i>thinking · claude <span class="key">4</span></button>
     <button class="state" data-s="gemini"   style="--dot:#4FC3E8" aria-pressed="false"><i class="dot"></i>thinking · gemini <span class="key">5</span></button>
@@ -811,6 +816,19 @@
   const STATES = {
     idle:      { eye:1.00, pupil:1.00, bob:1.0, tilt:  0, blink:[2.2,6.0], drift:.30, mouthBase:.55, glow:"transparent",        glowA:0,   sweat:0, cap:"" },
     listening: { eye:1.14, pupil:1.10, bob:0.6, tilt: -3, blink:[3.5,8.0], drift:.06, mouthBase:.42, glow:"#5FD9A4",            glowA:.30, sweat:0, cap:"listening…" },
+    // The generic thinking pose, and the one the ENGINE actually sends.
+    //
+    // `orchestrator/hud_bridge.set_state()` broadcasts exactly five names — sleeping, idle,
+    // listening, thinking, speaking — and `engine/turn.py` uses the literal string "thinking".
+    // There was no `thinking` row here, so `setState("thinking")` hit the `if (!STATES[next])
+    // return` guard at the top and did nothing at all: **his face has never once reacted to
+    // him thinking.** The three tier rows below are reachable only from the dev panel, because
+    // the tier system they were built for went in the merge (D1).
+    //
+    // `enter:"roll"` with `loop:1` is the rolling animation LB asked for, and it is the rig's
+    // own existing gesture rather than a new one — see GESTURES.roll.
+    thinking:  { eye:0.94, pupil:0.94, bob:1.4, tilt: -4, blink:[1.4,3.6], drift:.60, mouthBase:.40, glow:"var(--tier-claude)", glowA:.30, sweat:0, think:1, zoom:.86, enter:"roll", loop:1, cap:"thinking…" },
+
     // The three thinking tiers float marks around his head: question marks throughout, with
     // the provider's own mark taking the top slot when the work has left the device.
     // All three pull back to 0.86 — that is what clears the ring the marks live in. The sweat
@@ -818,7 +836,12 @@
     local:     { eye:0.92, pupil:0.92, bob:1.3, tilt:  5, blink:[1.6,4.0], drift:.55, mouthBase:.38, glow:"var(--tier-local)",  glowA:.26, sweat:0, think:1, zoom:.86,        cap:"thinking — on-device" },
     claude:    { eye:1.05, pupil:0.86, bob:2.4, tilt: -6, blink:[1.0,2.6], drift:.85, mouthBase:.66, glow:"var(--tier-claude)", glowA:.42, sweat:0, think:1, zoom:.86, cl:1,  cap:"working — asking Claude" },
     gemini:    { eye:1.02, pupil:1.05, bob:1.1, tilt:  2, blink:[1.4,3.4], drift:.95, mouthBase:.46, glow:"var(--tier-gemini)", glowA:.32, sweat:0, think:1, zoom:.86, gem:1, cap:"looking that up" },
-    speaking:  { eye:1.03, pupil:1.02, bob:1.5, tilt:  1, blink:[2.0,5.0], drift:.18, mouthBase:.50, glow:"var(--tongue)",      glowA:.22, sweat:0, cap:"Two hundred and fifty hertz — from your bcg_processor file, line forty-seven." },
+    // `enter:"bounce"` with `loop:1` — LB's bouncing-while-talking. GESTURES.bounce drives
+    // G.ty on #bodyG, while lip-sync drives the mouth and `talkPunch` squashes #ball, so the
+    // three are independent channels and none of them fights the others. The gesture's own
+    // `mouth:.10` is ADDITIVE (mouthEff = C.mouth + G.mouth), so it lifts the lip-sync floor
+    // slightly rather than clamping it.
+    speaking:  { eye:1.03, pupil:1.02, bob:1.5, tilt:  1, blink:[2.0,5.0], drift:.18, mouthBase:.50, glow:"var(--tongue)",      glowA:.22, sweat:0, enter:"bounce", loop:1, cap:"Two hundred and fifty hertz — from your bcg_processor file, line forty-seven." },
     confused:  { eye:0.88, pupil:0.80, bob:0.7, tilt:-13, blink:[2.6,5.5], drift:.45, mouthBase:.30, glow:"var(--tier-alert)",  glowA:.28, sweat:0, cap:"…say that again?" },
     // `enter` plays a gesture the moment the state is entered — done arrives by rolling
     // through a finish line rather than just appearing pleased.
@@ -858,6 +881,9 @@
     if (s.cl   === undefined) s.cl   = 0;
     if (s.gem  === undefined) s.gem  = 0;
     if (s.zoom === undefined) s.zoom = 1;
+    // Defaults to 0, which is what keeps `happy` from looping its finish-line set-piece
+    // forever. Only `thinking` and `speaking` opt in.
+    if (s.loop === undefined) s.loop = 0;
   }
 
   // Six marks in an arc over his head, scattered in size and angle the way the reference art
@@ -1020,7 +1046,21 @@
 
     const g = GESTURES[gest];
     const p = (t - gestT0) / g.dur;
-    if (p < 0 || p >= 1) { gest = null; $("rGest").textContent = "–"; return; }
+    if (p < 0 || p >= 1) {
+      const finished = gest;
+      gest = null; $("rGest").textContent = "–";
+      // A state may ask for its entrance to run for as long as the state HOLDS, rather than
+      // once — that is `loop:1` beside `enter:` in STATES, and it is how `thinking` rolls and
+      // `speaking` bounces continuously instead of twitching once and settling.
+      //
+      // Seamless only because every channel in the generic sampler below is periodic and
+      // lands on exactly zero at p=1: tx and spin are sin(2*pi*p), ty is a raised cosine over
+      // a whole number of bounces, and zoom is derived from those. So the restart is
+      // continuous rather than a snap back to centre. A gesture with `sample()` — `finish` —
+      // makes no such promise, which is one more reason `loop` is opt-in per state.
+      if (T.loop && T.enter === finished) playGesture(finished);
+      return;
+    }
     if (reduce) return;                      // reduced-motion: gesture runs its clock, draws nothing
 
     // face offsets: snap up over `attack`, then ease back down
@@ -1343,7 +1383,8 @@
   // Digits 1–8 stay bound to the original eight states so the muscle memory built while
   // reviewing v0.1 still works. v0.2's states and the gestures go on letters.
   const order = ["idle","listening","local","claude","gemini","speaking","confused","happy"];
-  const keyState = { s:"sleeping", w:"working", h:"straining", x:"error", e:"excited", b:"bored" };
+  const keyState = { s:"sleeping", w:"working", h:"straining", x:"error", e:"excited", b:"bored",
+                     t:"thinking" };
   const keyGest  = { " ":"startle", k:"wink", n:"bounce", m:"roll", f:"finish" };
 
   addEventListener("keydown", (e) => {
