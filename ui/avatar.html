@@ -58,15 +58,22 @@
         /* He is asleep until the wake word fires, and a dimmed ball is how you can tell at a
            glance across the room. Not in the original three states; added because "idle" and
            "sleeping" looking identical is the same misleading-face problem D41 argues about
-           for the main rig. */
-        .sleeping {
+           for the main rig.
+
+           `#ball.sleeping`, NOT `.sleeping`. An id selector outranks a class one, so a bare
+           `.sleeping { box-shadow }` loses to `#ball { box-shadow }` and the dimmed glow never
+           applied — he slept with his full waking halo on. Opacity happened to work only
+           because `#ball` does not declare it. Caught by reading the CSS after screenshotting
+           the Pi for a different bug. */
+        #ball.sleeping {
             opacity: 0.35;
             box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
         }
         /* No socket. Distinguishable from sleeping, or a dead server looks like a nap. */
-        .offline {
+        #ball.offline {
             opacity: 0.25;
             filter: grayscale(1);
+            box-shadow: none;
         }
     </style>
 </head>

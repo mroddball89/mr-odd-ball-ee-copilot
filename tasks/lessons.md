@@ -297,3 +297,31 @@ kernel or a parser reads strictly — shell shebangs, `.desktop` entries, system
 
 And prefer the Edit tool or `sed -i` over Python `write_text()` for files that run on Linux;
 `write_text()` uses the platform's newline translation unless you pass `newline="\n"`.
+
+## "It runs" is not "it works" — for anything visual, the artefact is the screenshot
+
+**2026-08-22 (D16).** Third rung of the same ladder in one day. I signed the avatar off on
+`/healthz` 200, `/ui` 200, `clients: 1`, and a live `sleeping -> thinking -> speaking ->
+sleeping` on the state socket. Every one of those assertions was true. LB then sent a photo of
+his screen: an **empty rectangle with a title bar on it**.
+
+Two defects, neither of which emits any error: WebKitGTK's DMA-BUF renderer painted torn buffer
+garbage instead of the page, and `frameless=True` was silently ignored because GTK3's Wayland
+backend never negotiates xdg-decoration.
+
+**Why:** the ladder goes `pip resolves` → `it imports` → `the code path runs` → **`a human can
+use it`**, and I stopped one rung short three times running. D14 stopped at resolves, D15 at
+imports, D16 at runs. Protocol assertions cannot see a title bar.
+
+**How to apply:** if a change has a visual output, **take the screenshot before saying it
+works** — `grim` on Wayland, and pull it back and actually look at it. Two techniques that paid
+off here: `evaluate_js` against the *live* window to ask the page what it thinks it is drawing
+(that is what proved the DOM was fine and the compositor was not), and a numeric control —
+mean colour of the region that should contain the thing versus a region that should not —
+because "I can sort of see it" is not a measurement and I got that wrong once in this session
+by counting a different window's pixels bleeding through.
+
+Related: `pkill -f launch_ui.py` over ssh kills its own command line, because the pattern
+matches the remote `bash -c` string. Use `pkill -f '[l]aunch_ui.py'`. DEPLOY.md already
+documented the bracket trick for `pgrep` and I did not apply it to `pkill`; it cost three
+silent no-op deploys that looked like the window failing to start.

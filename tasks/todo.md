@@ -374,15 +374,27 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
 - [x] **The window opens.** `launch_ui.py` running on the Pi, `/healthz` reports `clients: 1`,
       and a full turn drove `sleeping -> thinking -> speaking -> sleeping` on `/ws/state` with
       the real window attached. Stage 10 and 11 are complete.
-- [ ] Look at it. Nothing above is a claim about pixels — whether `transparent=True` actually
-      gives a transparent surface under labwc, and whether a 120px ball at 300x300 on-top is
-      the right size, needs LB's eyes on the screen. A screenshot belongs in `media/captures/`.
+- [x] **Looked at it — and it was broken.** LB's photo showed an empty rectangle with a title
+      bar. Two defects, neither of which emits any error (D16):
+      - `WEBKIT_DISABLE_DMABUF_RENDERER=1` — without it WebKitGTK paints torn buffer garbage
+        instead of the page. A JS probe inside the live window proved the DOM was perfect.
+      - `GDK_BACKEND=x11` — without it `frameless=True` is ignored; GTK3's Wayland backend
+        never negotiates xdg-decoration so labwc decorates anyway.
+      Both now set by `launch_ui._prepare_env()`. Verified by screenshot.
+- [x] CSS: `.sleeping` box-shadow never applied — `#ball` outranks a bare class. Now
+      `#ball.sleeping`.
+- [x] `media/captures/2026-08-22-avatar-on-desktop.png` and the before/after pair committed.
+- [ ] **Placement.** The ball lands on top of the chat panel. Wayland lets no client place its
+      own window, so labwc decides — same constraint `hud/float.py` has. `Super+drag` moves
+      him. Whether 300x300 always-on-top in the middle of the screen is the right presence is
+      a preference, not a measurement: LB's call.
+- [ ] Overlay RSS vs a Chromium window on the same page — still not measured.
 - [ ] Persistent gesture worker: pay the 1.0 s `import mediapipe` once instead of per approval.
       Would take 2,217 ms → ~850 ms. Not built; 2.2 s at a prompt that already stops to ask is
       tolerable, and it trades a subprocess call for a lifecycle to manage.
 - [ ] Measure detection rate vs `WARMUP_FRAMES`. It is 4 (602 ms of the 2,217) and cutting it
       without that measurement is guessing.
-- [ ] Overlay RSS vs a Chromium window on the same page — still not measured.
-- [ ] Confirm `transparent=True` composites under the labwc session.
+- [x] `transparent=True` composites under labwc — confirmed by screenshot, and it survives
+      the move to XWayland.
 - [ ] `tools/verify_vault.py` and `tools/verify_gesture.py` in the house style, so the classifier
       cases and the vault traversal guard are committed harnesses rather than session scratch.

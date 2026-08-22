@@ -1024,3 +1024,95 @@ be D14 for the third time.
 GTK backend asks for the GTK3 WebKit2 4.1 typelib by name. `stage_install.sh` `dpkg-query`s all
 five and prints the `apt install` line for whatever is missing; it does not run `sudo` itself,
 because the script runs detached and a password prompt in a detached job hangs forever.
+
+## D16 — Two environment variables, found by looking at the screen
+
+**2026-08-22.** D15 signed the avatar off on protocol evidence: `/healthz` 200, `/ui` 200,
+`clients: 1`, and `sleeping -> thinking -> speaking -> sleeping` out of the state socket. It
+explicitly did not claim anything about pixels, and said a screenshot was still owed.
+
+LB sent a photo of the screen. **The window was an empty rectangle with a title bar on it.**
+
+Both of those are defects and neither produces an error message anywhere.
+
+### `WEBKIT_DISABLE_DMABUF_RENDERER=1`, or the page never paints
+
+The window was not blank in the sense of "background with nothing drawn". It was **torn buffer
+garbage**: white, rows of black dashes, and horizontal fragments of the chat panel that was
+behind it, streaked across the surface.
+
+The page was fine. A JS probe run inside the live window — `evaluate_js` against the real
+running instance — reported:
+
+```json
+{"found": true, "w": 120, "h": 120, "x": 90, "y": 90, "display": "block",
+ "visibility": "visible", "bg": "radial-gradient(circle at 30% 30%, rgb(0, 242",
+ "innerW": 300, "innerH": 300}
+```
+
+Perfect layout, correct gradient, visible, centred. The pixels simply never reached the
+screen. Disabling WebKitGTK's DMA-BUF renderer fixes it completely. Measured with a control —
+mean colour of the 120x120 centre against the window's own corner:
+
+| | centre | corner | B−R at centre |
+|---|---|---|---|
+| default | (229,244,249) | (253,253,253) | +20 |
+| `WEBKIT_DISABLE_DMABUF_RENDERER=1` | (196,232,248) | (255,255,255) | **+52** |
+| `WEBKIT_DISABLE_COMPOSITING_MODE=1` | (196,232,248) | (255,255,255) | +52 |
+| `LIBGL_ALWAYS_SOFTWARE=1` | (196,233,249) | (255,255,255) | +53 |
+
+All three workarounds fix it identically; the DMA-BUF one is the narrowest, so it is the one
+that ships. Note `hud/float.py` was never affected — it is GTK4 with WebKit 6.0, a different
+WebKit build. This is the GTK3 / WebKit2 4.1 stack pywebview uses.
+
+### `GDK_BACKEND=x11`, or `frameless=True` is silently ignored
+
+labwc drew a full server-side title bar with minimise, maximise and close on a 300px ball.
+
+pywebview is not at fault — `webview/platforms/gtk.py:229` does call `set_decorated(False)`.
+**GTK3's Wayland backend never negotiates xdg-decoration**, so the compositor is never told,
+and labwc applies its server-side default. Under XWayland the same call goes out as an X11
+hint, which labwc honours. Transparency and always-on-top both survive the move — verified by
+screenshot, not assumed.
+
+The alternative was a labwc window rule in LB's `~/.config/labwc/rc.xml`. Rejected: it edits
+his desktop configuration to fix our window, and it would silently stop applying if the window
+title ever changed.
+
+`GDK_BACKEND=x11` is set only when `DISPLAY` exists. Forcing it with no XWayland running turns
+"opens with an unwanted title bar" into "does not open at all", which is a strictly worse
+failure.
+
+### And a CSS bug found by reading the file afterwards
+
+`.sleeping { box-shadow: ... }` never applied. An id selector outranks a class one, so
+`#ball { box-shadow: 0 0 25px ... }` won and he slept wearing his full waking halo. The opacity
+in the same rule *did* apply, only because `#ball` does not declare opacity — so the rule half
+worked, which is why nothing looked obviously wrong. Now `#ball.sleeping`.
+
+### What this says about the last two decisions
+
+D14 was "it resolves" mistaken for "it installs". D15 was "it installs" mistaken for "it runs".
+D16 is **"it runs" mistaken for "it works"** — every protocol assertion in D15 was true, and the
+thing on screen was still an empty box with a title bar.
+
+The ladder has a top and it is the only rung that was ever the point:
+
+    pip resolves it     ->  D14 said this was enough. It was not.
+    it imports          ->  it SIGKILLed one call later.
+    the code path runs  ->  D15 verified this. Still an empty rectangle.
+    a human can use it  ->  screenshot it, or ask.
+
+For anything with a visual output, **the artefact is the screenshot.** `curl /healthz` cannot
+see a title bar. D15 at least knew it was owed one and said so; the honest improvement is to
+take it before signing off, not to note that somebody should.
+
+`media/captures/2026-08-22-avatar-render-before-after.png` is the pair, and
+`2026-08-22-avatar-on-desktop.png` is the working desktop.
+
+### Still open, and it is a preference not a bug
+
+The ball lands **on top of the chat panel**. Wayland lets no client place its own window, so
+labwc decides, and `hud/float.py` has the same constraint (D41's note about `gtk4-layer-shell`
+not being installable here). Moving him is `Super+drag`. Whether 300x300 always-on-top in the
+middle of the screen is the right presence at all is LB's call, not a measurement.
