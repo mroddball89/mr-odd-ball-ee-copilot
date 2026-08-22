@@ -1,28 +1,50 @@
 <!DOCTYPE html>
 <!--
   avatar.html — Mr Odd Ball's desktop overlay.
-  Author: LB   Date: 2026-08-21
+  Author: LB   Date: 2026-08-21 (resized to a 150px corner presence 2026-08-22)
 
   Served by ui/server.py at http://127.0.0.1:8000/ui and opened by launch_ui.py in a
-  frameless, transparent pywebview window. NOT Chromium: a Chromium window for a 120px ball
-  costs ~250MB and a core, which on a Pi 5 that is also running whisper and piper is the
-  whole budget. pywebview wraps the system WebKit view that is already resident.
+  frameless, transparent pywebview window pinned to the bottom-right corner by a labwc
+  window rule (tools/install_labwc_rule.sh). NOT Chromium: a Chromium window for one ball
+  costs ~250MB and a core, on a Pi 5 already running whisper, piper and onnxruntime.
 
   This is the SMALL face. hud/face-preview.html is the full character rig with the chat
-  column and the card panel, and it stays where it is on port 8765. This one is the
-  always-on-top presence: one ball, three states, no text.
+  column and card panel, and it stays on port 8765. This one is the always-on-top presence:
+  one ball, three states, no text, out of the way in the corner.
 
   State comes from ws://<host>/ws/state as a bare string, mirrored out of
   orchestrator/hud_bridge.set_state() so the overlay and the rig cannot disagree about what
   he is doing. The engine's vocabulary is larger than this page's — sleeping, idle,
-  listening, thinking, speaking — and anything that is not "thinking" or "speaking" resting
-  as a still ball is correct, not a gap.
+  listening, thinking, speaking — and anything without an animation resting as a still ball
+  is correct, not a gap.
+
+  ## Every dimension is in vmin, and that is load-bearing
+
+  The window was 300x300 and is now 150x150. The first version hard-coded pixels: a 120px
+  ball with a translateX(±80px) roll. Dropped into a 150px window that animation throws the
+  ball completely outside the viewport — it would simply vanish while thinking, which reads
+  as a crash rather than as a too-large animation.
+
+  So the geometry is relative to the window, and ONE invariant keeps it inside no matter what
+  size the window is given:
+
+      --ball/2  +  --roll  +  --glow   <=   50vmin
+         27     +    14    +    7      =    48      OK
+
+  Change any of the three and check that line. It is the whole reason this page cannot break
+  again the next time somebody resizes the window.
 -->
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>Mr. Odd Ball Desktop Avatar</title>
     <style>
+        :root {
+            --ball:   54vmin;   /* diameter */
+            --roll:   14vmin;   /* travel each way while thinking */
+            --bounce: 10vmin;   /* rise while speaking */
+            --glow:    7vmin;   /* box-shadow blur; extends past the ball edge */
+        }
         body {
             margin: 0;
             padding: 0;
@@ -34,26 +56,26 @@
             height: 100vh;
         }
         #ball {
-            width: 120px;
-            height: 120px;
+            width: var(--ball);
+            height: var(--ball);
             border-radius: 50%;
             background: radial-gradient(circle at 30% 30%, #00f2fe, #4facfe, #000);
-            box-shadow: 0 0 25px rgba(0, 242, 254, 0.6);
+            box-shadow: 0 0 var(--glow) rgba(0, 242, 254, 0.6);
             transition: all 0.3s ease;
         }
         .thinking {
             animation: roll 1.2s infinite alternate ease-in-out;
         }
         @keyframes roll {
-            0% { transform: translateX(-80px) rotate(-360deg); }
-            100% { transform: translateX(80px) rotate(360deg); }
+            0%   { transform: translateX(calc(-1 * var(--roll))) rotate(-360deg); }
+            100% { transform: translateX(var(--roll)) rotate(360deg); }
         }
         .speaking {
             animation: bounce 0.4s infinite alternate ease-in-out;
         }
         @keyframes bounce {
-            0% { transform: translateY(0px) scaleY(1); }
-            100% { transform: translateY(-35px) scaleY(0.9); }
+            0%   { transform: translateY(0) scaleY(1); }
+            100% { transform: translateY(calc(-1 * var(--bounce))) scaleY(0.9); }
         }
         /* He is asleep until the wake word fires, and a dimmed ball is how you can tell at a
            glance across the room. Not in the original three states; added because "idle" and
@@ -64,10 +86,10 @@
            `.sleeping { box-shadow }` loses to `#ball { box-shadow }` and the dimmed glow never
            applied — he slept with his full waking halo on. Opacity happened to work only
            because `#ball` does not declare it. Caught by reading the CSS after screenshotting
-           the Pi for a different bug. */
+           the Pi for a different bug (D16). */
         #ball.sleeping {
             opacity: 0.35;
-            box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
+            box-shadow: 0 0 calc(var(--glow) * 0.4) rgba(0, 242, 254, 0.2);
         }
         /* No socket. Distinguishable from sleeping, or a dead server looks like a nap. */
         #ball.offline {
@@ -82,9 +104,9 @@
     <script>
         const ball = document.getElementById("ball");
 
-        // Only these two animate. Everything else the engine broadcasts — idle, listening,
-        // and any state added later — leaves him a still ball, which is the honest default
-        // for a state this page has no drawing for.
+        // Only these animate. Everything else the engine broadcasts — idle, listening, and
+        // any state added later — leaves him a still ball, which is the honest default for a
+        // state this page has no drawing for.
         const ANIMATED = { thinking: "thinking", speaking: "speaking", sleeping: "sleeping" };
 
         function setState(state) {
@@ -93,7 +115,7 @@
 
         // Reconnect, because the alternative is a window that silently stops updating and
         // sits in whatever state it last heard. That exact failure is written up in
-        // orchestrator/hud_bridge.py for the main rig; there is no reason to relearn it here.
+        // orchestrator/hud_bridge.py for the main rig; no reason to relearn it here.
         let socket = null;
         let retry = 500;
 
@@ -103,8 +125,7 @@
             socket.onopen = () => { retry = 500; };
 
             socket.onmessage = (event) => {
-                const state = event.data;
-                setState(state);
+                setState(event.data);
             };
 
             socket.onclose = () => {

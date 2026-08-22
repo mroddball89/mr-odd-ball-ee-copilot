@@ -384,10 +384,21 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
 - [x] CSS: `.sleeping` box-shadow never applied — `#ball` outranks a bare class. Now
       `#ball.sleeping`.
 - [x] `media/captures/2026-08-22-avatar-on-desktop.png` and the before/after pair committed.
-- [ ] **Placement.** The ball lands on top of the chat panel. Wayland lets no client place its
-      own window, so labwc decides — same constraint `hud/float.py` has. `Super+drag` moves
-      him. Whether 300x300 always-on-top in the middle of the screen is the right presence is
-      a preference, not a measurement: LB's call.
+- [x] **Placement — resolved.** LB's call: 150x150, bottom-right. Wayland lets no client place
+      its own window, so it is a labwc window rule (`tools/install_labwc_rule.sh`), which he
+      authorised. Verified on the box: `Absolute upper-left 1746,906`, `150x150`.
+      - the script bases on `/etc/xdg/labwc/rc.xml` when no user file exists, because a user
+        `rc.xml` REPLACES the system one — writing a minimal file would drop 183 lines of Pi OS
+        defaults
+      - it validates the XML and reverts from backup on a parse error
+      - it reloads with SIGHUP; `labwc --reconfigure` needs `LABWC_PID`, which an ssh shell
+        does not have, and it was failing silently
+      - `allowAlwaysOnTop="yes"` was a real find: labwc disallows X11 always-on-top by default,
+        so `on_top=True` had been doing nothing
+- [x] **CSS is in vmin now,** with the invariant `--ball/2 + --roll + --glow <= 50vmin` at the
+      top of the file. The old hardcoded `translateX(±80px)` roll would have thrown the ball
+      clean outside a 150px window. Measured over 4 frames of each animation: spans x 11..143,
+      y 15..126 of 150 — inside at every extreme.
 - [ ] Overlay RSS vs a Chromium window on the same page — still not measured.
 - [ ] Persistent gesture worker: pay the 1.0 s `import mediapipe` once instead of per approval.
       Would take 2,217 ms → ~850 ms. Not built; 2.2 s at a prompt that already stops to ask is
