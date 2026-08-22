@@ -28,6 +28,30 @@ RAG pipeline nobody retrieves from is a slow way of doing nothing.
 `get_retriever()` is the missing half. It returns **None** rather than raising when the store
 has never been built, so a fresh clone with no PDFs in it still runs and simply answers without
 grounding — and says so.
+
+## Two collections, one store (2026-08-21)
+
+The ACADEMIC route reads LB's syllabi, and syllabi are PDFs in `data/` exactly like datasheets
+are. Left in one pool they would be retrieved for each other: a semantic search for "GPIO
+configuration" ranks by similarity alone and has no idea that a chunk came from a course
+outline, so a firmware answer can be grounded in a syllabus and cite it as a datasheet.
+
+So the build writes **two named collections** into the same `CHROMA_PATH`:
+
+    datasheets    everything under data/ EXCEPT data/academic/   -> firmware_agent
+    academic      data/academic/                                 -> academic_agent
+
+Chroma keeps collections separate at query time, which is a stronger guarantee than a metadata
+filter — there is no filter to forget to pass, and the default is the safe one.
+
+**This renames the existing collection.** Chroma's default name is `langchain`, which is what
+every store built before today used. A store built earlier will look *empty* under the new
+names rather than failing, so anyone upgrading must rebuild:
+
+    python tools/vector_db.py
+
+That is already the documented step after adding PDFs, and `chroma_db/` is gitignored precisely
+because it is a rebuildable artifact.
 """
 
 from __future__ import annotations
@@ -52,7 +76,14 @@ LOG = logging.getLogger("oddball.vector_db")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = REPO_ROOT / "data"          # put your PDFs here
+ACADEMIC_PATH = DATA_PATH / "academic"  # ...except syllabi, which go here
 CHROMA_PATH = REPO_ROOT / "chroma_db"   # gitignored; a build artifact, rebuildable
+
+# The two collections. Named constants rather than string literals at the call sites, because a
+# typo in a collection name does not raise — Chroma happily opens a new, empty one, and the
+# agent then answers ungrounded while reporting that no documents cover the question.
+DATASHEET_COLLECTION = "datasheets"
+ACADEMIC_COLLECTION = "academic"
 
 # Small and fast, runs locally, no key and no network. 384 dimensions.
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -61,7 +92,10 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 # takes seconds — paying that per question would put it on the answer path, where the whole
 # turn budget is two of them.
 _embeddings = None
-_store = None
+
+# Keyed by collection name. Was a single object when there was a single collection; a dict
+# because two agents now read from the same store and each must get its own handle back.
+_stores: dict[str, object] = {}
 
 
 def get_embeddings():
@@ -76,35 +110,46 @@ def get_embeddings():
     return _embeddings
 
 
-def get_retriever(k: int = 4):
-    """A retriever over the persisted store, or **None** if it was never built.
+def get_retriever(k: int = 4, collection: str = DATASHEET_COLLECTION):
+    """A retriever over one collection of the persisted store, or **None** if never built.
 
     Args:
-        k: how many chunks to return. Four at 500 characters is ~2000 characters of context,
-           which is a couple of register tables and still leaves room in the prompt.
+        k:          how many chunks to return. Four at 500 characters is ~2000 characters of
+                    context, which is a couple of register tables and still leaves room in the
+                    prompt.
+        collection: which collection to search. Defaults to the datasheets, so the existing
+                    firmware call site did not have to change — and so that a caller who
+                    forgets the argument gets the datasheets rather than a silently empty
+                    collection named after their typo.
 
     Returns:
-        A LangChain retriever, or None. None is not an error — it means "no datasheets have
-        been ingested", which is the normal state of a fresh clone, and the caller answers
+        A LangChain retriever, or None. None is not an error — it means "nothing has been
+        ingested", which is the normal state of a fresh clone, and the caller answers
         ungrounded and says so rather than falling over.
+
+        A collection that exists but is EMPTY returns a working retriever that yields zero
+        chunks. That is deliberately not special-cased here: both agents already handle "no
+        chunks came back" with an explicit sentence, and the alternative is a document count
+        via Chroma's private `_collection`, which is a fragile thing to make the answer path
+        depend on.
     """
-    global _store
     if not CHROMA_PATH.exists():
         LOG.info("no vector store at %s — run `python tools/vector_db.py` to build one",
                  CHROMA_PATH)
         return None
 
-    if _store is None:
+    if collection not in _stores:
         try:
             from langchain_chroma import Chroma                      # noqa: PLC0415
 
-            _store = Chroma(persist_directory=str(CHROMA_PATH),
-                            embedding_function=get_embeddings())
+            _stores[collection] = Chroma(persist_directory=str(CHROMA_PATH),
+                                         collection_name=collection,
+                                         embedding_function=get_embeddings())
         except Exception:                              # noqa: BLE001
-            LOG.exception("could not open the vector store at %s", CHROMA_PATH)
+            LOG.exception("could not open collection %r at %s", collection, CHROMA_PATH)
             return None
 
-    return _store.as_retriever(search_kwargs={"k": k})
+    return _stores[collection].as_retriever(search_kwargs={"k": k})
 
 
 def format_chunks(docs) -> tuple[str, list[dict]]:
@@ -131,24 +176,66 @@ def format_chunks(docs) -> tuple[str, list[dict]]:
     return "\n\n".join(lines), sources
 
 
-def build_vector_database():
-    from langchain_chroma import Chroma                              # noqa: PLC0415
-    from langchain_community.document_loaders import PyPDFDirectoryLoader  # noqa: PLC0415
-    from langchain_text_splitters import RecursiveCharacterTextSplitter    # noqa: PLC0415
+def load_pdfs(root: Path, exclude: Path | None = None) -> list:
+    """Every PDF page under `root`, minus anything under `exclude`.
 
-    print(f"1. Loading PDFs from {DATA_PATH}...")
+    Public because `tools/academic_calendar.py` reads the same syllabi this loads, and two
+    copies of "walk a directory for PDFs" is two places for the recursive-glob bug above to
+    come back.
+
+    Args:
+        root:    directory to walk.
+        exclude: a subdirectory of `root` to leave out, or None.
+
+    Returns:
+        A list of LangChain documents, one per page. Empty when `root` does not exist — a
+        missing directory is "no PDFs yet", not a failure.
+    """
+    from langchain_community.document_loaders import PyPDFDirectoryLoader  # noqa: PLC0415
+
+    if not root.exists():
+        return []
+
     # glob is explicit and recursive: data/ has arduino/, espressif/, raspberry_pi/ and
     # sensors/ subdirectories, and the default pattern does not descend into them — so the
     # loader silently found nothing while looking like it had worked.
-    loader = PyPDFDirectoryLoader(str(DATA_PATH), glob="**/*.pdf")
-    documents = loader.load()
-    print(f"   Loaded {len(documents)} pages.")
+    documents = PyPDFDirectoryLoader(str(root), glob="**/*.pdf").load()
+    if exclude is None:
+        return documents
+
+    # Filtered on the resolved path rather than on a substring of it. `"academic" in source`
+    # would also drop `data/sensors/academic_press_sensor.pdf`, and dropping a datasheet
+    # because of its filename is the kind of bug that only shows up as a worse answer.
+    exclude = exclude.resolve()
+    kept = []
+    for doc in documents:
+        source = Path(str((getattr(doc, "metadata", {}) or {}).get("source", "")))
+        try:
+            if source.resolve().is_relative_to(exclude):
+                continue
+        except (OSError, ValueError):       # unresolvable path — keep it, do not lose a page
+            pass
+        kept.append(doc)
+    return kept
+
+
+def _build_collection(documents: list, collection_name: str, label: str) -> int:
+    """Chunk, embed and persist `documents` into one named collection.
+
+    Args:
+        documents:       pages from `_load_pdfs`.
+        collection_name: which Chroma collection to write.
+        label:           what to call these in the printed output ("datasheets", "syllabi").
+
+    Returns:
+        How many chunks were written. Zero means there was nothing to ingest.
+    """
+    from langchain_chroma import Chroma                              # noqa: PLC0415
+    from langchain_text_splitters import RecursiveCharacterTextSplitter    # noqa: PLC0415
 
     if not documents:
-        print(f"   No PDFs found under {DATA_PATH}. Put datasheets in there and run again.")
-        return
+        return 0
 
-    print("2. Chunking documents...")
     # We use small chunks (500 chars) with high overlap (150 chars)
     # so code blocks or register tables don't get cut in half.
     text_splitter = RecursiveCharacterTextSplitter(
@@ -157,15 +244,42 @@ def build_vector_database():
         length_function=len,
     )
     chunks = text_splitter.split_documents(documents)
-    print(f"   Split into {len(chunks)} chunks.")
+    print(f"   {label}: {len(documents)} pages -> {len(chunks)} chunks")
 
-    print(f"3. Embedding and saving to {CHROMA_PATH}...")
     Chroma.from_documents(
         documents=chunks,
         embedding=get_embeddings(),
         persist_directory=str(CHROMA_PATH),
+        collection_name=collection_name,
     )
-    print("Database built successfully!")
+    return len(chunks)
+
+
+def build_vector_database():
+    """Build both collections from `data/`. Safe to re-run; that is how you update it."""
+    print(f"1. Loading PDFs from {DATA_PATH}...")
+    datasheets = load_pdfs(DATA_PATH, exclude=ACADEMIC_PATH)
+    syllabi = load_pdfs(ACADEMIC_PATH)
+    print(f"   Loaded {len(datasheets)} datasheet pages and {len(syllabi)} syllabus pages.")
+
+    if not datasheets and not syllabi:
+        print(f"   No PDFs found under {DATA_PATH}. Put datasheets in there (or syllabi in "
+              f"{ACADEMIC_PATH}) and run again.")
+        return
+
+    print(f"2. Chunking and embedding into {CHROMA_PATH}...")
+    written = _build_collection(datasheets, DATASHEET_COLLECTION, "datasheets")
+    written += _build_collection(syllabi, ACADEMIC_COLLECTION, "syllabi")
+
+    # Each empty collection is called out by name. A silent skip is how you end up asking the
+    # academic agent a question it cannot answer and blaming the agent — the store was simply
+    # never given anything to read.
+    if not datasheets:
+        print(f"   (nothing for the datasheets collection — put PDFs under {DATA_PATH})")
+    if not syllabi:
+        print(f"   (nothing for the academic collection — put syllabi under {ACADEMIC_PATH})")
+
+    print(f"Database built successfully — {written} chunks.")
 
 
 # Run this once to build the DB

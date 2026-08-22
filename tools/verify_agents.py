@@ -102,6 +102,7 @@ ROUTE_TARGETS = {
     AgentRoute.QUIZ:     ("tools.quiz_manager",    "get_random_question"),
     AgentRoute.PERSONA:  ("agents.persona_agent",  "run_persona_agent"),
     AgentRoute.UTILITY:  ("orchestrator.instant",  "Router"),
+    AgentRoute.ACADEMIC: ("agents.academic_agent", "run_academic_agent_response"),
     AgentRoute.GENERAL:  ("agents.persona_agent",  "run_persona_agent"),
 }
 
@@ -152,6 +153,7 @@ TOOLS = {
     "tools.memory_manager":   "add_message",
     "tools.quiz_manager":     "get_random_question",
     "tools.vector_db":        "get_retriever",
+    "tools.academic_calendar": "get_upcoming_deadlines",
 }
 for mod_name, attr in TOOLS.items():
     try:
@@ -219,6 +221,42 @@ check(refuse("rm -rf /") is not None, "the OS blocklist is live")
 check(refuse("cat /sys/class/thermal/thermal_zone0/temp") is None,
       "and still allows the things he is actually asked to do")
 
+# The academic calendar. This one is on the TURN PATH — `engine/core.py` checks it on every
+# routed question — so "it does not raise when the file is absent" is a property the whole
+# copilot depends on, not just the ACADEMIC route. A fresh clone has no calendar at all.
+from tools.academic_calendar import (                                 # noqa: E402
+    format_deadlines, get_upcoming_deadlines, load_calendar)
+
+check(isinstance(load_calendar(), list),
+      "the academic calendar reads (an empty list when never built)")
+check(isinstance(get_upcoming_deadlines(days=3), list),
+      "the deadline check returns a list and never raises on the turn path")
+
+# And the date maths, against a synthetic entry rather than LB's real calendar — which is
+# gitignored, usually absent, and would make this check pass or fail by the calendar month.
+from datetime import datetime, timedelta                              # noqa: E402
+import tools.academic_calendar as _cal                                # noqa: E402
+
+_real_load = _cal.load_calendar
+_soon = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+_late = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+_cal.load_calendar = lambda: [
+    {"course": "ECE 350", "title": "Lab 4", "type": "assignment", "due_date": _soon},
+    {"course": "ECE 350", "title": "Final",  "type": "exam",       "due_date": _late},
+    {"course": "ECE 350", "title": "Broken", "type": "other",      "due_date": "not a date"},
+]
+try:
+    _up = _cal.get_upcoming_deadlines(days=3)
+    check(len(_up) == 1 and _up[0]["title"] == "Lab 4",
+          "a 3-day window keeps what is due soon and drops what is a month out",
+          f"got {[e['title'] for e in _up]}")
+    check(_up[0]["days_away"] == 2, "days_away is counted in whole days",
+          f"got {_up[0].get('days_away')}")
+    check("Lab 4" in format_deadlines(_up) and "due in 2 days" in format_deadlines(_up),
+          "the deadline card renders a readable line", format_deadlines(_up))
+finally:
+    _cal.load_calendar = _real_load
+
 # Quiz data loads (creates its defaults if absent).
 from tools.quiz_manager import get_random_question                    # noqa: E402
 
@@ -253,6 +291,10 @@ def live() -> int:
          "R equals 10 kilohms and C equals 1 microfarad",     "math"),
         ("how wide for 3 amps on 1oz external copper",        "hardware"),
         ("how do I set GPIO 13 as an output on an ESP32",     "firmware"),
+        # With no syllabi ingested the right answer is "I don't know", which is a PASS — the
+        # probe is checking that the route reaches the agent and the agent refuses cleanly
+        # rather than inventing a due date. See the module docstring of academic_agent.py.
+        ("what does my syllabus say is due this week",        "academic"),
     ]
     bad = 0
     e = E()

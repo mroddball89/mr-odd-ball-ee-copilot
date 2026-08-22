@@ -1,11 +1,14 @@
-# Mr Odd Ball — the datasheet RAG pipeline. OPTIONAL, and separated on purpose.
+# Mr Odd Ball — the local-document RAG pipeline. OPTIONAL, and separated on purpose.
 #
 #   pip install -r requirements-rag.txt
 #
-# Everything here exists to answer ONE thing: firmware questions grounded in LB's own
-# datasheet PDFs. Without it the copilot is complete — `tools/vector_db.get_retriever()`
-# returns None, `agents/firmware_agent.py` answers ungrounded and says so, and every other
-# route is unaffected.
+# Everything here exists to answer questions from PDFs LB uploaded himself — firmware
+# questions grounded in his datasheets, and coursework questions grounded in his syllabi.
+# Both live in the same Chroma store under separate collections; see tools/vector_db.py.
+#
+# Without it the copilot is complete — `tools/vector_db.get_retriever()` returns None,
+# `agents/firmware_agent.py` answers ungrounded and says so, `agents/academic_agent.py` says
+# it does not know, and every other route is unaffected.
 #
 # ## Why it is not in requirements.txt
 #
@@ -21,9 +24,13 @@
 # ## Order of operations on the Pi
 #
 #   1. Get him talking on requirements.txt alone.
-#   2. Put datasheet PDFs under data/ (subdirectories are fine, the loader recurses).
+#   2. Put datasheet PDFs under data/ (subdirectories are fine, the loader recurses), and
+#      syllabus PDFs under data/academic/ — that one directory is kept OUT of the datasheet
+#      collection, so a syllabus can never be cited as a datasheet.
 #   3. pip install -r requirements-rag.txt
-#   4. python tools/vector_db.py        # builds chroma_db/, once
+#   4. python tools/vector_db.py           # builds chroma_db/, both collections
+#   5. python tools/academic_calendar.py   # syllabi -> academic_calendar.json. Needs a key;
+#                                          # costs one API call per syllabus file, once.
 #
 # The embedding model itself is ~90MB and downloads on first use, then runs locally forever.
 # Nothing here talks to a paid API.

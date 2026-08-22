@@ -26,7 +26,10 @@ When nothing free matches, `router.py` uses Pydantic structured output
 | `OS` | `agents/os_agent.py` | runs terminal commands on the Pi, and opens desktop applications (`tools/app_launcher.py`) — **asks first**, for both |
 | `QUIZ` | `agents/quiz_agent.py` | tutor mode; grades conceptually, not word-for-word |
 | `WEB` | `agents/web_agent.py` | DuckDuckGo search — **asks first** |
-| `GENERAL` | — | anything outside the scope |
+| `ACADEMIC` | `agents/academic_agent.py` | your syllabi and coursework deadlines — answers from your own uploaded documents **only** |
+| `UTILITY` | `orchestrator/instant.py` | the free lookups, when the router is reached anyway |
+| `PERSONA` | `agents/persona_agent.py` | chit-chat and jokes — Mr Odd Ball himself |
+| `GENERAL` | `agents/persona_agent.py` | anything outside the scope |
 
 ## The two security gates
 
@@ -78,7 +81,7 @@ python main.py
 
 `.env` is gitignored and must stay that way.
 
-## Datasheet retrieval
+## Local document retrieval
 
 Put PDFs under `data/` (there are `arduino/`, `espressif/`, `raspberry_pi/` and `sensors/`
 subdirectories), then build the vector store once:
@@ -90,6 +93,30 @@ python tools/vector_db.py
 It chunks at 500 characters with 150 of overlap — deliberately high, so register tables and
 code blocks are not cut in half — embeds locally with `all-MiniLM-L6-v2`, and persists to
 ChromaDB. Nothing leaves the machine to do it.
+
+**Two collections, one store.** Everything under `data/` goes to the `datasheets` collection
+and is read by the FIRMWARE agent. `data/academic/` is the exception: syllabi go there, into a
+separate `academic` collection read only by the ACADEMIC agent. A semantic search ranks by
+similarity alone and cannot tell a course outline from a datasheet, so one pool would let a
+syllabus ground a firmware answer and be cited as one.
+
+## Coursework and deadlines
+
+Drop your syllabi into `data/academic/`, then run both build steps:
+
+```bash
+python tools/vector_db.py           # embeds them into the academic collection
+python tools/academic_calendar.py   # extracts dates into academic_calendar.json
+```
+
+The ACADEMIC agent answers from those documents and **only** those documents — asked something
+the syllabi do not cover, it says it does not know rather than describing what a course
+"usually" does. There is no public record of your professor's late policy, so a fluent guess
+would be a fabrication with nothing to check it against.
+
+Anything due within **3 days** is then appended to every answer he gives, on any subject — the
+same way the 15-day backup reminder works. It is shown, never spoken, and costs no API call:
+the dates were extracted once, and the check is a JSON read. See `docs/DECISIONS.md` (D11).
 
 ## Quiz mode
 

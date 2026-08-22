@@ -16,6 +16,10 @@ chroma_db/
 sd_card_memory.json
 quiz_data.json
 
+# Extracted from LB's syllabi by `python tools/academic_calendar.py`. His coursework, and a
+# rebuildable artifact like chroma_db/ — absent is the normal state, not a broken install.
+data/academic/academic_calendar.json
+
 # Datasheet PDFs and scratch downloads — large, and not ours to redistribute.
 raw_downloads/
 data/**/*.pdf

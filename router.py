@@ -17,7 +17,7 @@ to be" both land on HARDWARE without anybody maintaining a phrase list.
 
 ## UTILITY is the exception, and it is deliberate
 
-Nine routes, and one of them costs nothing: `UTILITY` is answered by `orchestrator/instant.py`
+Ten routes, and one of them costs nothing: `UTILITY` is answered by `orchestrator/instant.py`
 from lookup tables — the time, the date, a unit conversion, a physical constant, what a word
 means. D2's claim was that most of what you ask a desk assistant needs no intelligence at all,
 and that claim survived the merge. It is now an argument for a route rather than for a tier.
@@ -43,6 +43,7 @@ class AgentRoute(str, Enum):
     WEB = "web"
     PERSONA = "persona"      # added for the merge — Mr Odd Ball himself
     UTILITY = "utility"      # added for the merge — the free, instant answers
+    ACADEMIC = "academic"    # coursework and syllabi, grounded in LB's own uploaded PDFs
     GENERAL = "general"
 
 
@@ -74,6 +75,9 @@ Available Agents:
   an engineering term. Cheap lookups with one right answer and no reasoning required.
 - PERSONA: chit-chat, jokes, greetings, how he is feeling, who he is, opinions. The user is
   talking TO Mr Odd Ball rather than asking him to do a job.
+- ACADEMIC: coursework and class material — what a syllabus says, when something is due,
+  grading or late-work policy, what a course covers. Grounded in the user's own uploaded
+  syllabi, not general study help.
 - GENERAL: anything that fits nowhere above.
 
 Routing notes:
@@ -84,6 +88,11 @@ Routing notes:
   FIRMWARE or GENERAL; a request to check this machine's temperature is OS. Naming a FILE does
   not make it OS: "what's on my amp schematic" is HARDWARE, because reading design files is
   something the hardware agent does itself.
+- ACADEMIC is about what a COURSE requires, not what the user knows — "when is the midterm due"
+  or "what does the syllabus say about late homework" is ACADEMIC. "Test me on this" or "quiz me
+  on filters" is QUIZ even in an academic context, because the user wants to be evaluated, not
+  told a policy. A datasheet or component question stays FIRMWARE even if it came up because of
+  a class; ACADEMIC is for the course paperwork itself.
 
 User Query: {question}
 """
