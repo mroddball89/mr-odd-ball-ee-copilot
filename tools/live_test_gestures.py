@@ -127,6 +127,67 @@ def reexec_into_sidecar() -> None:
     os.execve(target, [target, str(Path(__file__).resolve()), *sys.argv[1:]], env)
 
 
+def ensure_qt_platform() -> str:
+    """Point Qt at a platform plugin that OpenCV actually ships. Returns a one-line report.
+
+    ## The failure this exists to prevent
+
+    Measured on the Pi, 2026-08-23. The window did not open and the program exited cleanly
+    saying "camera released", with one line of Qt noise above it:
+
+        qt.qpa.plugin: Could not find the Qt platform plugin "wayland" in
+          ".../.venv-gesture/lib/python3.12/site-packages/cv2/qt/plugins"
+
+    Both halves of that are true and neither is a bug in this repo:
+
+    * This Pi runs **labwc**, so `XDG_SESSION_TYPE=wayland`, so Qt auto-selects its `wayland`
+      platform plugin.
+    * The `opencv-python` wheel ships exactly one platform plugin — `libqxcb.so`. There is no
+      `libqwayland*.so` in it and there never was.
+
+    So Qt asks for a plugin that is not in the wheel, `cv2.imshow` creates nothing, and the
+    loop's own "did the user close the window?" check sees no window on frame 1 and stops —
+    which is correct behaviour reaching an incorrect conclusion, and the most confusing kind
+    of exit there is.
+
+    **Xwayland is already running** on this box (labwc starts it, socket at `/tmp/.X11-unix/X0`),
+    so the xcb plugin the wheel *does* ship works fine — the window is presented through
+    XWayland onto the Wayland desktop. That is what this selects.
+
+    An explicit `QT_QPA_PLATFORM` from the environment is never overridden: someone who set it
+    by hand is debugging exactly this, and a tool that silently disagrees is no help.
+    """
+    import importlib.util
+
+    if os.environ.get("QT_QPA_PLATFORM"):
+        return f"QT_QPA_PLATFORM={os.environ['QT_QPA_PLATFORM']} (from the environment, kept)"
+
+    wayland = (os.environ.get("XDG_SESSION_TYPE") == "wayland"
+               or bool(os.environ.get("WAYLAND_DISPLAY")))
+    if not wayland:
+        return ""                              # X11 or Windows: Qt's own default is right
+
+    spec = importlib.util.find_spec("cv2")     # located WITHOUT importing it
+    plugins = (Path(spec.submodule_search_locations[0]) / "qt" / "plugins" / "platforms"
+               if spec and spec.submodule_search_locations else None)
+    if plugins and list(plugins.glob("libqwayland*.so")):
+        return ""                              # a wheel that can do wayland; leave it alone
+
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+    note = "QT_QPA_PLATFORM=xcb (wayland session, but this opencv only ships libqxcb.so)"
+
+    # xcb needs a DISPLAY. Under labwc, Xwayland is already up and owns :0 — but a shell that
+    # never had DISPLAY exported (a plain `ssh`, or a terminal started oddly) will not have it.
+    if not os.environ.get("DISPLAY"):
+        for sock in sorted(Path("/tmp/.X11-unix").glob("X*")) if Path("/tmp/.X11-unix").is_dir() else []:
+            os.environ["DISPLAY"] = ":" + sock.name[1:]
+            note += f", DISPLAY={os.environ['DISPLAY']} (Xwayland)"
+            break
+        else:
+            note += ", and DISPLAY is unset with no X socket to guess — the window WILL fail"
+    return note
+
+
 def make_drawer(mp):
     """Return `draw(bgr_frame, landmarks)`, using mediapipe's own drawing when it is there.
 
@@ -251,6 +312,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {const} = {value}  (was {getattr(gc, const)}, for this run only)")
             setattr(gc, const, value)
 
+    # BEFORE anything imports cv2: Qt reads this when it loads its platform plugin, and
+    # GestureRecognizer's constructor is the first thing here that imports cv2.
+    qt_note = ensure_qt_platform()
+    if qt_note:
+        print(f"  {qt_note}")
+
     rec = gc.GestureRecognizer()
     if not rec.available:
         print(f"\n  No detector: {rec.why}")
@@ -275,15 +342,26 @@ def main(argv: list[str] | None = None) -> int:
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, gc.FRAME_HEIGHT)
     cap.set(cv2.CAP_PROP_FPS, gc.FRAME_FPS)
 
-    window = "MR ODD BALL — gesture tuning"
+    # ASCII ONLY, and it is load-bearing. Measured on the Pi 2026-08-23: this same title with
+    # an em dash in it made `cv2.imshow` produce a window whose WND_PROP_VISIBLE was 0.0 and
+    # which never appeared, while the identical call with an ASCII title reported 1.0 and drew
+    # normally. OpenCV's Qt backend does not handle a non-ASCII window name on this build.
+    #
+    # It cost a whole debugging pass because it stacks with the Wayland plugin problem above:
+    # both fail as "the window did not open", and fixing only one changes nothing visible.
+    # This repo writes em dashes everywhere in prose, so the habit walked straight into a
+    # string that is an identifier rather than prose.
+    window = "MR ODD BALL - gesture tuning"
+    assert window.isascii(), "the cv2 window title must be ASCII; see the note above"
     show_numbers = True
     fps, last = 0.0, time.monotonic()
     held, held_until = "NONE", 0.0
-    saved = 0
+    saved = frames = 0
 
     print("\n  q or ESC to quit, s to save a frame, h for the numbers panel\n")
     try:
         while True:
+            frames += 1
             ok, frame = cap.read()
             if not ok or frame is None:
                 print("  the camera stopped returning frames")
@@ -347,10 +425,25 @@ def main(argv: list[str] | None = None) -> int:
                 saved += 1
                 print(f"  saved {path.relative_to(REPO_ROOT)}")
 
-            # The window manager's close button. Without this, clicking X leaves the loop
-            # running against a destroyed window and the camera held open.
-            if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
-                break
+            # `getWindowProperty` returns < 1 for BOTH "the user closed it" and "it was never
+            # created", and those need opposite responses. On frame 1 it can only be the
+            # second — no one closes a window inside 150 ms — so that case is diagnosed loudly
+            # instead of exiting like a normal quit. That ambiguity is exactly what made the
+            # 2026-08-23 Wayland failure look like a clean exit; see `ensure_qt_platform`.
+            visible = cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE)
+            if frames == 1 and visible < 1:
+                print("\n  The window never opened — cv2.imshow created nothing.")
+                print(f"    QT_QPA_PLATFORM={os.environ.get('QT_QPA_PLATFORM', '(unset)')}   "
+                      f"DISPLAY={os.environ.get('DISPLAY', '(unset)')}   "
+                      f"XDG_SESSION_TYPE={os.environ.get('XDG_SESSION_TYPE', '(unset)')}")
+                print("    Look for a 'qt.qpa.plugin' line above this. If it names a plugin,")
+                print("    that plugin is missing from the opencv wheel — force one it has:")
+                print("      QT_QPA_PLATFORM=xcb DISPLAY=:0 python tools/live_test_gestures.py")
+                print("    Over SSH with no desktop, there is nowhere to put a window at all;")
+                print("    run it from the Pi's own terminal, or use ssh -X.\n")
+                return 2
+            if visible < 1:
+                break                          # the window manager's close button
     except KeyboardInterrupt:
         print("\n  interrupted")
     finally:

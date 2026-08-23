@@ -2422,3 +2422,65 @@ lived in the gap between two functions that each looked right. It took eleven li
 `.desktop` files in a temp directory. Same lesson as D26's missing gesture test, arriving from
 the opposite direction: there the test was claimed and absent, here the behaviour was claimed
 and untested.
+
+### D26 bring-up — the window would not open, and there were two reasons stacked
+
+**2026-08-23, on the Pi.** First run of `tools/live_test_gestures.py` on the box it was written
+for. It printed its banner, said "camera released", and exited 0. No window, no error, no
+traceback — the single most useless failure shape there is.
+
+Two independent bugs, both presenting as "the window did not open", so fixing either one alone
+changed nothing observable. That is why it took a full pass to unpick.
+
+**1. OpenCV's Qt has no Wayland plugin.** This Pi runs labwc, so `XDG_SESSION_TYPE=wayland`, so
+Qt auto-selects its `wayland` platform plugin. The `opencv-python` wheel ships exactly one:
+
+```
+$ ls .venv-gesture/lib/python3.12/site-packages/cv2/qt/plugins/platforms/
+libqxcb.so
+```
+
+Xwayland is already running under labwc and owns `:0`, so the `xcb` plugin the wheel *does* ship
+works perfectly — the window is presented through XWayland. `ensure_qt_platform()` now detects
+the combination (wayland session + no wayland plugin in *this* cv2) and sets
+`QT_QPA_PLATFORM=xcb`, filling in `DISPLAY` from `/tmp/.X11-unix/` if the shell has none. An
+explicit `QT_QPA_PLATFORM` from the environment is never overridden — someone who set it is
+debugging this exact thing.
+
+**2. The window title had an em dash in it.** Measured, once the Qt platform was sorted and the
+window still refused to appear:
+
+```
+'ascii-name'                     visible=1.0
+'MR ODD BALL — gesture tuning'   visible=0.0
+```
+
+Same call, same platform plugin, same everything. OpenCV's Qt backend will not make a window
+visible when its title is not ASCII. **This repo writes em dashes everywhere in prose, and the
+habit walked straight into a string that is an identifier rather than prose.** The title is
+ASCII now, with an `assert window.isascii()` beside it, and an AST check confirms no non-ASCII
+literal reaches `imshow`, `putText` or `imwrite` anywhere in the file.
+
+### And the exit was clean, which was the actual problem
+
+The loop ends when `getWindowProperty(...) < 1`, which is how the window-manager close button is
+detected. That check cannot tell **"the user closed it"** from **"it was never created"**, so a
+window that never opened read as a window that was closed, and the program did exactly what it
+does when LB presses q.
+
+On frame 1 it can only be the second — nobody closes a window inside 150 ms. That case now
+prints the platform, the display, the session type and the command to force a working plugin,
+and returns **2** rather than 0.
+
+**A diagnostic that exits 0 is worse than one that crashes.** The traceback would have named the
+Qt plugin in the first thirty seconds. Graceful degradation is right for the security gate,
+where a failed camera must fall through to the keyboard — and wrong for a tool whose entire
+purpose is to show you something, where the only honest response to "I cannot show you anything"
+is to say so and fail.
+
+### The rule
+
+**Test the deliverable on the box it is for, before saying it is done.** Everything testable
+without a camera was green on the authoring machine and every one of those checks was still
+green while the window did not exist. Neither bug was reachable from Windows: one needs a
+Wayland session, the other needs OpenCV's Qt backend rather than the Win32 one.
