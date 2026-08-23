@@ -82,7 +82,7 @@ run llm    langchain-google-genai python-dotenv pydantic
 run audio  sounddevice numpy websockets piper-tts faster-whisper 'onnxruntime>=1.10,<2' 'tqdm>=4,<5' 'scipy>=1,<2' 'scikit-learn>=1,<2' 'requests>=2,<3'
 run wake   --no-deps 'openwakeword>=0.6.0'
 run tools  langchain-community langchain-text-splitters langchain-experimental
-run agents 'sympy>=1.13' 'kiutils>=1.4.8'
+run agents 'sympy>=1.13' 'kiutils>=1.4.8' 'icalendar>=6.0,<8'
 run search ddgs duckduckgo-search
 
 # Gesture approval is NOT a pip stage. Corrected 2026-08-22 (D15).

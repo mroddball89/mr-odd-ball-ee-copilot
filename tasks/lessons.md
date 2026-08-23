@@ -547,3 +547,53 @@ inside a tool called from an agent turn — where a raised exception becomes a s
 `tools/kicad_parser.py` is built around "these tools never raise" and fuzzes 600 calls to prove
 it. A new tool in the same position gets the same rule, and `pathlib` has more sharp edges in it
 than it looks.
+
+## L17 — A URL that authenticates is a password with a scheme on the front
+
+**2026-08-23 (D22).** The request said *"The URL to hardcode (or default) is:
+`https://…/feeds/calendars/user_hBJNTDIYLYslxNmEdKLmv56ON13DQ0QrSjnzMDiC.ics`"*. That trailing
+token **is** the authentication — anyone holding the URL reads the whole Canvas calendar, with
+no login, until it is reset. This repo has a GitHub remote and a tracked branch, so hardcoding
+it would have published it in the same commit that added the feature.
+
+**Why:** a secret usually announces itself. It is called a key, or a token, or it sits behind
+`getpass`. A *URL* announces the opposite — URLs are the one kind of string that belongs in
+source, and this one arrived inside the feature request, already written out, in the position
+where a constant goes. Nothing about its shape says stop.
+
+And the cleanup is not symmetric with the mistake. A committed API key is fixed by rotating it;
+a committed feed URL is fixed by rotating it too, but only if somebody notices, and the whole
+point of the thing is that it is quiet.
+
+**How to apply:** the test is not "does this look like a secret" — it is **"what can someone do
+if they have it?"** For any URL going into source, answer that question out loud before pasting.
+If the answer involves reading or writing the user's data, it belongs in `.env` with the API key,
+and **there is no default constant** — a fallback that is a live token is a published token the
+moment anyone commits.
+
+Then make it impossible to reintroduce: `tools/verify_upload.py` greps the module for
+`user_[A-Za-z0-9]{20,}` and fails. A rule nobody can check is a rule that lasts one commit.
+
+## L18 — A shell heredoc eats a backslash level, and it can write a NUL into a document
+
+**2026-08-23.** `docs/DEPLOY.md` carried a literal `\x00` in the middle of a shell snippet. It
+came from writing `tr "\0" "\n"` through a `python - <<'PY'` heredoc: a backslash level was
+consumed in transport, so `"\0"` reached Python as an escape rather than as two characters, and
+Python wrote the byte. `git` classified the file as binary. `grep` refused to search it. The
+documented command was uncopyable. It survived a full commit and a deploy.
+
+The repair was bitten by the *same* mechanism: `b.replace(NUL, b"\0")` arrived as `b"\0"` and
+replaced a NUL with a NUL, reporting success. It only worked as `bytes([92, 48])`.
+
+Same family as the CRLF entry above and the earlier `f"...\r\n"` that became a real newline
+inside an f-string: **anything backslash-shaped is unreliable through this path.**
+
+**Why:** the corruption is invisible in every normal view. The markdown renders, the diff looks
+plausible, `git status` is clean. The only tell was `grep` saying "Binary file … matches" while
+looking for something else entirely.
+
+**How to apply:** never put a backslash escape inside a heredoc-delivered script — build the
+bytes from codes (`bytes([92, 48])`), or use the Edit tool, which does not go through a shell.
+And sweep for NUL alongside CRLF before committing:
+
+    python -c "import pathlib;print([n for n in ... if b'\x00' in pathlib.Path(n).read_bytes()])"

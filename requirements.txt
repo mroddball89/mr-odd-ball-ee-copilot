@@ -80,6 +80,16 @@ scipy>=1.3,<2
 scikit-learn>=1,<2
 requests>=2.0,<3
 
+# --- Canvas calendar sync (tools/canvas_sync.py), added 2026-08-23 -----------------------
+# His coursework dates come from a live Canvas .ics feed rather than from syllabus PDFs, so
+# they stay right when a date moves. `requests` is already above, for openWakeWord.
+#
+# Pure Python, no wheels to build, ~200KB. It replaces an LLM call per syllabus with one HTTP
+# GET, which on a 20-request-a-day free tier (D3) pays for itself immediately.
+#
+# The feed URL is a CREDENTIAL and lives in .env as ODDBALL_CANVAS_ICS. See tools/canvas_sync.py.
+icalendar>=6.0,<8
+
 # =======================================================================================
 # Gesture approval. Added 2026-08-21.
 #

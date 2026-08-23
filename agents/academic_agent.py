@@ -47,9 +47,25 @@ from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Response
 from engine.split import SPOKEN_INSTRUCTION, split
 from tools.academic_calendar import format_calendar_for_llm
+from tools.canvas_sync import sync_canvas_calendar
 from tools.vector_db import ACADEMIC_COLLECTION, format_chunks, get_retriever
 
 LOG = logging.getLogger("oddball.academic")
+
+# The one tool this agent gets, and it is deliberately the only one.
+#
+# Every other capability here is a READ under strict grounding — retrieve, then answer from what
+# was retrieved and nothing else. `sync_canvas_calendar` is the opposite shape: it is an action,
+# it touches the network, and it REPLACES the calendar that the grounding rules above depend on.
+# Giving this agent a second tool would start eroding the property that makes it trustworthy,
+# so the bar for the next one is high.
+#
+# It is not behind a permission gate, and that is a considered call rather than an oversight.
+# The WEB route gates because a model composes the query and it leaves the machine; this fetches
+# one fixed URL out of LB's own `.env`, sends nothing, and overwrites a file that is rebuilt by
+# running it again. The blast radius is "his calendar is refreshed", which is what he asked for.
+ACADEMIC_TOOLS = [sync_canvas_calendar]
+_BY_NAME = {t.name: t for t in ACADEMIC_TOOLS}
 
 NO_SYLLABI = ("No syllabus excerpts were retrieved. No syllabi have been ingested, or none of "
               "them cover this question.")
@@ -84,6 +100,19 @@ Rules about those sources:
 - For any question about WHEN something is due, use the deadline calendar. It is structured and
   exact; the excerpts are prose and may describe a schedule without stating a date.
 - Never name a date, an assignment or a policy that does not appear above.
+- The calendar comes from his LIVE CANVAS FEED. The syllabus excerpts are PDFs he uploaded and
+  their dates may be out of date — where a date in the excerpts disagrees with the calendar, the
+  calendar is right and the excerpt is a stale snapshot. Use the excerpts for policies and rules,
+  not for dates.
+
+REFRESHING THE CALENDAR:
+You have one tool, `sync_canvas_calendar`. Call it when he asks you to sync, refresh or update
+his schedule, calendar, assignments or deadlines — "sync Canvas", "update my schedule", "refresh
+my deadlines" — and also when he tells you a date you just gave him is wrong or out of date,
+because that is what a stale calendar sounds like.
+- Do NOT call it to answer an ordinary question about what is due. The calendar above is already
+  loaded; syncing on every question would put a network round trip on every turn.
+- Never claim you have refreshed anything unless the tool actually ran and said so.
 
 {chat_history}
 
@@ -150,4 +179,44 @@ def _answer(query: str) -> tuple[str, list[dict]]:
         question=query,
     )
 
-    return extract_text_content(llm.invoke(prompt).content), sources
+    # `bind_tools` where available, and a plain invoke where it is not. The fallback is not
+    # defensive programming for its own sake: `tools/verify_academic.py` substitutes a stub LLM
+    # to prove retrieval happens BEFORE generation, and a stub is exactly the thing that has no
+    # `bind_tools`. Requiring it here would make this agent untestable without a network.
+    bind = getattr(llm, "bind_tools", None)
+    response = (bind(ACADEMIC_TOOLS).invoke(prompt) if callable(bind) else llm.invoke(prompt))
+
+    # 4. If it reached for the sync, run it and answer again with the result. Same bounded
+    #    two-step as the other agents, and the second invoke is on the UNBOUND `llm` — a model
+    #    that can still see the tool can call it again, and "refresh my calendar" has no natural
+    #    stopping point.
+    for call in getattr(response, "tool_calls", None) or []:
+        chosen = _BY_NAME.get(call.get("name", ""))
+        if chosen is None:
+            continue
+        try:
+            result = str(chosen.invoke(call.get("args", {})))
+        except Exception as exc:                                      # noqa: BLE001
+            # The tool never raises; binding its arguments can, when a model invents a field.
+            LOG.exception("%s failed with args=%r", chosen.name, call.get("args", {}))
+            result = f"The sync could not be run: {type(exc).__name__}: {exc}"
+
+        LOG.info("canvas sync ran from the academic agent")
+        # The calendar on disk has just changed, so the one in the prompt above is stale. It is
+        # re-read rather than reused — telling him "synced" while answering from the calendar
+        # that was loaded before the sync is the exact failure this route exists to avoid.
+        refreshed = ChatPromptTemplate.from_template(ACADEMIC_PROMPT_TEMPLATE).format(
+            syllabus_context=context or NO_SYLLABI,
+            calendar_context=format_calendar_for_llm(),
+            chat_history=format_memory_for_llm(),
+            question=query,
+        )
+        second = llm.invoke(
+            f"{refreshed}\n\nTHE CALENDAR HAS JUST BEEN REFRESHED FROM CANVAS. The tool has "
+            f"ALREADY RUN — do not call it again. It reported:\n{result}\n\n"
+            f"Tell him what happened in one or two short sentences, and answer his question "
+            f"from the refreshed deadlines above. If the tool reported a failure, say plainly "
+            f"that the calendar was not updated and why.")
+        return extract_text_content(second.content), sources
+
+    return extract_text_content(response.content), sources

@@ -26,7 +26,7 @@ When nothing free matches, `router.py` uses Pydantic structured output
 | `OS` | `agents/os_agent.py` | runs terminal commands on the Pi, and opens desktop applications (`tools/app_launcher.py`) — **asks first**, for both |
 | `QUIZ` | `agents/quiz_agent.py` | tutor mode; grades conceptually, not word-for-word |
 | `WEB` | `agents/web_agent.py` | DuckDuckGo search — **asks first** |
-| `ACADEMIC` | `agents/academic_agent.py` | your syllabi and coursework deadlines — answers from your own uploaded documents **only** |
+| `ACADEMIC` | `agents/academic_agent.py` | coursework deadlines from your **live Canvas feed** (`tools/canvas_sync.py`), and course policies from your own uploaded syllabi — answers from those **only** |
 | `UTILITY` | `orchestrator/instant.py` | the free lookups, when the router is reached anyway |
 | `PERSONA` | `agents/persona_agent.py` | chit-chat and jokes — Mr Odd Ball himself |
 | `GENERAL` | `agents/persona_agent.py` | anything outside the scope — **and files whatever you upload** (`tools/file_manager.py`), whichever kind of document it turns out to be |
@@ -153,13 +153,39 @@ syllabus ground a firmware answer and be cited as one.
 
 ## Coursework and deadlines
 
-Upload your syllabi with the paperclip and say they are coursework. By hand, drop them into
-`data/academic/` and run both build steps:
+**Deadlines come from your live Canvas feed, not from the PDFs.** A syllabus is a snapshot; a
+date moved in week four is right in Canvas and wrong in the PDF, and the PDF's version is the one
+that got extracted. The feed also costs no API call at all — one HTTP GET against a 20-a-day
+quota.
+
+```bash
+python tools/canvas_sync.py             # pull the live dates
+python tools/canvas_sync.py --dry-run   # see what it would import, write nothing
+```
+
+Or just say **"sync Canvas"** / **"update my schedule"** and he does it — `sync_canvas_calendar`
+is bound to the ACADEMIC agent.
+
+The feed URL is a **credential**: anyone holding it reads your whole calendar with no login. It
+goes in `.env`, which is gitignored and is not deployed:
+
+```
+ODDBALL_CANVAS_ICS=https://<school>.instructure.com/feeds/calendars/user_....ics
+```
+
+Canvas gives you the link under **Calendar → Calendar Feed**, bottom right. Reset it there if it
+ever leaks.
+
+Syllabi are still uploaded and still indexed — for their **prose**, which is what a syllabus is
+actually good for. The late policy, the grading split, what the course covers:
 
 ```bash
 python tools/vector_db.py           # embeds them into the academic collection
-python tools/academic_calendar.py   # extracts dates into academic_calendar.json
+python tools/academic_calendar.py   # the old PDF date extractor, kept as a fallback
 ```
+
+The extractor still works for a course that is not in Canvas, and it will never overwrite a
+Canvas date — the two writers own their own rows through a `source` field.
 
 The ACADEMIC agent answers from those documents and **only** those documents — asked something
 the syllabi do not cover, it says it does not know rather than describing what a course

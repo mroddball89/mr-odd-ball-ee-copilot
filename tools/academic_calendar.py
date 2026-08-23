@@ -1,11 +1,30 @@
 #!/usr/bin/env python3
 """
 Module:  academic_calendar.py
-Purpose: Pull dated coursework out of LB's syllabi once, and read it back for free forever.
+Purpose: Hold LB's coursework deadlines, and read them back for free on every turn.
 Author:  LB
-Date:    2026-08-21
+Date:    2026-08-21 (Canvas became the source of dates 2026-08-23)
 
-    python tools/academic_calendar.py        # build (or rebuild) the calendar from data/academic/
+    python tools/canvas_sync.py              # THE source of dates now — his live Canvas feed
+    python tools/academic_calendar.py        # the old PDF extractor, kept as a fallback
+
+## Dates come from Canvas now, not from the PDFs
+
+**`tools/canvas_sync.py` is the live source and this module's extractor is a fallback.** A
+syllabus is a snapshot; a date moved in week four is right in Canvas and wrong in the PDF, and
+the PDF's version is the one that got extracted. LB: *"the static syllabus PDFs contain outdated
+dates."* The feed also costs **no API call**, where extraction costs one per document against a
+20-a-day quota (D3).
+
+Everything below `load_calendar()` is unchanged and is what both writers feed: the file format,
+the day-granularity comparison, the banner, and the prompt rendering. Only *where the rows come
+from* moved.
+
+The two writers coexist through the `source` field, and neither can erase the other's work:
+`canvas_sync` owns rows marked `canvas`, this module owns rows marked with a PDF's filename, and
+`extract_deadlines_from_syllabi` explicitly preserves Canvas rows on every run including a full
+rebuild. The syllabus **RAG is untouched** — `tools/vector_db.py` still embeds `data/academic/`
+and the agent still retrieves policy prose from it. Only date extraction was retired.
 
 ## Why extraction is a build step and not part of the answer
 
@@ -186,20 +205,77 @@ def format_deadlines(entries: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def format_calendar_for_llm(entries: list[dict] | None = None) -> str:
-    """The whole calendar as prompt context, so the agent can answer date questions from it.
+# How far ahead `format_calendar_for_llm` lists everything, and the kinds it lists no matter how
+# far away they are. Both exist because the Canvas feed changed the arithmetic completely.
+#
+# A syllabus extraction produced ten or twenty dates per course. LB's ONE Canvas course produced
+# **139**, measured 2026-08-23 — 9,580 characters, about 2,400 tokens, injected into the prompt
+# of every single ACADEMIC turn. Five courses would be ~12,000 tokens per question, most of it
+# weekly knowledge checks three months out that nobody is asking about.
+#
+# So: everything inside the horizon, plus every exam and project regardless of date. That second
+# clause is the important half — "when is the final?" is exactly the question a horizon would
+# break, and an exam in December is precisely the thing worth carrying all term.
+CALENDAR_HORIZON_DAYS = 60
+CALENDAR_ALWAYS_TYPES = ("exam", "project")
+
+# A ceiling on lines even after the filter above, so a term with a genuinely enormous number of
+# near-term items degrades instead of producing a prompt nothing can answer from.
+CALENDAR_MAX_LINES = 120
+
+
+def format_calendar_for_llm(entries: list[dict] | None = None,
+                            horizon_days: int = CALENDAR_HORIZON_DAYS) -> str:
+    """The calendar as prompt context, so the agent can answer date questions from it.
 
     The counterpart to `tools/vector_db.format_chunks()`: retrieved prose grounds "what does
     the policy say", and this grounds "when is it due".
+
+    Args:
+        entries:      the calendar, or None to load it.
+        horizon_days: how far ahead to list everything. Exams and projects beyond it are still
+                      listed; routine work beyond it is summarised as a count.
+
+    **It says what it left out.** A model handed a silently truncated calendar will answer
+    "nothing is due then" about a date it was never shown, which is the fabrication this whole
+    route exists to prevent — so the omission is stated in the context itself, and the model is
+    told to say it does not know rather than to infer from an absence.
     """
     entries = load_calendar() if entries is None else entries
     if not entries:
-        return "No syllabus deadlines have been extracted yet."
+        return "No coursework deadlines are on file yet."
+
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    horizon = today + timedelta(days=horizon_days)
+
+    shown, deferred = [], []
+    for entry in sorted(entries, key=lambda x: str(x.get("due_date", ""))):
+        due = _parse_due(entry)
+        keep = (due is None                                   # undated: show it, it is unusual
+                or due <= horizon
+                or str(entry.get("type", "")).lower() in CALENDAR_ALWAYS_TYPES)
+        (shown if keep else deferred).append(entry)
+
+    overflow = []
+    if len(shown) > CALENDAR_MAX_LINES:
+        shown, overflow = shown[:CALENDAR_MAX_LINES], shown[CALENDAR_MAX_LINES:]
 
     lines = [f"Today's date is {datetime.now():%Y-%m-%d}.", "", "KNOWN DEADLINES:"]
-    for e in sorted(entries, key=lambda x: str(x.get("due_date", ""))):
+    for e in shown:
         lines.append(f"- {e.get('due_date', '?')}  {e.get('course', '?')}  "
                      f"{e.get('title', '?')} ({e.get('type', 'other')})")
+
+    hidden = deferred + overflow
+    if hidden:
+        courses = sorted({str(e.get("course", "?")) for e in hidden})
+        last = max(str(e.get("due_date", "")) for e in hidden)
+        lines += [
+            "",
+            f"({len(hidden)} further item(s) are on file beyond {horizon:%Y-%m-%d}, running to "
+            f"{last}, in: {', '.join(courses)}. They are NOT listed above. If the user asks "
+            f"about a date after {horizon:%Y-%m-%d} and it is not listed, say you would need to "
+            f"check rather than saying nothing is due.)",
+        ]
     return "\n".join(lines)
 
 
@@ -255,7 +331,16 @@ def extract_deadlines_from_syllabi(sources: set[str] | None = None) -> int:
         print(f"No PDFs found under {ACADEMIC_PATH}. Put your syllabi in there and run again.")
         return 0
 
-    kept: list[dict] = []
+    # Canvas rows ALWAYS survive, whether this is a full run or an incremental one. The feed is
+    # the live source of dates now (tools/canvas_sync.py); this path only ever owned the rows it
+    # extracted from PDFs, and a full rebuild wiping the feed's work would be a calendar that
+    # silently reverts to stale dates the next time somebody runs this script.
+    from tools.canvas_sync import CANVAS_SOURCE                      # noqa: PLC0415
+
+    kept: list[dict] = [d for d in load_calendar()
+                        if str(d.get("source", "")) == CANVAS_SOURCE]
+    if kept:
+        print(f"   keeping {len(kept)} Canvas deadline(s) — this script only owns PDF rows")
     if sources:
         wanted = {Path(s).name for s in sources}
         documents = {src: text for src, text in documents.items() if Path(src).name in wanted}
@@ -263,8 +348,11 @@ def extract_deadlines_from_syllabi(sources: set[str] | None = None) -> int:
             print(f"None of {', '.join(sorted(wanted))} is under {ACADEMIC_PATH}. "
                   f"The calendar is unchanged.")
             return len(load_calendar())
-        # Everything from a document we are NOT re-reading survives this run.
-        kept = [d for d in load_calendar() if str(d.get("source", "")) not in wanted]
+        # Everything from a document we are NOT re-reading survives this run, on top of the
+        # Canvas rows already held above.
+        kept = kept + [d for d in load_calendar()
+                       if str(d.get("source", "")) not in wanted
+                       and str(d.get("source", "")) != CANVAS_SOURCE]
         print(f"1. Re-reading {len(documents)} syllabus file(s), and keeping {len(kept)} "
               f"deadline(s) already extracted from the others")
     else:

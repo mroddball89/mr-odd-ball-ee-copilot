@@ -1721,3 +1721,123 @@ the repo, and it was four days out of date. Building it as specified would have 
 without anyone deciding to — the commit message would have said "add upload endpoint" and the
 diff would have said "reinstate FastAPI, uvicorn and an ASGI stack on the voice loop's import
 path". A specification is evidence about the goal, not about the codebase.
+
+## D22 — The syllabus was never the source of truth, and the URL was a password
+
+**2026-08-23.** LB: *"The static syllabus PDFs contain outdated dates. Instead, we are switching
+to a live Canvas LMS `.ics` calendar feed."*
+
+He is right, and the reason is worth stating precisely. **A syllabus is a snapshot.** A date
+moved in week four is right in Canvas and wrong in the PDF, and the PDF's version is the one
+`extract_deadlines_from_syllabi()` extracted, at one Gemini call per document, against a quota
+D3 measured at 20 requests per model per day. The feed costs one HTTP GET and no model call at
+all. It is strictly better on accuracy AND on quota, which is a rare combination.
+
+`tools/canvas_sync.py` fetches the feed, parses it with `icalendar`, and writes the same
+`academic_calendar.json` everything already reads. Nothing downstream changed: the banner, the
+day-granularity comparison, `format_calendar_for_llm`, the deadline check on every turn.
+
+### The URL is a credential, and it was going to be committed
+
+The spec said *"The URL to hardcode (or default) is: …user_hBJNTDIYLYslxNmEdKLmv56ON13DQ0QrSjnzMDiC.ics"*.
+
+**That token IS the authentication.** Anyone holding the URL reads LB's entire calendar, with no
+login, until he resets it in Canvas. This repository has a GitHub remote and the branch is
+tracked. Hardcoding it would have published it in the same commit that added the feature, and
+the fix afterwards is not `git rm` — it is resetting the token in Canvas, because the history
+keeps it.
+
+So it lives in `.env` as `ODDBALL_CANVAS_ICS`, gitignored and excluded from the deploy tarball,
+written once per machine. Exactly the treatment `GOOGLE_API_KEY` gets (D7) and the convention
+`ODDBALL_KICAD_ROOT` follows. There is deliberately **no fallback constant**: a default that is
+a live token is a published token the moment anyone commits.
+
+`tools/verify_upload.py` now greps the module for `user_[A-Za-z0-9]{20,}` and fails if one ever
+reappears.
+
+### Four things the real feed taught, and the obvious implementation gets none of them right
+
+Measured against the live feed — 139 events, one course, 68 KB:
+
+**1. The date is not the date.** All 139 `DTSTART`s came back as `date`, so the naive reading
+happened to work. But Canvas emits a *datetime* for anything with a time of day, and an
+assignment due 11:59 PM is stored as **03:59Z the next day**. `.date()` on that UTC value is off
+by one — every time, silently, and in the direction that tells LB he has an extra day. The Pi is
+`America/New_York`, so it would never have self-corrected. `_due_date` converts to local before
+it truncates, and the harness pins `2026-09-02T03:59Z -> 2026-09-01`.
+
+**2. Summaries carry HTML entities.** `Sample AI Policy&#8212;Responsible Use`, 2 of 139. That
+text is read aloud by Piper and printed on a card. `&#8212;` is not a word.
+
+**3. The bracketed course is not a course code.** It is `POSC201.W02_Fall 2026` — code, section
+and term. "POSC201.W02_Fall 2026, Knowledge Check VM.1" is not a sentence anyone wants spoken,
+so the code is cleaned to `POSC201` and the raw string kept as `section`.
+
+**4. One course produced 139 deadlines.** A syllabus extraction produced ten or twenty.
+
+That last one is not a detail, it is a different order of magnitude, and it broke something
+quietly: `format_calendar_for_llm()` puts the calendar in the prompt of **every** ACADEMIC turn.
+Measured, one course:
+
+    139 entries -> 9,580 characters -> ~2,400 tokens, per question
+    extrapolated to five courses     -> ~12,000 tokens, per question
+
+Most of it weekly knowledge checks three months out that nobody is asking about. So the renderer
+is bounded: everything inside 60 days, **plus every exam and project at any date** — that second
+clause is the load-bearing half, because "when is the final?" is exactly the question a plain
+horizon would break — capped at 120 lines, and it **says what it omitted**. A model handed a
+silently truncated calendar answers "nothing is due then" about a date it was never shown, which
+is the fabrication this whole route exists to prevent. After the first real sync on the Pi: 89
+lines of 139, 6,332 characters, ~1,583 tokens.
+
+### Two writers, one file, and neither can erase the other
+
+`canvas_sync` and `extract_deadlines_from_syllabi` both write `academic_calendar.json`. They
+coexist through the `source` field that already existed for the incremental merge: Canvas rows
+are marked `canvas`, PDF rows carry the filename, and each writer only ever replaces its own.
+`extract_deadlines_from_syllabi` now preserves Canvas rows on **every** run including a full
+rebuild — without that, running the old script once would silently revert the calendar to stale
+dates.
+
+The syllabus RAG is untouched, and that was explicit in the request. `tools/vector_db.py` still
+embeds `data/academic/` into the `academic` collection; the agent still retrieves policy prose
+from it. **Prose is what a syllabus is actually good for** — the late policy, the grading split,
+what the course covers — and none of that is in a calendar feed. Only date extraction retired.
+
+The upload path went from two model calls to zero: `tools/file_manager.py` no longer asks for
+the calendar job when a syllabus is filed, and the sentence he says now points at Canvas for
+dates instead of promising to read them out of the PDF.
+
+### What the harnesses caught that I did not
+
+Two failures on the first full run, and one was a real deployment bug:
+
+**`icalendar` was in `requirements.txt` and in no `stage_install.sh` stage.** `verify_agents.py`
+cross-checks those two lists precisely because they drift, and it said so by name: *"INSTALLED
+NOWHERE on a fresh Pi: icalendar"*. Every existing box would have been fine and every new one
+would have failed at import.
+
+**`verify_upload.py` asserted the academic upload requests both vectors and the calendar.** That
+was correct until this commit and is now exactly backwards, so the check was inverted rather than
+deleted — the absence of the calendar job is the design decision, and it should fail if someone
+puts it back without meaning to.
+
+### And a NUL byte, written by me, in a document
+
+`docs/DEPLOY.md` had a literal `\x00` in the middle of the face-window restart snippet — from a
+previous session, where a `tr "\0" "\n"` written through a shell heredoc lost a backslash level
+and produced the byte instead of the escape. `git` treated the file as binary; the command was
+uncopyable. Found only because `grep` said *"Binary file docs/DEPLOY.md matches"* while I was
+looking for something else.
+
+The repair was itself bitten by the same thing — `b"\\0"` arrived as `b"\0"` and replaced a NUL
+with a NUL — and only worked when built from `bytes([92, 48])`, which no escape processing can
+touch. The sweep now covers NUL as well as CRLF.
+
+### The rule
+
+**A URL that authenticates is a password with a scheme on the front.** It does not look like a
+secret, it arrives in the same sentence as the feature request, and it gets pasted into source
+because that is where URLs go. The test is not "does this look like a key" but "what can someone
+do if they have it" — and for a Canvas feed the answer is "read everything, forever, without
+logging in". Treat it like the API key, because it is one.

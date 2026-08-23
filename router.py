@@ -77,7 +77,8 @@ Available Agents:
   talking TO Mr Odd Ball rather than asking him to do a job.
 - ACADEMIC: coursework and class material — what a syllabus says, when something is due,
   grading or late-work policy, what a course covers. Grounded in the user's own uploaded
-  syllabi, not general study help.
+  syllabi and his live Canvas calendar, not general study help. ALSO refreshing that calendar:
+  "sync Canvas", "update my schedule", "refresh my deadlines".
 - GENERAL: anything that fits nowhere above — and the route that FILES a document the user has
   just uploaded through the chat panel, whether it is a syllabus, a datasheet or a schematic.
 
@@ -95,6 +96,10 @@ Routing notes:
   FIRMWARE or GENERAL; a request to check this machine's temperature is OS. Naming a FILE does
   not make it OS: "what's on my amp schematic" is HARDWARE, because reading design files is
   something the hardware agent does itself.
+- **"Update my schedule" and "sync my calendar" are ACADEMIC, not OS.** They read like commands
+  to the machine and they are not: the only thing being updated is his coursework calendar, and
+  ACADEMIC is the route that can do it. OS is for the Pi itself — its temperature, its files,
+  its applications.
 - ACADEMIC is about what a COURSE requires, not what the user knows — "when is the midterm due"
   or "what does the syllabus say about late homework" is ACADEMIC. "Test me on this" or "quiz me
   on filters" is QUIZ even in an academic context, because the user wants to be evaluated, not

@@ -617,17 +617,19 @@ Read the environment out of the running process **first** — once it is dead, `
 goes with it and `WAYLAND_DISPLAY` has to be guessed:
 
 ```bash
-ssh oddball-pi '
-  PID=$(pgrep -f "hud/float" | head -1)
-  tr " " "
-" < /proc/$PID/environ | grep -E "^(WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DISPLAY)="
-  kill $PID                                     # by PID, from the read above
-  sleep 2
-  cd ~/mr-odd-ball
-  export WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 DISPLAY=:0
-  setsid nohup /usr/bin/python3 hud/float.py --url "http://127.0.0.1:8765/?chat=1"       --transparent --undecorated --width 560 --height 900 > float.log 2>&1 < /dev/null &
-'
+# 1. read the environment out of the LIVE process, and note the PID
+ssh oddball-pi 'PID=$(pgrep -f "hud/float" | head -1); echo "pid $PID"; \
+  tr "\0" "\n" < /proc/$PID/environ | grep -E "^(WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DISPLAY)="'
+
+# 2. kill it by that PID, then start the new one detached
+ssh oddball-pi 'cd ~/mr-odd-ball; kill $(pgrep -f "hud/float" | head -1); sleep 2; \
+  export WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 DISPLAY=:0; \
+  setsid nohup /usr/bin/python3 hud/float.py --url "http://127.0.0.1:8765/?chat=1" \
+    --transparent --undecorated --width 560 --height 900 > float.log 2>&1 < /dev/null &'
 ```
+
+`pgrep` in step 2 is safe where `pkill` was not: it only *reports*, and `kill` is then given a
+number rather than a pattern.
 
 Smoke-test a change to `float.py` **before** killing the live one — it has a `--seconds` flag for
 exactly this, so a broken window costs eight seconds of an overlapping square rather than a
@@ -724,6 +726,53 @@ tail -f ~/mr-odd-ball/oddball.log | grep -E "route|saved|filed|rebuild"
 
 If the chip says something other than `general`, the router rule is not biting — that is a
 prompt problem, and the file is still in the inbox where `--list` will find it. Nothing is lost.
+
+## Canvas calendar sync
+
+Deadlines come from LB's live Canvas `.ics` feed. `tools/academic_calendar.py`'s PDF extractor
+is a fallback and is no longer called by anything automatic — a syllabus is a snapshot, and a
+date moved in week four is right in Canvas and wrong in the PDF.
+
+```bash
+ssh oddball-pi 'cd ~/mr-odd-ball && venv/bin/python tools/canvas_sync.py'
+ssh oddball-pi 'cd ~/mr-odd-ball && venv/bin/python tools/canvas_sync.py --dry-run'
+```
+
+Or say "sync Canvas" / "update my schedule" — `sync_canvas_calendar` is bound to the ACADEMIC
+agent, and `router.py` has an explicit rule sending those phrases there rather than to OS, which
+is what an imperative about "my schedule" otherwise looks like.
+
+**The feed URL is a credential and belongs in `.env`.** The token in it is the whole
+authentication: anyone holding the URL reads the calendar with no login, until it is reset in
+Canvas. `.env` is gitignored AND excluded from the deploy tarball, so it is written once per
+machine — exactly like `GOOGLE_API_KEY` (D7).
+
+```bash
+ssh oddball-pi 'cd ~/mr-odd-ball && grep -c ODDBALL_CANVAS_ICS .env'   # expect 1
+```
+
+Canvas gives the link under **Calendar -> Calendar Feed**, bottom right. A reset token produces
+a **200 with a login page**, not a 401 — `fetch_ics` checks for `BEGIN:VCALENDAR` and says so,
+because the alternative is "0 events imported", which reads as an empty semester.
+
+Needs `icalendar`, which is in `requirements.txt` and in `stage_install.sh`'s `agents` stage.
+On an already-built venv:
+
+```bash
+ssh oddball-pi 'cd ~/mr-odd-ball && venv/bin/pip install "icalendar>=6.0,<8"'
+```
+
+### What one course does to the prompt
+
+LB's single Canvas course produced **139 deadlines**, against the ten or twenty a syllabus
+extraction gave. `format_calendar_for_llm()` puts the calendar in the prompt of **every**
+ACADEMIC turn, so that is 9,580 characters — ~2,400 tokens — per question, and five courses
+would be ~12,000.
+
+It is bounded now: everything inside 60 days, plus every exam and project at any date, capped at
+120 lines, and it **states what it omitted** so a model cannot read an absence as "nothing is
+due then". Measured on the Pi after the first real sync: 89 lines listed of 139, 6,332
+characters, ~1,583 tokens.
 
 ## The vault
 
