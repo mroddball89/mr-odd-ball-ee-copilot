@@ -193,8 +193,8 @@ try:
     check(captured["model"] == "gemini-3.5-flash",
           "it runs on the agent model, not the router's lite model",
           f"got {captured['model']!r}")
-    check(captured.get("bound") == ["sync_canvas_calendar"],
-          "the Canvas sync is bound, and it is the only tool",
+    check(captured.get("bound") == ["sync_canvas_calendar", "read_from_vault"],
+          "both tools are bound: the Canvas sync writes dates, the vault reads policies",
           str(captured.get("bound")))
 
     check("KNOWN DEADLINES" in prompt and "Lab 4" in prompt,
@@ -202,14 +202,23 @@ try:
     check("using ONLY the calendar below" in prompt and "say you do not know" in prompt,
           "the strict-grounding directive survived the rewrite, both halves")
 
-    # The new failure mode. He can no longer answer a policy question, and a model that is not
-    # told so will answer it from what universities usually do — which is D11's fabrication
-    # arriving through a different door.
-    check("You do not have his syllabi" in prompt
-          and "check the syllabus himself" in prompt,
-          "he is told he CANNOT answer policy questions, and what to say instead")
-    check("Do NOT describe what such a policy usually says" in prompt,
-          "...and told not to improvise one from convention")
+    # Policy questions. He CAN answer them again (D25), but only by looking — the notes are
+    # behind a tool call rather than in the prompt, so the failure mode is no longer inventing
+    # an answer, it is REFUSING without searching. Both halves are pinned.
+    check("CALL IT FIRST" in prompt and "Do not answer a policy question without looking"
+          in prompt,
+          "he is told to search the notes BEFORE answering a policy question")
+    check("say plainly that you have no notes on that course yet" in prompt,
+          "...and what to say when the search comes back empty")
+    # Whitespace-flattened, because the prompt is wrapped at 100 columns and this phrase
+    # straddles a line break. A literal substring check against wrapped prose passes or fails on
+    # where the author happened to wrap, which is not the property being tested.
+    flat = " ".join(prompt.split())
+    check("Do NOT describe what such a policy usually says" in flat,
+          "...and never to improvise one from convention")
+    check("Never take a date out of a note" in prompt,
+          "and dates come from the calendar even when a note contains one",
+          "a note is a syllabus snapshot; Canvas may already have moved the date")
 
     # D11: the deadline check is global, so a second copy here would double it on exactly the
     # turns where LB is already talking about coursework.

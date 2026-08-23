@@ -840,3 +840,36 @@ verified against the real searcher on the Pi.
       by ACADEMIC, which has no vault tool and answers from the calendar alone. So "what's my
       late policy" works best asked plainly; asked as a coursework question it routes to ACADEMIC
       and he says he does not know. Worth deciding whether ACADEMIC should carry the vault tool.
+
+## ACADEMIC gets the vault key (2026-08-23)
+
+LB: *"Yes, absolutely add `read_from_vault` to the ACADEMIC route."* D25. This closes the open
+item D24 shipped with.
+
+- [x] `read_from_vault` bound to ACADEMIC alongside `sync_canvas_calendar`
+- [x] Prompt rewritten: he must **search before refusing**. The notes are behind a tool call, so
+      the failure mode moved from *inventing* a policy to *refusing without looking* — and to LB
+      those are the same thing.
+- [x] "Never take a date out of a note" — Canvas owns every date, even when a note carries one
+- [x] Tool loop generalised: all requested calls run before the second pass, so "sync Canvas and
+      remind me of the late policy" cannot silently drop half the request
+- [x] Harnesses updated — three checks pinned the old "he cannot answer policy questions"
+
+### Verified live on the Pi, both directions
+
+- **POSC 201** (note exists) → searched the vault, returned all five clauses of the real policy
+- **ECE 350** (no note) → *"I have no notes on that course yet. You can upload the syllabus with
+  the paperclip."* — looked, found nothing, and did not invent one
+
+`verify_academic` 31/31, `verify_upload` 169/169, `verify_syllabus` 40/40, plus agents 53,
+engine 106, chat 39, typed 81, split 93, kicad 168, os_guard 75, speakable 59, rig 38.
+
+### Still open
+
+- [ ] The vault search is a substring scan, so a policy question that shares no literal word with
+      the note still misses. The `*Search terms:*` line covers the phrasings anticipated; a real
+      miss will look like "I have no notes on that course" and is worth reporting when it happens.
+- [ ] A policy question now costs **two** model calls — one to decide to search, one to answer.
+      Against a 20-a-day tier that is worth watching. Pre-loading the notes into the prompt would
+      make it one, at the cost of carrying every course's note on every academic turn; not done,
+      because one course is 2.5 KB and five would start to look like the calendar problem D22 hit.

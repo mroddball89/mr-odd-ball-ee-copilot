@@ -26,7 +26,7 @@ When nothing free matches, `router.py` uses Pydantic structured output
 | `OS` | `agents/os_agent.py` | runs terminal commands on the Pi, and opens desktop applications (`tools/app_launcher.py`) — **asks first**, for both |
 | `QUIZ` | `agents/quiz_agent.py` | tutor mode; grades conceptually, not word-for-word |
 | `WEB` | `agents/web_agent.py` | DuckDuckGo search — **asks first** |
-| `ACADEMIC` | `agents/academic_agent.py` | coursework deadlines from your **live Canvas feed** (`tools/canvas_sync.py`) — a schedule manager, and nothing else. It cannot answer course-policy questions |
+| `ACADEMIC` | `agents/academic_agent.py` | coursework deadlines from your **live Canvas feed** (`tools/canvas_sync.py`), and course policies from your syllabus notes in the vault. Canvas owns the dates; the notes own everything else |
 | `UTILITY` | `orchestrator/instant.py` | the free lookups, when the router is reached anyway |
 | `PERSONA` | `agents/persona_agent.py` | chit-chat and jokes — Mr Odd Ball himself |
 | `GENERAL` | `agents/persona_agent.py` | anything outside the scope — **and files whatever you upload** (`tools/file_manager.py`), whichever kind of document it turns out to be |
@@ -207,9 +207,13 @@ python tools/academic_calendar.py   # print the calendar, and what the agent is 
 python tools/knowledge_vault.py --search "late policy"
 ```
 
-The ACADEMIC route itself still answers **only** from the calendar. It has no access to the
-syllabi; the vault note is reached by the other agents, which is why a policy question is best
-asked plainly rather than as a coursework question.
+The ACADEMIC route reads the note too, via `read_from_vault` — so "what's the POSC 201 late
+policy?" works whether you phrase it as coursework or not. **Canvas owns every date and the notes
+own everything else**, and the agent is forbidden to take a date out of a note: a note is a
+syllabus snapshot, and Canvas may already have moved the date.
+
+If it has no note for a course it says so and points you at the paperclip, rather than describing
+what a course usually does.
 
 The ACADEMIC agent answers from those documents and **only** those documents — asked something
 the syllabi do not cover, it says it does not know rather than describing what a course
