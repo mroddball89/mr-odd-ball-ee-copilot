@@ -222,13 +222,29 @@ def _documents_by_source() -> dict[str, str]:
     return {src: "\n".join(pages) for src, pages in by_source.items()}
 
 
-def extract_deadlines_from_syllabi() -> int:
-    """Read every syllabus, extract its dates, write `academic_calendar.json`.
+def extract_deadlines_from_syllabi(sources: set[str] | None = None) -> int:
+    """Read the syllabi, extract their dates, write `academic_calendar.json`.
 
-    **Costs one API call per syllabus file.** Run it when syllabi change, not on a schedule.
+    Args:
+        sources: filenames (not paths) to re-extract, or None for all of them. When given,
+                 deadlines already recorded from OTHER files are carried over untouched.
 
     Returns:
-        How many deadlines were written.
+        How many deadlines are in the calendar afterwards.
+
+    **Costs one API call per syllabus file processed**, which is why `sources` exists.
+
+    D3 measured the free tier at 20 requests per model per day. `tools/file_manager.py` calls
+    this every time LB uploads a syllabus through the paperclip, and re-reading all five of his
+    syllabi to learn the dates in the one that just arrived would spend a quarter of the day's
+    quota on four files that have not changed. Passing the one filename makes an upload cost one
+    request instead of five.
+
+    The merge is by `source`, and that is why the extraction writes that field at all: every
+    deadline in the file knows which document it came from, so replacing one document's dates is
+    a filter rather than a diff. A file that is re-extracted and now yields nothing correctly
+    ends up with no deadlines — its old ones go, because they came from the version that has
+    been replaced.
     """
     from langchain_google_genai import ChatGoogleGenerativeAI        # noqa: PLC0415
 
@@ -239,7 +255,20 @@ def extract_deadlines_from_syllabi() -> int:
         print(f"No PDFs found under {ACADEMIC_PATH}. Put your syllabi in there and run again.")
         return 0
 
-    print(f"1. Read {len(documents)} syllabus file(s) from {ACADEMIC_PATH}")
+    kept: list[dict] = []
+    if sources:
+        wanted = {Path(s).name for s in sources}
+        documents = {src: text for src, text in documents.items() if Path(src).name in wanted}
+        if not documents:
+            print(f"None of {', '.join(sorted(wanted))} is under {ACADEMIC_PATH}. "
+                  f"The calendar is unchanged.")
+            return len(load_calendar())
+        # Everything from a document we are NOT re-reading survives this run.
+        kept = [d for d in load_calendar() if str(d.get("source", "")) not in wanted]
+        print(f"1. Re-reading {len(documents)} syllabus file(s), and keeping {len(kept)} "
+              f"deadline(s) already extracted from the others")
+    else:
+        print(f"1. Read {len(documents)} syllabus file(s) from {ACADEMIC_PATH}")
 
     # AGENT_MODEL, not ROUTER_MODEL. Reading a date out of a schedule table is exactly the kind
     # of accuracy D3 says is worth paying `flash` for — and this runs once, not per turn.
@@ -247,7 +276,7 @@ def extract_deadlines_from_syllabi() -> int:
     structured = llm.with_structured_output(SyllabusExtraction)
 
     print("2. Extracting deadlines...")
-    deadlines: list[dict] = []
+    deadlines: list[dict] = list(kept)
     for source, text in documents.items():
         name = Path(source).name
         try:
@@ -256,13 +285,23 @@ def extract_deadlines_from_syllabi() -> int:
         except Exception as exc:                                     # noqa: BLE001
             # One unreadable syllabus must not cost the other four. Named, so LB knows which.
             print(f"   FAILED  {name}: {type(exc).__name__}: {exc}")
+            # On an incremental run this file's OLD deadlines were dropped from `kept` on the
+            # assumption it was about to be re-read. It was not, so they come back — otherwise
+            # a rate-limited API call would silently delete a course's whole schedule, and the
+            # only symptom would be a deadline banner that stopped appearing.
+            if sources:
+                previous = [d for d in load_calendar() if str(d.get("source", "")) == name]
+                deadlines.extend(previous)
+                print(f"        kept the {len(previous)} deadline(s) already on file for it")
             continue
 
         found = [{**d.model_dump(), "source": name} for d in result.deadlines]
         deadlines.extend(found)
         print(f"   {len(found):3} from {name}")
 
-    deadlines.sort(key=lambda d: d["due_date"])
+    # `.get`, not `[...]`: `kept` comes off disk, and a hand-edited entry missing its date must
+    # not take the whole rebuild down with a KeyError.
+    deadlines.sort(key=lambda d: str(d.get("due_date", "")))
 
     ACADEMIC_PATH.mkdir(parents=True, exist_ok=True)
     with CALENDAR_FILE.open("w", encoding="utf-8") as fh:

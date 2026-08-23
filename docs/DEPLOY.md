@@ -38,10 +38,22 @@ cd ~/OneDrive/Desktop/EE_copilot_project/MR_ODD_BALL
 tar czf - --exclude=venv --exclude=__pycache__ --exclude='*.pyc' --exclude=.git \
           --exclude=.env --exclude=voices --exclude=chroma_db --exclude=raw_downloads \
           --exclude=captures --exclude=sd_card_memory.json --exclude=quiz_data.json \
-          --exclude=install.log --exclude=vault --exclude='*.task' . \
+          --exclude=install.log --exclude=vault --exclude='*.task' \
+          --exclude=data/inbox --exclude=data/projects . \
   | ssh oddball-pi "mkdir -p ~/mr-odd-ball && tar xzf - -C ~/mr-odd-ball"
 echo "PIPESTATUS: ${PIPESTATUS[@]}"      # BOTH must be 0
 ```
+
+`data/inbox` and `data/projects` are excluded for the same reason as `sd_card_memory.json`:
+they are **the Pi's** data, written there by the paperclip. Anything uploaded while testing on
+Windows would otherwise ride along, and `tar` does not delete — so a file LB filed on the Pi
+last week and a stale copy of the same name from the authoring box would end up side by side as
+`amp.kicad_sch` and `amp-2.kicad_sch`, with nothing saying which is current.
+
+**On the FIRST deploy these two directories will not exist on the Pi**, and nothing creates them
+until the first upload. That is fine — `engine/server.py` and `tools/file_manager.py` both
+`mkdir(parents=True, exist_ok=True)` before they write. Drop the two excludes on a first deploy
+if you would rather the `.gitkeep`s arrive.
 
 **Check `PIPESTATUS`, always.** The pipeline's exit status comes from `ssh`, so a `tar` that
 failed outright still reports success. `~/oddball/CLAUDE.md` records this biting twice.
@@ -89,6 +101,26 @@ EOF
 
 Shell scripts and `.desktop` entries are where it bites first: a `#!/usr/bin/env bash\r` gives
 `bad interpreter`, and a desktop entry's `Exec=` line carries a trailing `^M` into the command.
+
+### Gitignored PDFs ride along too, and that undoes deliberate deletions
+
+Hit on 2026-08-23. `data/**/*.pdf` is gitignored, so `git status` says nothing about it — and
+`tar` ships it anyway. The deploy put `pi_cam3.pdf` and `pi_cam3_noir_wide.pdf` back onto the
+Pi, where they had been **deliberately deleted** for being image-only (0 extractable characters,
+D12). They were removed again by hand and `data/` restored to what it was.
+
+Nothing was harmed — an image-only PDF makes `tools/vector_db.py` print "carried NO extractable
+text" and skip it — but the shape is the one that matters: **a file deleted on the Pi comes back
+on the next deploy if it still exists on the authoring box.** The same is true of any datasheet
+LB decides against.
+
+Check `data/` after a deploy, or exclude it when the Pi's copy is the one you want to keep:
+
+```bash
+ssh oddball-pi 'cd ~/mr-odd-ball && find data -type f | sort'
+# ...or, when the Pi's documents are authoritative:
+#   --exclude=data
+```
 
 `sd_card_memory.json` rides along despite being gitignored — `tar` does not read `.gitignore`.
 On the **first** deploy, delete it on the Pi so the box starts with its own memory and its own
@@ -169,6 +201,12 @@ venv/bin/pip install --upgrade pip
 setsid nohup ./stage_install.sh > install.log 2>&1 < /dev/null &
 ```
 
+> **SUPERSEDED 2026-08-23.** Everything in this block was for `pywebview`, and `pywebview` went
+> with the floating avatar (D17). Nothing that ships today needs `--system-site-packages`:
+> `hud/float.py` runs on `/usr/bin/python3` and finds `gi` there. It is kept because a venv that
+> already has it does not need rebuilding, and because the trap it describes is real for anything
+> that ever reaches for a Debian system package from inside a venv.
+
 **`--system-site-packages` is new as of 2026-08-22 and it is for `pywebview`.** PyGObject is a
 Debian *system* package (`python3-gi`) and is not pip-installable into a plain venv, so a
 sealed venv gives `launch_ui.py` a `ModuleNotFoundError: No module named 'gi'` at
@@ -232,6 +270,10 @@ asks for the GTK3 WebKit2 4.1 typelib **by name** and will not take the 6.0 one 
 
 **Installed and confirmed working**, `2.52.5-1~deb13u1`. With it in, `Gtk 3.0` and `WebKit2 4.1`
 both import from the venv and `launch_ui.py` opens the window. All five are now present.
+
+> **SUPERSEDED 2026-08-23.** `gir1.2-webkit2-4.1` was pywebview's alone, and pywebview went with
+> the floating avatar (D17). It is dropped from `stage_install.sh` and left installed on the Pi,
+> where it is harmless. `hud/float.py` uses the GTK4 WebKit 6.0 that was already there.
 
 One harmless line appears on every launch and is not worth chasing:
 
@@ -446,155 +488,242 @@ question is tolerable. Tracked in `tasks/todo.md`.
 freshly opened camera are auto-exposure garbage, and there is no measurement of detection rate
 versus warmup count to trade against. Guessing there is exactly the mistake D14 is about.
 
-## The floating avatar
+## The floating avatar — REMOVED, see D17
 
-Three pieces, and the split between them is the part worth understanding:
+**This section described a feature that no longer exists**, and it is replaced rather than
+deleted because what it documented is worth knowing was tried.
 
-| | where it runs | started by |
+A 120px gradient ball in a `pywebview` window, fed by a FastAPI server on port 8000, pinned to a
+corner by a labwc rule. It worked. It was also a *second* character standing next to the one
+`hud/face-preview.html` had been rendering all along — LB: *"I do NOT want a separate glowing
+blue orb in the corner."* D17 has the whole account, including the real bug the orb had been
+hiding: the rig had no `thinking` state, so his face had never once reacted to him thinking.
+
+Deleted with it: `ui/`, `launch_ui.py`, `config/mroddball.desktop`, `tools/wait_for_ui.sh`,
+`tools/install_labwc_rule.sh`, the `--avatar` flag, and `fastapi` / `uvicorn` / `pywebview` from
+`requirements.txt`. **Nothing on this box listens on port 8000.** The labwc rule was reverted on
+the Pi and `~/.config/labwc/rc.xml` removed once it was byte-identical to the system default.
+
+The window you actually want is `hud/float.py`, below, and it needs no venv change: it runs on
+`/usr/bin/python3` and uses the GTK4 WebKit that was already there. The
+`--system-site-packages` edit this section used to prescribe was for `pywebview` alone and is
+not needed by anything that ships today.
+
+## Uploading a file — the paperclip
+
+`data/inbox/` is fed by `POST /upload`, and Mr Odd Ball empties it. Nothing is dropped into
+`data/academic/` by hand any more.
+
+```bash
+curl -F file=@ECE350_syllabus.pdf http://127.0.0.1:8767/upload
+#   {"ok": true, "filename": "ECE350_syllabus.pdf", "relpath": "data/inbox/...", "bytes": 84213}
+
+curl -s http://127.0.0.1:8767/healthz     # {"ok":true,"waiting":1,...}
+```
+
+Or press the paperclip beside the chat input, which is the point of it: the browser POSTs the
+file, then injects *"I just uploaded ECE350_syllabus.pdf."* into the chat as though it had been
+typed. That sentence goes to the router like any other, `router.py` sends it to GENERAL, and the
+persona agent files it — asking which kind of document it is when the filename does not say.
+
+**The endpoint is a SECOND port, 8767, and it has to be.** The rig and its WebSocket share 8765
+because `orchestrator/hud_bridge.py` serves the page from `websockets`' `process_request` hook —
+and that hook is handed a request object with headers and **no body**, so a POST body cannot be
+read there. D21 has the argument and the check. 8766 is left free for `tools/face_stage.py`.
+
+| | port | started by |
 |---|---|---|
-| the FastAPI server | **inside the assistant** | `oddball.service`, via `--avatar` |
-| the state | in-process, from `hud_bridge.set_state()` | — |
-| the window | the desktop session | `~/.config/autostart/mroddball.desktop` |
+| the rig, and its WebSocket | 8765 | `engine/run_voice.py`, from `[hud] port` |
+| the upload endpoint | 8767 | `engine/run_voice.py`, from `[hud] upload_port` |
+| a face stage, if one is running | 8766 | `tools/face_stage.py`, by hand |
 
-**The server is not its own service, and must not become one.** State is published in-process:
-`orchestrator/hud_bridge.set_state()` mirrors into `ui/avatar_state.py`, and `ui/server.py`
-reads from there. A separately started server serves the page perfectly and then shows a ball
-that never moves — it would look like a UI bug and be an architecture mismatch. So
-`config/oddball.service` carries `--avatar`, and the window is the only thing autostarted.
+Both bind wherever `[hud] host` says, so `--host 0.0.0.0` opens both or neither — there is no
+configuration where the page is reachable from the LAN and its paperclip is not.
 
 ```bash
-bash tools/install_autostart.sh            # installs all three, rewrites paths to this checkout
-bash tools/install_autostart.sh --status   # includes: does the unit actually carry --avatar
+venv/bin/python main.py --voice --no-upload    # run without it; the paperclip then says so
+venv/bin/python engine/server.py               # run ONLY it, to test uploads with no assistant
 ```
 
-The autostart entry Execs `tools/wait_for_ui.sh`, which polls `/healthz` for up to 90 s before
-opening the window. **A `sleep 5` would lose this race** — the assistant loads faster-whisper
-off an SD card and `:8000` can be 20–30 s behind the desktop appearing, and a desktop entry has
-no way to be ordered after a systemd user unit. The poll turns a guessed duration into a
-checked fact, which is the same argument the rig already makes by retrying its WebSocket
-instead of being ordered after the bridge.
+### Where things land, and what each costs
+
+| he calls it | it goes to | and then |
+|---|---|---|
+| `academic` | `data/academic/` | vector store **and** deadline calendar rebuild |
+| `datasheet` | `data/<folder>/` | vector store rebuild |
+| `schematic` | `data/projects/<project>/` | nothing — unless it brought a PDF |
+
+**A rebuild runs on a background thread**, and that is deliberate:
+`tools/vector_db.py` imports torch and re-embeds every page under `data/`, and doing that inside
+an agent turn would freeze his face mid-`thinking` with the microphone shut. He is prompted to
+say a document is *being indexed*, never that it is ready; ask him and he calls `index_status`.
+
+A `.kicad_sch` or `.kicad_pcb` needs no rebuild at all — `tools/kicad_parser.py` reads it off the
+disk at question time, and now searches `data/projects/` before `ODDBALL_KICAD_ROOT`. So a
+schematic is answerable the second it is filed:
 
 ```bash
-curl -s localhost:8000/healthz          # {"ok":true,"state":"sleeping","clients":1}
-tools/wait_for_ui.sh --timeout 10       # open the window now, without a reboot
-pkill -f launch_ui.py                   # close it — it is frameless, there is no button
-journalctl --user -t mroddball          # why it did not appear at login
+venv/bin/python tools/file_manager.py --list
+venv/bin/python tools/file_manager.py --file amp.kicad_sch --as schematic --project amp_board
+venv/bin/python tools/kicad_parser.py 'amp board'      # reads it by name, no path
 ```
 
-`clients` in `/healthz` is the honest test that the window is actually attached, not merely
-running: it counts live `/ws/state` subscribers.
+The CLI blocks until the rebuild finishes; the tool does not. That asymmetry is on purpose — a
+daemon thread dies with the interpreter, so a CLI that returned immediately would report a
+rebuild that never ran a line of code.
 
-**Opening it by hand over ssh needs the session environment**, which an ssh shell does not
-inherit — the same trap as `XDG_RUNTIME_DIR` for audio:
+### Guards, and the one that is not about the network
+
+Binding to 127.0.0.1 keeps the *network* out. It does not keep out **a browser on this machine**:
+a `multipart/form-data` POST is a CORS simple request, so any page LB has open could fire one at
+a loopback port with no preflight. So an `Origin` header, if present, must be loopback http(s).
+Absent (curl, a script) is allowed — that is a shell on the box, and a shell already has `cp`.
+`null`, which is what a `file://` page sends, is refused: it is also what every sandboxed iframe
+on the internet sends, and the paperclip only matters while the page is served over HTTP anyway.
+
+Also enforced: a 64 MB cap, refused from the `Content-Length` **before the body is read**; an
+extension allow-list matching the picker's `accept` attribute (`tools/verify_upload.py` fails if
+the two drift apart); filenames sanitised to one path segment; collisions suffixed `-2`, never
+overwritten; and zip members that point outside their project folder skipped and reported.
+
+Measured — the paperclip is disabled while a POST is in flight, so this is how long the button is
+dead. 16 KB schematic **1.5 ms**, 1 MB datasheet **4.0 ms**, 16 MB gerber bundle 22.9 ms, 60 MB
+against the cap 181 ms — median of three, and that top rung spread 181–220 ms across two runs of
+the same script, which is an SSD and a scheduler rather than anything in the code.
+`media/charts/upload-latency.svg`, data beside it. **Windows loopback, not the Pi** — re-run
+`media/scripts/measure_upload.py` there before quoting it at anyone.
 
 ```bash
-env WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 DISPLAY=:0     tools/wait_for_ui.sh --timeout 20
+venv/bin/python tools/verify_upload.py         # 134 checks, no key, no network off-box
 ```
 
-The autostart entry needs none of that — it runs inside the session already.
+### Restarting the face window after a deploy
 
-**Verified live on 2026-08-22**, with the real window attached: a typed `hey mr odd ball` on the
-rig's 8765 socket took the avatar `sleeping -> listening`, and asking him a question drove the
-full sequence `sleeping -> thinking -> speaking -> sleeping`. So the ball rolls while he thinks
-and bounces while he talks, from the same `set_state()` call that drives the main rig.
+**The paperclip lives in `hud/face-preview.html`, which the window fetched when it started.** A
+deploy does not reach a window that is already open, and neither does restarting `oddball` — the
+rig's WebSocket reconnects, but nothing reloads the page. So after any change to the rig or to
+`hud/float.py`, the window has to be restarted or the change is invisible.
 
-Not verified from here: **what it looks like.** labwc composites, so `transparent=True` should
-give a real transparent surface rather than an opaque square, but that is a claim about pixels
-and nobody has looked at the screen yet.
-
-It is deliberately not respawned when killed. A presence indicator that comes back when you
-dismiss it is a nuisance rather than a feature.
-
-### Pinning him to the corner — a labwc rule, because Wayland forbids the alternative
-
-**Wayland lets no client place its own window.** Not a labwc quirk, the protocol: there is no
-"put me at 1746,906" request for an ordinary toplevel. `hud/float.py` has the same constraint
-and simply accepts wherever it lands. So the placement has to come from the compositor.
+**Kill it by PID, never with `pkill -f`.** The bracket trick does not save you here, because a
+kill-and-relaunch command line contains the plain name in its relaunch half:
 
 ```bash
-bash tools/install_labwc_rule.sh            # install / update, then reload labwc
-bash tools/install_labwc_rule.sh --show     # print it, write nothing
-bash tools/install_labwc_rule.sh --remove   # take it out again
+ssh oddball-pi 'pkill -f "[f]loat.py"; setsid nohup python3 hud/float.py ... &'
+#                       ^ safe                    ^ this half matches, and kills the ssh session
 ```
 
-It writes `~/.config/labwc/rc.xml`, computing the corner from the **live** output size rather
-than a hardcoded 1920x1080 — re-run it after a resolution change. Verified on the box: the
-window reports `Absolute upper-left 1746,906` at `150x150`, exactly what the rule asked for.
-
-Three things the script is careful about, each of which would be a bad afternoon:
-
-- **A user `rc.xml` REPLACES the system one, it does not merge.** `/etc/xdg/labwc/rc.xml` is
-  183 lines of Pi OS defaults — keybindings, theme, mouse behaviour. Writing a minimal file
-  would silently discard all of it and present as "the desktop changed for no reason". The
-  script copies the system default as its base when no user file exists.
-- **It validates the XML before handing it to the compositor,** and reverts from the backup if
-  the edit is malformed. labwc falls back to defaults on a parse error, so one bad tag changes
-  the whole desktop with nothing pointing at the cause.
-- **It reloads with `SIGHUP`, not `labwc --reconfigure`.** `--reconfigure` reads `LABWC_PID`,
-  which is exported into the desktop *session* and is not in an ssh shell's environment — it
-  exits 1 with `[ERROR] LABWC_PID not set`. It is only a wrapper around `kill -HUP $LABWC_PID`
-  anyway.
-
-`SnapToEdge` looks like the right action and is not: it **resizes** the window to fill a
-quarter of the output, which would turn a 150px ball into a 960x540 one. `MoveTo` is the one.
-
-Two properties in the rule are not cosmetic:
-
-- `allowAlwaysOnTop="yes"` — **labwc disallows X11 always-on-top requests by default**, so
-  `on_top=True` in `launch_ui.py` had been doing nothing at all. The ball only looked like it
-  was on top because it happened to be mapped last.
-- `skipTaskbar="yes"` — a presence indicator with a taskbar button is incongruous. Drop the
-  attribute if you would rather alt-tab to him.
-
-`fixedPosition` is deliberately **not** set: it would nail him down properly and also disable
-interactive move, leaving no way to shift him without editing the file. `Super+drag` still
-works; the rule only decides where he starts.
-
-The rule applies **when the window is mapped**, so an already-open ball does not move. Restart
-it — and note the bracket, or `pkill -f` matches your own ssh command line and kills it:
+That killed the session on 2026-08-23 with the bracket applied correctly. `tasks/lessons.md` L9.
+Read the environment out of the running process **first** — once it is dead, `/proc/<pid>/environ`
+goes with it and `WAYLAND_DISPLAY` has to be guessed:
 
 ```bash
-pkill -f '[l]aunch_ui.py'
-tools/wait_for_ui.sh --timeout 20
+ssh oddball-pi '
+  PID=$(pgrep -f "hud/float" | head -1)
+  tr " " "
+" < /proc/$PID/environ | grep -E "^(WAYLAND_DISPLAY|XDG_RUNTIME_DIR|DISPLAY)="
+  kill $PID                                     # by PID, from the read above
+  sleep 2
+  cd ~/mr-odd-ball
+  export WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 DISPLAY=:0
+  setsid nohup /usr/bin/python3 hud/float.py --url "http://127.0.0.1:8765/?chat=1"       --transparent --undecorated --width 560 --height 900 > float.log 2>&1 < /dev/null &
+'
 ```
 
-### The window is 150x150 and the CSS is in vmin
-
-Down from 300x300 on 2026-08-22: a 300px ball mid-screen sat on top of the chat panel and read
-as an application rather than a presence.
-
-`ui/avatar.html` sizes **everything** in `vmin` — ball, roll travel, bounce height, glow — with
-one invariant at the top of the file:
-
-    --ball/2 + --roll + --glow  <=  50vmin        27 + 14 + 7 = 48
-
-The first version hardcoded a 120px ball with a `translateX(±80px)` roll. Dropped into a 150px
-window that animation throws the ball completely outside the viewport: he would vanish while
-thinking, which reads as a crash. Measured after the change, over four frames of each
-animation, the ball spans x 11..143 and y 15..126 of a 150px window — inside at every extreme.
-
-### `--system-site-packages`, and why the venv had to change
-
-`pywebview` reaches for PyGObject at `webview.start()`. PyGObject is a Debian *system* package
-and is not pip-installable into a plain venv, so a sealed venv gives
-`ModuleNotFoundError: No module named 'gi'`. `hud/float.py` dodges this by running on
-`/usr/bin/python3`; `launch_ui.py` cannot, because it needs `pywebview` *from the venv*.
-
-Confirmed on the box: `/usr/bin/python3 -c 'import gi'` gives 3.50.0, `venv/bin/python` gives
-`ModuleNotFoundError`, and `venv/pyvenv.cfg` says `include-system-site-packages = false`.
-
-New venvs get `python3 -m venv --system-site-packages venv`. The existing 1.9 G venv does not
-need rebuilding — flip the one line:
+Smoke-test a change to `float.py` **before** killing the live one — it has a `--seconds` flag for
+exactly this, so a broken window costs eight seconds of an overlapping square rather than a
+desktop with no face on it:
 
 ```bash
-sed -i 's/^include-system-site-packages = false/include-system-site-packages = true/' \
-    ~/mr-odd-ball/venv/pyvenv.cfg
-venv/bin/python -c 'import gi; print("gi ok")'
+ssh oddball-pi 'cd ~/mr-odd-ball && WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000   /usr/bin/python3 hud/float.py --url "http://127.0.0.1:8765/?chat=1" --seconds 8; echo "exit $?"'
 ```
 
-This is the one place the merged repo departs from "a lean venv on purpose". It is scoped to
-making `gi` visible and installs nothing. venv packages still shadow system ones, so it does
-not change which numpy or scipy is used.
+Confirm the new page actually carries what you deployed:
+
+```bash
+ssh oddball-pi 'curl -s "http://127.0.0.1:8765/?chat=1" | grep -c chatClip'   # expect 1
+```
+
+### Bringing it up on the Pi the first time
+
+**Written before this had ever run on the Pi.** Everything below except step 5 is proved by
+harness on the Windows box; step 5 is the one claim that cannot be — whether a GTK file dialog
+appears over a transparent, undecorated window on labwc. The steps are ordered so that each one
+narrows where a failure is, rather than leaving "the paperclip doesn't work" as one symptom with
+six possible causes.
+
+**1. The config gained a key, and validation is strict.**
+
+```bash
+ssh oddball-pi 'cd ~/mr-odd-ball && grep -A2 "^\[hud\]" config/oddball.toml'
+ssh oddball-pi 'cd ~/mr-odd-ball && venv/bin/python orchestrator/settings.py | head -20'
+```
+
+`[hud] upload_port = 8767` must be there. `orchestrator/settings.py` raises `KeyError` on a
+missing key by design, so a config without it fails the service at **startup**, not at question
+time. The deploy carries `config/oddball.toml`, so this should be a non-event — check it anyway,
+because the failure mode is "he stopped starting after the deploy" and this is the first thing
+to rule out.
+
+**2. The harness, on the box that matters.** No key, no network off-box.
+
+```bash
+ssh oddball-pi 'cd ~/mr-odd-ball && venv/bin/python tools/verify_upload.py | tail -4'
+```
+
+**3. The endpoint, with the assistant running.** This is the server alone — no browser, no
+router, no model.
+
+```bash
+systemctl --user restart oddball
+sleep 20 && curl -s http://127.0.0.1:8767/healthz
+curl -s -F file=@/tmp/whatever.pdf http://127.0.0.1:8767/upload
+```
+
+`healthz` refusing the connection while `systemctl --user is-active oddball` says active means
+the bind failed — check `oddball.log` for `no upload endpoint on port 8767`. Something else has
+the port.
+
+**4. The filing, without the model.** Proves the destination and the index without spending
+quota or waiting on a router decision.
+
+```bash
+cd ~/mr-odd-ball
+venv/bin/python tools/file_manager.py --list
+venv/bin/python tools/file_manager.py --file whatever.pdf --as datasheet --folder sensors
+```
+
+The CLI blocks until the rebuild finishes and prints the result; the tool called from a turn
+does not, deliberately. **This is the step that will be slow** — it loads torch and re-embeds
+everything under `data/`. Time it, because that number is what the background thread exists for
+and nobody has it for this box yet.
+
+**5. The paperclip.** The part that has never run.
+
+Press it in the chat panel. `hud/float.py` logs when WebKit asks for a chooser, so:
+
+```bash
+journalctl --user -t mroddball -n 20        # or wherever float.py's stderr lands
+# expect: float: page asked for a file chooser — letting WebKit show its own
+```
+
+- **No log line** → the click never reached WebKit. A page problem: check the panel is
+  `?chat=1` and not a stale cached copy of the rig.
+- **Log line, no dialog** → WebKit asked and GTK did not deliver. That is the portal /
+  `GtkFileChooserNative` path, and it is the one genuinely unknown here.
+- **Dialog, then "Upload failed"** → the card names the URL it tried and the reason. Compare
+  against step 3; if curl works and the browser does not, it is the `Origin` check, and the
+  card will say `403`.
+
+**6. The whole loop.** Upload a syllabus with the paperclip and watch for three things in
+order: the injected line *"I just uploaded X."* appears as your own message; the route chip
+reads `general`; he says he has filed it and that it is **being** indexed, not that it is ready.
+
+```bash
+tail -f ~/mr-odd-ball/oddball.log | grep -E "route|saved|filed|rebuild"
+```
+
+If the chip says something other than `general`, the router rule is not biting — that is a
+prompt problem, and the file is still in the inbox where `--list` will find it. Nothing is lost.
 
 ## The vault
 

@@ -28,6 +28,20 @@ vault/**
 # rebuildable artifact like chroma_db/ — absent is the normal state, not a broken install.
 data/academic/academic_calendar.json
 
+# Uploaded with the paperclip and not filed yet. A file in here is one Mr Odd Ball has not
+# sorted, which is state rather than source — and it is LB's document either way. The folder
+# itself stays tracked via the .gitkeep, so a fresh clone shows where an upload lands instead
+# of `engine/server.py` creating a directory nobody expected.
+data/inbox/**
+!data/inbox/
+!data/inbox/.gitkeep
+
+# Schematics, boards and gerbers LB uploaded. His designs. Same call as vault/ and for the same
+# reason: tracked folder, ignored contents.
+data/projects/**
+!data/projects/
+!data/projects/.gitkeep
+
 # Datasheet PDFs and scratch downloads — large, and not ours to redistribute.
 raw_downloads/
 data/**/*.pdf

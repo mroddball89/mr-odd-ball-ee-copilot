@@ -71,6 +71,10 @@ _SCHEMA: dict[str, list[tuple[str, type | tuple, Any, str]]] = {
     "hud": [
         ("host", str, lambda v: bool(v),               "must be a host"),
         ("port", int, lambda v: 1 <= v <= 65535,       "must be a valid port"),
+        # The file-upload endpoint. A SECOND port, not a second host: it binds wherever the rig
+        # binds, so `--host 0.0.0.0` opens both or neither and there is no configuration in
+        # which the page is reachable from the LAN but its paperclip is not.
+        ("upload_port", int, lambda v: 1 <= v <= 65535, "must be a valid port"),
     ],
     "brain": [
         ("enabled",      bool,         lambda v: True,          ""),

@@ -271,6 +271,25 @@
     border: 1px solid rgba(79,195,232,0.34);
   }
 
+  /* The paperclip. Same height and radius as Send so the row reads as one control, and
+     deliberately quieter than it: attaching a file is the rarer of the two actions, and the
+     blue belongs to the thing you press every turn. */
+  #chatClip {
+    flex: 0 0 auto; cursor: pointer; border-radius: 8px; padding: 8px 10px;
+    font: inherit; line-height: 1.2;
+    background: rgba(255,255,255,0.06); color: #A9B6CC;
+    border: 1px solid rgba(255,255,255,0.13);
+  }
+  #chatClip:hover { color: #9FDFF3; border-color: rgba(79,195,232,0.4); }
+  /* Disabled WHILE an upload is in flight, and the cursor says which kind of disabled it is —
+     a 40 MB datasheet over the loopback is still a second or two on a Pi, and a button that
+     goes dead with no explanation reads as broken. */
+  #chatClip[disabled] { opacity: .55; cursor: progress; }
+
+  /* Never shown. The button above is the visible control; this exists only to be clicked
+     programmatically, because a styled <input type=file> cannot be made to match the row. */
+  #chatFile { display: none; }
+
   * { box-sizing: border-box; }
 
   body {
@@ -712,7 +731,13 @@
     <button id="btnDeny">Deny</button>
   </div>
 
+  <!-- The `accept` list is engine/server.py's ALLOWED_SUFFIXES, written out. The two must
+       agree or the OS file dialog offers something the server then refuses, which reads as a
+       broken upload; tools/verify_upload.py fails if they drift apart. -->
   <form id="chatForm" autocomplete="off">
+    <input id="chatFile" type="file" tabindex="-1" aria-hidden="true"
+           accept=".pdf,.txt,.md,.csv,.kicad_sch,.kicad_pcb,.kicad_pro,.kicad_prl,.net,.zip,.png,.jpg,.jpeg,.webp,.gif">
+    <button id="chatClip" type="button" title="Attach a file" aria-label="Attach a file">📎</button>
     <input id="chatInput" placeholder="Ask him something…" aria-label="Ask Mr Odd Ball">
     <button id="chatSend" type="submit">Send</button>
   </form>
@@ -1432,6 +1457,23 @@
     (location.protocol.startsWith("http") ? location.host : "127.0.0.1:8765");
   const LINK_URL = `ws://${LINK_HOST}`, LINK_RETRY_MS = 2000;
 
+  // Where a file goes when the paperclip is used. A DIFFERENT port from the link above, and
+  // that is not an oversight: this page is served by a WebSocket server, and the hook it serves
+  // HTTP from is handed a request object with headers but no body, so a POST body cannot be
+  // read there at all. engine/server.py makes the whole argument.
+  //
+  // `?up=host:port` overrides it, exactly as `?ws=` overrides the link, so a rig pointed at a
+  // machine that is not this one can still upload to it.
+  const UPLOAD_HOST =
+    new URLSearchParams(location.search).get("up") ||
+    (location.protocol.startsWith("http") ? `${location.hostname}:8767` : "127.0.0.1:8767");
+  const UPLOAD_URL = `http://${UPLOAD_HOST}/upload`;
+
+  // Checked here so a mis-picked video is one sentence instead of a minute of uploading
+  // followed by a refusal. The SERVER's limit is the one that counts — this is a courtesy and
+  // is allowed to be out of date without anything being unsafe.
+  const UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
+
   // ---------------------------------------------------------------------------------
   // The chat channel. Everything below drives the ?chat=1 panel and nothing else — his
   // face does not depend on any of it, which is why it is bolted on at the end rather
@@ -1571,6 +1613,73 @@
       btn.addEventListener("click", () => {
         $("chatPending").hidden = true;
         send({ type: "approve", value });
+      });
+    }
+
+    // ---- the paperclip
+    //
+    // The file goes over HTTP to engine/server.py, and then a SENTENCE goes over this socket.
+    // That split is the whole design: the upload is a file transfer and belongs on a POST, but
+    // what makes anything happen is the same `{"type":"text"}` message a typed question sends,
+    // so an upload arrives at run_voice.py's typed channel and reaches Engine.ask() by the one
+    // path everything else already uses. No new inbound message type, no new drain loop, and
+    // the router decides where the file belongs the same way it decides everything else.
+    const clip = $("chatClip"), picker = $("chatFile");
+
+    async function upload(file) {
+      const body = new FormData();
+      body.append("file", file, file.name);
+
+      const label = clip.textContent;
+      clip.disabled = true;
+      clip.textContent = "…";
+      try {
+        const res = await fetch(UPLOAD_URL, { method: "POST", body });
+        // A rejection is JSON too, and its `error` is a sentence written for LB. Falling back
+        // to the status code matters when the reply is not JSON at all — which is what a
+        // refused CORS request or a wrong port looks like from in here.
+        const out = await res.json().catch(() => ({}));
+        if (!res.ok || !out.ok) throw new Error(out.error || `HTTP ${res.status}`);
+
+        // Injected as though LB had typed it. The local echo is the same one the form does:
+        // a typed line never goes through STT, so nothing on the other end will echo it back.
+        const line = `I just uploaded ${out.filename}.`;
+        chatMessage({ type: "transcript", role: "you", value: line });
+        send({ type: "text", value: line });
+      } catch (err) {
+        // On a card, not as a transcript line. It is not something he said, and an upload that
+        // failed silently is an upload LB believes went through.
+        chatMessage({ type: "card", value: {
+          kind: "error", title: "Upload failed",
+          body: `${file.name} did not reach him.\n${(err && err.message) || err}\n\n` +
+                `Tried ${UPLOAD_URL} — is he running?`,
+        } });
+      } finally {
+        clip.disabled = false;
+        clip.textContent = label;
+      }
+    }
+
+    if (clip && picker && !clip.dataset.wired) {
+      clip.dataset.wired = "1";
+      clip.addEventListener("click", () => picker.click());
+      picker.addEventListener("change", () => {
+        const files = picker.files ? Array.from(picker.files) : [];
+        // Cleared BEFORE uploading, not after: `change` does not fire when the same file is
+        // picked twice in a row unless the value was reset, and re-uploading the file you just
+        // uploaded is exactly what you do after fixing it in KiCad.
+        picker.value = "";
+        for (const file of files) {
+          if (file.size > UPLOAD_MAX_BYTES) {
+            chatMessage({ type: "card", value: {
+              kind: "error", title: "Too big",
+              body: `${file.name} is ${(file.size / 1e6).toFixed(0)} MB. The limit is ` +
+                    `${(UPLOAD_MAX_BYTES / 1e6).toFixed(0)} MB.`,
+            } });
+            continue;
+          }
+          upload(file);
+        }
       });
     }
   }

@@ -166,6 +166,29 @@ across in the merge, so it was learned twice.
 invocation. Reach for `-f` only when the name genuinely is not enough, and then anchor it so it
 cannot match a shell — or better, stop the systemd unit, which names exactly one thing.
 
+### The bracket trick does NOT fix this, and believing it does is how it bit a third time
+
+**2026-08-23.** Learned again, deploying the upload pipeline. The remedy recorded below — write
+`pkill -f '[f]loat.py'` — was applied *correctly* and the ssh session died anyway:
+
+```bash
+ssh oddball-pi 'pkill -f "[f]loat.py"; setsid nohup python3 hud/float.py ... &'
+#                       ^ does not match          ^ THIS DOES
+```
+
+`[f]loat.py` is a regex that matches the text `float.py`. It protects the pattern *itself* from
+matching — and does nothing about **the rest of the command line**, which in a restart contains
+the plain name because it is relaunching the thing. Kill and restart in one command is exactly
+the case the trick cannot cover, and it is the common case.
+
+**Kill by PID.** `pgrep -f` first, look at what came back, then `kill <pid>`. Two steps, and the
+first one is a read. The `[f]` form is only safe when the command does nothing else.
+
+Cost: the assistant service was untouched (0 restarts, both ports still bound) but the face
+window went down and had to be brought back by hand, and the Wayland environment had to be
+reconstructed from constants because the process whose `/proc/<pid>/environ` held it was gone.
+Read that environment out **before** killing anything that has it.
+
 ---
 
 ## L10 — "It isn't there" is only evidence once the path is confirmed
@@ -439,3 +462,88 @@ changing it. `hangover < budget / 2` was not stale — it fired **correctly**, b
 hangover really does dominate a 2.5 s budget. Widening the budget to make the ratio pass would
 have been [[L4]] in reverse: green, and asserting something untrue. The cost is now printed on
 every run instead.
+
+## L14 — A specification names a framework; check the framework is still in the repo
+
+**2026-08-23 (D21).** The request said *"Create a new `POST /upload` endpoint in the FastAPI
+server (`engine/server.py` or equivalent)"*. There is no FastAPI server. D17 deleted `ui/` and
+dropped `fastapi`, `uvicorn` and `pywebview` from `requirements.txt` **four days earlier** —
+`requirements.txt` still carries the note saying so.
+
+Building it as written would have reinstated an ASGI stack on the voice loop's import path
+without anyone deciding to. The commit would have read "add upload endpoint"; the diff would
+have read "reverse D17".
+
+**Why:** a specification is authoritative about the **goal** and speculative about the
+**codebase**, in exactly the way [[L13]] says a bug report is authoritative about the symptom and
+speculative about the cause. The person writing it is outside the repo and their picture of it
+is as old as the last time they looked. LB wanted a paperclip. FastAPI was his guess at the
+plumbing, and it was stale.
+
+**How to apply:** grep for every framework, module and path a request names, before writing
+anything that assumes it. If it is gone, say it is gone and say what replaced it — *then* build
+the goal. `engine/server.py` exists at the path he asked for, serving `POST /upload` with
+`multipart/form-data`, on `http.server`. He got the endpoint he specified; he did not get the
+dependency he assumed.
+
+And check the *constraint* the same way rather than reasoning about it. "Serve `/upload` from
+the same port as the rig" was the obvious plan and is impossible — one query settled it:
+
+    >>> [f.name for f in dataclasses.fields(websockets.http11.Request)]
+    ['path', 'headers', '_exception']
+
+No body. Ten seconds, against the installed version, instead of an afternoon discovering it.
+
+## L15 — A test that builds its own world never sees what the repository put in the real one
+
+**2026-08-23 (D21).** `tools/verify_upload.py` had 123 checks green, including nine on the inbox
+listing. Every one ran against a `tempfile.mkdtemp()` tree the test had populated itself. Then
+the first live end-to-end run, curl through the real endpoint:
+
+```
+2 file(s) waiting in data/inbox/:
+  .gitkeep         (1 KB)  — category unclear
+  flat.kicad_sch   (6 KB)  — looks like a schematic
+```
+
+**`data/inbox/.gitkeep` is committed** so the directory survives a fresh clone. To him it looked
+like a document LB had uploaded and wanted filed, and he was one turn away from asking which
+kind of document `.gitkeep` was.
+
+**Why:** a temp directory contains exactly what the test put there, by construction. That is
+what makes it a good fixture and it is also what makes it blind: the real directory has contents
+that came from the *repository* — `.gitkeep`, and later `.DS_Store` and `Thumbs.db` — and no
+amount of testing against a world you built yourself will ever produce them.
+
+Same family as [[L11]]: a check that cannot fail, for a reason that is invisible from inside it.
+
+**How to apply:** run the feature once against the real tree before calling it done — the actual
+directory, the actual endpoint, the actual CLI. It took one curl and one `--list`. Then fold what
+that run found back into the harness rather than only fixing it: `verify_upload.py` now asserts
+that an inbox holding only dotfiles is *empty*, and names `.DS_Store` explicitly.
+
+## L16 — A lookup table keyed differently from the lookup has silent holes
+
+**2026-08-23 (D21).** `process_inbox_file(filename, category)` slugs what the model sends before
+looking it up — `_slug` strips punctuation, because a category dictated through Whisper will not
+keep it. The table it looked in had the literal key `"project_file"`.
+
+`_slug("project_file")` is `"projectfile"`. **The key was unreachable**, and `project_file` is a
+word the prompt offers the model *by name*. The tool would have refused it with "I do not have a
+category called 'project_file'" — after telling the model that was one of the categories.
+
+**Why:** normalising on one side of a lookup and not the other produces a table that is right
+everywhere you look at it and wrong where it is used. Nothing raises; the entry is simply never
+hit, and the failure surfaces as a tool that "does not trigger sometimes".
+
+**How to apply:** build the keys through the same function the lookup uses —
+`{_slug(word): key for word, key in {...}.items()}` — so the two cannot disagree. And enumerate
+every literal the *prompt* offers in the harness, not just the ones that look plausible:
+`project_file` was in the table, in the prompt, and untested, and it is the one that failed.
+
+The same run turned up a second one worth naming: `Path.relative_to(REPO_ROOT)` **raises** when
+the path is not under the repo, and it was building the "Filed it to data/espressif/" sentence
+inside a tool called from an agent turn — where a raised exception becomes a spoken traceback.
+`tools/kicad_parser.py` is built around "these tools never raise" and fuzzes 600 calls to prove
+it. A new tool in the same position gets the same rule, and `pathlib` has more sharp edges in it
+than it looks.
