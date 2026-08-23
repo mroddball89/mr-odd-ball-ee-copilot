@@ -41,7 +41,7 @@ from __future__ import annotations
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from engine.models import AGENT_MODEL
+from engine.models import AGENT_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Pending, Response
 from engine.split import SPOKEN_INSTRUCTION, split
@@ -156,7 +156,7 @@ def propose_os_action(query: str) -> Response:
         A Response with `.pending` set when a command is wanted, or a plain answer when the
         model chose to reply without touching the machine.
     """
-    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1, max_retries=LLM_MAX_RETRIES)
     llm_with_tools = llm.bind_tools([execute_terminal_command])
 
     history = format_memory_for_llm()

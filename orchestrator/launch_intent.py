@@ -49,7 +49,7 @@ from dataclasses import dataclass
 
 LOG = logging.getLogger("oddball.launch")
 
-__all__ = ["LaunchRequest", "look_up", "LAUNCH_VERBS", "FILLER"]
+__all__ = ["LaunchRequest", "look_up", "LAUNCH_VERBS", "FILLER", "DESCRIPTOR"]
 
 # Every one is a bare imperative. The multi-word ones are listed in full rather than relying on
 # "up" being filler, because "bring" and "fire" alone are not launch verbs.
@@ -93,9 +93,53 @@ def _strip(text: str, phrase: str) -> str:
     return text
 
 
+# Words that may TRAIL a matched app and still mean the same app — the appositive shape:
+# "open firefox, the internet browser". Measured 2026-08-22: that exact utterance failed the
+# end anchor, fell through to the paid router, reached the OS agent's shell path and came back
+# with an invented excuse ("this Raspberry Pi is running headless"). Clarifying made it worse.
+#
+# Deliberately NOUNS ONLY, and that is the safety property. A leftover built entirely from
+# these cannot express a second action, so "open firefox and delete my files" still refuses on
+# "delete". Adding a verb here would break that argument, so do not.
+DESCRIPTOR: frozenset[str] = frozenset({
+    "internet", "web", "browser", "editor", "terminal", "calculator", "manager",
+    "app", "application", "program", "window", "file", "files", "text", "document",
+})
+
+
+def _strip_joined(text: str, phrase: str) -> str:
+    """Remove `phrase` from `text` when the speaker said it as SEPARATE WORDS.
+
+    `tiny.en` writes "firefox" as **"fire fox"**, and measured 2026-08-22 that alone broke the
+    free launch path: "Open fire fox." missed the catalogue, fell through to the paid router,
+    and reached the OS agent. Three of LB's four Firefox attempts failed exactly here.
+
+    Only EXACT concatenation counts. This is not edit-distance matching, which this module and
+    `app_catalogue.resolve()` both refuse on purpose: a threshold loose enough to catch
+    "tawny" -> "thonny" is loose enough to catch "shut up" -> "shut down". Concatenation cannot
+    do that — "shutup" is not "shutdown" — so the D38 hazard does not apply.
+
+    Bounded to runs of 2 and 3 words: an app name spoken as four fragments is a transcript too
+    broken to act on.
+    """
+    if " " in phrase:                 # multi-word targets are handled by `_strip` already
+        return text
+    words = text.split()
+    for run in (2, 3):
+        for i in range(len(words) - run + 1):
+            if "".join(words[i:i + run]) == phrase:
+                return " ".join(words[:i] + words[i + run:])
+    return text
+
+
 def only_filler(text: str) -> bool:
-    """Is there nothing meaningful left? The end anchor."""
-    return all(w in FILLER for w in text.split())
+    """Is there nothing meaningful left? The end anchor.
+
+    Filler OR a trailing descriptor. The anchor still holds — a launch is still verb + target
+    + nothing that means anything else — it is just no longer confused by LB naming the thing
+    twice, which is a normal way to speak and was costing a free launch and an API call.
+    """
+    return all(w in FILLER or w in DESCRIPTOR for w in text.split())
 
 
 def _targets(catalogue, roles) -> tuple[str, ...]:
@@ -138,6 +182,9 @@ def look_up(query) -> LaunchRequest | None:
 
     for phrase in _targets(catalogue, ROLES):
         rest = _strip(text, phrase)
+        if rest == text:
+            # Not named as written. Try it as separate words — "fire fox" for "firefox".
+            rest = _strip_joined(text, phrase)
         if rest == text:                       # the app is not named in there at all
             continue
         for verb in LAUNCH_VERBS:

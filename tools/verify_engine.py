@@ -277,8 +277,30 @@ class _E(Exception):
     pass
 
 
-check("free questions" in _failure_line(_E("429 RESOURCE_EXHAUSTED")),
-      "a quota ceiling is reported as a quota ceiling, not a crash (D3)",
+# A 429 is not one thing, and since 2026-08-22 the two kinds say different sentences.
+# Real bodies, from the measured log — the quotaId is what tells them apart.
+_DAILY_429 = ("ClientError: 429 RESOURCE_EXHAUSTED. Quota exceeded for metric: "
+              "generativelanguage.googleapis.com/generate_content_free_tier_requests, "
+              "quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier, "
+              "model: gemini-3.5-flash")
+_MINUTE_429 = ("ClientError: 429 RESOURCE_EXHAUSTED. quotaId: "
+               "GenerateRequestsPerMinutePerProjectPerModel-FreeTier")
+
+check("quota exceeded for today" in _failure_line(_E(_DAILY_429)).lower(),
+      "a DAILY quota ceiling says so in LB's words, not as a crash (D3)",
+      _failure_line(_E(_DAILY_429)))
+check("free questions" in _failure_line(_E(_DAILY_429)),
+      "...and still names the number, so he knows what ran out")
+check("few seconds" in _failure_line(_E(_MINUTE_429)),
+      "a PER-MINUTE 429 says come back in seconds, NOT come back tomorrow",
+      _failure_line(_E(_MINUTE_429)))
+
+# A bare 429 with no quotaId is genuinely ambiguous, and the two errors are not symmetric:
+# guessing "daily" also LATCHES the model out until midnight (engine/quota.py), taking him off
+# the air for a day over what may have been a two-second burst. Guessing "transient" costs a
+# slightly wrong sentence and a retry. So ambiguity resolves to transient, on purpose.
+check("few seconds" in _failure_line(_E("429 RESOURCE_EXHAUSTED")),
+      "an UNLABELLED 429 is treated as transient — the safe side of the latch",
       _failure_line(_E("429 RESOURCE_EXHAUSTED")))
 check("model name" in _failure_line(_E("404 NOT_FOUND")),
       "a retired model name says so", _failure_line(_E("404 NOT_FOUND")))
@@ -287,9 +309,43 @@ check("key" in _failure_line(_E("PERMISSION_DENIED")),
 
 route_to(AgentRoute.OS)
 eng = Engine()
-core.router_agent = lambda q: (_ for _ in ()).throw(_E("429 RESOURCE_EXHAUSTED"))
+core.router_agent = lambda q: (_ for _ in ()).throw(_E(_DAILY_429))
 r = eng.ask("check the temperature")
 check("free questions" in r.speech, "a failed turn still SPEAKS something safe", r.speech)
+
+# The latch: having been told once, the NEXT turn must not pay a round trip to be told again.
+# Before LLM_MAX_RETRIES went to 0 that round trip took up to 217 seconds, during which the
+# turn thread — which is also the thread draining the microphone — was blocked.
+from engine import quota as _quota                                    # noqa: E402
+from engine.models import AGENT_MODEL as _AM, ROUTER_MODEL as _RM     # noqa: E402
+
+# _DAILY_429 names `model: gemini-3.5-flash`, so THAT is what may be latched.
+check(_quota.exhausted(_AM),
+      "a daily 429 latches the model the error actually named",
+      f"latched: {_quota.status()}")
+check(not _quota.exhausted(_RM),
+      "and NOT the other one — AGENT_MODEL is a prefix of ROUTER_MODEL, so a substring "
+      "test would have silenced both (L11)",
+      f"latched: {_quota.status()}")
+check(_quota.names_model("model: gemini-3.5-flash-lite", _RM)
+      and not _quota.names_model("model: gemini-3.5-flash-lite", _AM),
+      "a flash-lite error names flash-lite ONLY")
+
+# With the ROUTER's model latched, the next turn must send nothing at all.
+_quota.note(_RM, _DAILY_429.replace("gemini-3.5-flash", _RM))
+_asked = []
+core.router_agent = lambda q: _asked.append(q)
+r2 = eng.ask("check the temperature again")
+check(not _asked, "with the router latched, the next turn sends NO request at all",
+      f"sent {len(_asked)}")
+check("quota exceeded for today" in r2.speech.lower(),
+      "...while still saying why", r2.speech)
+
+# A free lookup must still work with the latch on — that is the whole point of it.
+r3 = eng.ask("what time is it")
+check(r3.route == "utility" and "quota" not in r3.speech.lower(),
+      "the free tier still answers while the paid one is latched out", r3.speech)
+_quota.clear()
 check(any(c.kind == CardKind.ERROR for c in r.cards),
       "and the detail goes on an error card, not into his mouth")
 

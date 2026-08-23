@@ -1,6 +1,6 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from engine.models import AGENT_MODEL
+from engine.models import AGENT_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from engine.split import SPOKEN_INSTRUCTION
 from tools.trace_calculator import calculate_ipc2221_trace_width
@@ -105,7 +105,7 @@ def _for_summary(result: str) -> str:
 
 
 def run_hardware_agent(query: str) -> str:
-    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1, max_retries=LLM_MAX_RETRIES)
     llm_with_tools = llm.bind_tools(TOOLS)
 
     # Retrieve saved history from SD card

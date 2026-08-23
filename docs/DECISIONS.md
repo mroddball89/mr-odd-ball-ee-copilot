@@ -1423,3 +1423,135 @@ That is **L11, committed the previous day**, in a throwaway script written by th
 who wrote the lesson. Recorded because the lesson evidently needs the second telling: a
 substring check over free text finds the substring wherever it lives, and the failure looks
 like a finding rather than like a bug.
+
+---
+
+## D20 — He asked four times, and it was never the launcher
+
+**2026-08-22.** LB: *"he struggled with opening firefox thats my main concern."* From the log,
+between 21:08 and 21:13 he asked five times and Firefox never appeared.
+
+**The launcher was never the problem.** Run on the Pi with the display variables stripped
+exactly as the service has them, `launch("firefox")` returns `kind: launched` and Firefox
+appears — `find_display()` globs `/run/user/1000/wayland-[0-9]` and finds the socket the unit
+never gave it. D10's machinery is intact.
+
+What failed was the **confirmation**, every single time:
+
+    21:08:15  heard 'Can you open firefox?'
+    21:08:15  route 0ms -> os | free launch (firefox), gate os waiting     <- correct, 0 API calls
+    21:08:20  capture: peak mic rms 0.0201
+    21:08:22  heard '' in 1.59s
+    21:08:22  gate: heard '' -> None                                       <- DECLINED
+
+Twice, identically. The mic levels are the whole diagnosis:
+
+| what he said | mic RMS | transcribed |
+|---|---|---|
+| "Can you open firefox?" | **0.2821** | correctly |
+| his confirmation | **0.0201** | **empty** |
+| "Open Firefox." | **0.3300** | correctly |
+| his confirmation | **0.0166** | **empty** |
+
+**Commands are 15-20x louder than confirmations.** He states the request deliberately and
+confirms casually, and the casual "yes" is below what this microphone delivers. `is_yes("")` is
+None, None declines, and the decline was **silent** — so from the outside it is indistinguishable
+from a crash. He asked again, which is the correct response to what he could observe.
+
+### The fix he already owned, wired into the wrong path
+
+`approve_by_gesture_or_keyboard` was called only from `run_os_agent()` and `run_web_agent()` —
+the old blocking terminal functions, whose own docstrings say *"Deliberately NOT the path the
+voice loop takes."* The camera worked, the model was on disk, the sidecar venv was built, and
+`--backend` reported `available: True`.
+
+**The thumbs up existed and the voice loop could not reach it.** Same shape as D6's typed
+channel: built, and not wired.
+
+`Turn._spoken_gate_answer()` now reads three channels in a deliberate order:
+
+1. **Voice** — instant, and how he actually answers.
+2. **The camera, only when voice was unreadable.** A gesture costs a subprocess and ~2.2 s
+   (D15 measured it), so checking it on every approval would tax every gate to rescue the few
+   that need it. The harness asserts `camera_checks == 0` on a clear spoken yes.
+3. **A click**, which beats both because it is unambiguous.
+
+### A silent decline is a bug, not a default
+
+*"I didn't catch that. Please give a thumbs up to the camera or say yes clearly."* Then it
+listens once more. `GATE_ATTEMPTS = 2` — one retry, not a loop, because a gate that keeps
+asking eventually gets a yes out of a television, and the safe default is already a decline.
+
+Mutation-tested: make the gate return `"yes"` when nothing is readable and three checks go red.
+
+### The 217-second turn, and why the retries were certain to fail
+
+By 21:10 the daily free tier was gone, and the google-genai SDK was retrying a **daily** quota
+429 with exponential backoff — 1.78s, 2.54s, 4.44s, 8.79s, 16.5s — for **217 seconds** on one
+turn. A daily quota does not come back in 8 seconds; it comes back at midnight. Every retry was
+known to be futile before it was sent.
+
+Worse: the turn thread is the thread that drains the microphone. **3,568 audio frames were
+dropped** while he sat there retrying. He was deaf for the whole time he was failing to answer.
+
+Two changes, and only together:
+
+- **`LLM_MAX_RETRIES = 0`.** Measured with the quota actually exhausted: the default (6) took
+  **217 s** to give up, zero took **0.2 s**. The cost is real and worth naming — a genuinely
+  transient blip now fails the turn instead of being retried invisibly. At 40 words a turn that
+  is the right trade: "something went wrong", asked again, three seconds. Overridable with
+  `ODDBALL_LLM_MAX_RETRIES`.
+- **A latch** (`engine/quota.py`). Without it every later turn still pays a round trip to be
+  told the same thing. With it, the second and later turns cost nothing at all.
+
+**The 429 is not one thing**, and the two kinds now say different sentences:
+
+    quotaId: ...PerDayPerProjectPerModel-FreeTier      -> "API quota exceeded for today"
+    quotaId: ...PerMinutePerProjectPerModel-FreeTier   -> "back in a few seconds"
+
+An **unlabelled** 429 resolves to transient, deliberately. The errors are not symmetric:
+guessing "daily" also latches the model out until midnight, taking him off the air for a day
+over what may have been a two-second burst. Guessing "transient" costs one wrong sentence and a
+retry that now takes 0.2 s.
+
+**The latch is per model**, because D3 split routing, agents and persona across three model
+names precisely so one running dry does not silence the others. And matching the model name
+needed care: **`gemini-3.5-flash` is a strict prefix of `gemini-3.5-flash-lite`**, so
+`model in text` reads a router exhaustion as an agent exhaustion and silences the agents over a
+quota that was never theirs. `names_model()` requires the match not be followed by more name.
+That is L11 again, written one commit after L11.
+
+### The launcher: it was "fire fox", not the trailing clause
+
+LB asked for the end-anchor rule to tolerate trailing conversational clauses. It does now — but
+the measurement found a bigger cause first. **`tiny.en` writes "firefox" as two words**, and
+plain *"Open fire fox."* missed the catalogue entirely. Three of the four attempts died there,
+before any clause was involved.
+
+- `_strip_joined()` matches an app name spoken as separate words, by **exact concatenation
+  only**. Not edit distance, which this module and `app_catalogue.resolve()` both refuse for
+  the stated reason: a threshold loose enough to catch "tawny" -> "thonny" is loose enough to
+  catch "shut up" -> "shut down". Concatenation cannot do that — "shutup" is not "shutdown".
+- `DESCRIPTOR` lets a trailing appositive through: "open firefox, the internet browser". It is
+  **nouns only**, and that is the entire safety argument — a leftover built only from nouns
+  cannot express a second action, so "open firefox and delete my files" still refuses on
+  "delete". Mutation-tested **on the Pi**: add "delete" to `DESCRIPTOR` and it launches.
+
+**That mutation test was first run on Windows and proved nothing**, because the Windows
+catalogue has no `firefox` entry — Firefox is not installed there, so the phrase never matched
+a target and every result was "refused" for the wrong reason. The checks now live in
+`verify_launch.py` section 7, which swaps in a **fixture** catalogue containing Firefox, so the
+property is tested on every machine on every run rather than by hand on one.
+
+### What is NOT fixed
+
+**The microphone.** Every capture that transcribed was **clipping at digital full scale
+(0.9999)**; every one that failed sat at 0.015-0.019 RMS. The gain is maxed (D6: 16/16, +30 dB),
+so there is no usable middle — he is either on top of it and distorting, or inaudible. Nothing
+in this commit improves that; it routes around it. The thumbs up is a way to answer that does
+not need the microphone at all, which is the honest description of what was done.
+
+Also unfixed and now recorded: the running service has **no `WAYLAND_DISPLAY`**. It started 8
+seconds after boot, before the desktop imported its environment into the user manager, exactly
+as D10 defect 1 describes. It does not matter today because `find_display()` discovers the
+socket, but the unit is still wrong and a future path that trusts the environment will fail.

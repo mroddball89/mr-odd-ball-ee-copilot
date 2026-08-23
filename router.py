@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from engine.models import ROUTER_MODEL
+from engine.models import ROUTER_MODEL, LLM_MAX_RETRIES
 
 
 # 1. Define the possible destinations
@@ -100,7 +100,7 @@ User Query: {question}
 # ==========================================
 # 🚀 OPTIMIZATION: Pre-build the engine once!
 # ==========================================
-_llm = ChatGoogleGenerativeAI(model=ROUTER_MODEL, temperature=0.0)
+_llm = ChatGoogleGenerativeAI(model=ROUTER_MODEL, temperature=0.0, max_retries=LLM_MAX_RETRIES)
 _structured_llm = _llm.with_structured_output(RouteDecision)
 _prompt = ChatPromptTemplate.from_template(ROUTER_PROMPT)
 _router_chain = _prompt | _structured_llm

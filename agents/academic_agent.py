@@ -42,7 +42,7 @@ import logging
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from engine.models import AGENT_MODEL
+from engine.models import AGENT_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Response
 from engine.split import SPOKEN_INSTRUCTION, split
@@ -142,7 +142,7 @@ def _answer(query: str) -> tuple[str, list[dict]]:
     calendar = format_calendar_for_llm()
 
     # 3. STRICT GENERATION. The context is injected; the prompt forbids going outside it.
-    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1, max_retries=LLM_MAX_RETRIES)
     prompt = ChatPromptTemplate.from_template(ACADEMIC_PROMPT_TEMPLATE).format(
         syllabus_context=context or NO_SYLLABI,
         calendar_context=calendar,

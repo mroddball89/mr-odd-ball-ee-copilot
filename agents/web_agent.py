@@ -2,7 +2,7 @@ import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from tools.web_search import perform_web_search
-from engine.models import AGENT_MODEL
+from engine.models import AGENT_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Pending, Response
 from engine.split import SPOKEN_INSTRUCTION, is_speakable, split
@@ -43,7 +43,7 @@ def propose_web_search(query: str) -> Response:
     one asks with the real text rather than a paraphrase, which is strictly better: there is
     no gap between what is approved and what is heard.
     """
-    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1, max_retries=LLM_MAX_RETRIES)
     llm_with_tools = llm.bind_tools([perform_web_search])
 
     history = format_memory_for_llm()
@@ -75,7 +75,7 @@ def propose_web_search(query: str) -> Response:
 
 def resume_web_search(pending: Pending) -> Response:
     """Run the approved search and summarise what came back."""
-    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1, max_retries=LLM_MAX_RETRIES)
     result = perform_web_search.invoke(pending.tool_args)
 
     # Feed search results back into LLM. This is the path that actually produces the answer LB

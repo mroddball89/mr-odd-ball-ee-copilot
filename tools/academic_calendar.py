@@ -232,7 +232,7 @@ def extract_deadlines_from_syllabi() -> int:
     """
     from langchain_google_genai import ChatGoogleGenerativeAI        # noqa: PLC0415
 
-    from engine.models import AGENT_MODEL                            # noqa: PLC0415
+    from engine.models import AGENT_MODEL, LLM_MAX_RETRIES          # noqa: PLC0415
 
     documents = _documents_by_source()
     if not documents:
@@ -243,7 +243,7 @@ def extract_deadlines_from_syllabi() -> int:
 
     # AGENT_MODEL, not ROUTER_MODEL. Reading a date out of a schedule table is exactly the kind
     # of accuracy D3 says is worth paying `flash` for — and this runs once, not per turn.
-    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.0)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.0, max_retries=LLM_MAX_RETRIES)
     structured = llm.with_structured_output(SyllabusExtraction)
 
     print("2. Extracting deadlines...")

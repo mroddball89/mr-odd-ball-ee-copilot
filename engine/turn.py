@@ -360,23 +360,7 @@ class Turn:
                 # which is the same default silence gets on the spoken path.
                 answer = self._wait_for_typed_answer(t)
             else:
-                self._bridge.set_state("listening")
-                capture = self._capture()
-                if capture is not None and capture.outcome is not Outcome.SILENT:
-                    got = self._stt.transcribe(capture.audio)
-                    t.stt_s += got.took_s      # a second capture is a second transcription
-                    answer = got.text
-                    LOG.info("gate: heard %r -> %s", answer, is_yes(answer))
-                else:
-                    t.extras.append("no answer to the gate")
-
-                # A click on Approve or Deny beats what was heard, because it is unambiguous
-                # and a transcript never is. Checked AFTER the capture rather than instead of
-                # it, so LB can answer by voice OR mouse and neither has to win a race.
-                for msg in self._quiet(lambda: self._bridge.drain_inbound()) or []:
-                    if msg.get("type") == "approve":
-                        answer = "yes" if msg.get("value") else "no"
-                        t.extras.append(f"gate answered by click: {answer}")
+                answer = self._spoken_gate_answer(t)
 
             self._quiet(self._bridge.clear_pending)
 
@@ -403,6 +387,87 @@ class Turn:
             self._say(outcome.speech, t)
 
         self._quiet(lambda: self._bridge.set_mode(self._engine.mode))
+
+    # What he says when a gate got no answer he could read. Measured 2026-08-22: LB asked for
+    # Firefox four times and it never opened, because his COMMANDS came in at mic RMS 0.28-0.33
+    # and his confirmations at 0.017-0.020 — 15 to 20 times quieter. Whisper returned "" for
+    # every one of them, `is_yes("")` is None, and None declines. In silence.
+    #
+    # A silent decline is indistinguishable from a crash, which is why he asked four times.
+    # This sentence is the difference between "it is broken" and "it did not hear me".
+    GATE_RETRY_LINE = ("I didn't catch that. Please give a thumbs up to the camera "
+                       "or say yes clearly.")
+
+    # One retry, not a loop. A gate that keeps asking is a gate that eventually gets a yes out
+    # of a television, and the safe default is already a decline.
+    GATE_ATTEMPTS = 2
+
+    def _spoken_gate_answer(self, t: Timings) -> str:
+        """Read a yes or no from voice, camera or a click. **Anything unclear is a no.**
+
+        Three channels, deliberately in this order:
+
+        1. **Voice**, because it is instant and it is how LB actually answers.
+        2. **The camera**, ONLY when voice was unreadable. A thumbs up costs a subprocess and
+           ~2.2 seconds (D15 measured it), so checking it every time would tax every approval
+           to rescue the few that need rescuing. It is the fallback, not the default.
+        3. **A click** on the HUD, which beats both because it is unambiguous.
+
+        Gesture approval existed, worked, and was wired only into `run_os_agent()` — the old
+        blocking terminal function whose own docstring says it is NOT the path the voice loop
+        takes. Built and not wired, the same failure D6 records for the typed channel.
+
+        Returns:
+            The answer as text. "" means nothing readable arrived, and `Engine.ask("")`
+            declines the pending action. Never returns "yes" on a guess.
+        """
+        from tools.gesture_control import get_gesture
+
+        for attempt in range(1, self.GATE_ATTEMPTS + 1):
+            self._bridge.set_state("listening")
+            answer = ""
+
+            capture = self._capture()
+            if capture is not None and capture.outcome is not Outcome.SILENT:
+                got = self._stt.transcribe(capture.audio)
+                t.stt_s += got.took_s          # a second capture is a second transcription
+                answer = got.text
+                LOG.info("gate: heard %r -> %s", answer, is_yes(answer))
+            else:
+                t.extras.append("no answer to the gate")
+
+            # A click beats what was heard, because it is unambiguous and a transcript never
+            # is. Checked AFTER the capture so LB can answer by voice OR mouse without a race.
+            for msg in self._quiet(lambda: self._bridge.drain_inbound()) or []:
+                if msg.get("type") == "approve":
+                    answer = "yes" if msg.get("value") else "no"
+                    t.extras.append(f"gate answered by click: {answer}")
+
+            if is_yes(answer) is not None:
+                return answer                  # a clear yes OR a clear no. Both are answers.
+
+            # Voice said nothing readable. Look at the camera before giving up.
+            self._bridge.set_state(self._thinking)
+            try:
+                seen = self._quiet(get_gesture) or "NO_CAMERA"
+            except Exception:                                          # noqa: BLE001
+                LOG.exception("gate: the camera check failed; treating it as no gesture")
+                seen = "NO_CAMERA"
+
+            t.extras.append(f"gate camera: {seen}")
+            if seen == "THUMBS_UP":
+                LOG.info("gate: approved by thumbs up")
+                return "yes"
+
+            if attempt < self.GATE_ATTEMPTS:
+                # THE line. Say what went wrong and what to do about it, then listen again.
+                LOG.info("gate: nothing readable (heard %r, camera %s) — asking again",
+                         answer, seen)
+                t.extras.append("gate retry")
+                self._say(self.GATE_RETRY_LINE, t)
+
+        t.extras.append("gate unanswered -> declined")
+        return ""
 
     # How long a typed gate waits for Approve/Deny before declining. Generous, because reading
     # a shell command and deciding is slower than saying "yes" — and short enough that a gate

@@ -576,6 +576,44 @@ def s7_free_intent() -> None:
         check(launch_intent.only_filler("please can you") is True, "filler is filler")
         check(launch_intent.only_filler("a file in python") is False,
               "and a real remainder is not")
+
+        # --- the transcript, as tiny.en actually writes it -------------------------------
+        #
+        # Measured 2026-08-22: three of LB's four Firefox attempts said "fire fox", and every
+        # one of them missed the catalogue, fell through to the paid router, reached the OS
+        # agent's shell path and came back with an invented excuse. Exact CONCATENATION only —
+        # this is not edit distance, which this module refuses for the reason it states.
+        for utterance in ["open fire fox", "can you open fire fox",
+                          "open fire fox, the internet browser",
+                          "open fire fox the web browser"]:
+            got = ask(utterance)
+            check(got is not None and got.app == "firefox",
+                  f"{utterance!r} is a launch", f"got {got.app if got else None}")
+
+        check(ask("open firefox") is not None and ask("open fire fox") is not None,
+              "written together or apart, both reach the free path")
+
+        # --- and the anchor still holds. This is the half that matters. ------------------
+        #
+        # DESCRIPTOR is NOUNS ONLY, and that is the whole safety argument: a leftover built
+        # only from nouns cannot express a second action. Mutation-tested on the Pi
+        # 2026-08-22 — adding "delete"/"shut"/"down" to DESCRIPTOR makes both of the first
+        # two below LAUNCH, so these checks bite.
+        for utterance in ["open firefox and delete my files",
+                          "open fire fox then shut down",
+                          "how do I open a file in Python",
+                          "why did my browser crash",
+                          "is firefox installed",
+                          "what is firefox",
+                          "open the fire escape"]:
+            check(ask(utterance) is None, f"{utterance!r} is NOT a launch",
+                  f"got {getattr(ask(utterance), 'app', None)!r}")
+
+        check(all(w.islower() and w.isalpha() for w in launch_intent.DESCRIPTOR),
+              "DESCRIPTOR holds bare lowercase words only")
+        check(not (launch_intent.DESCRIPTOR & set(launch_intent.LAUNCH_VERBS)),
+              "and no launch verb has leaked into it — that would let a leftover start a "
+              "second program")
     finally:
         _cat.cached_catalogue = real
 

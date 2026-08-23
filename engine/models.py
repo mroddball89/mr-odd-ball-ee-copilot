@@ -59,7 +59,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-__all__ = ["ROUTER_MODEL", "AGENT_MODEL", "PERSONA_MODEL", "FREE_TIER_DAILY_LIMIT"]
+__all__ = ["ROUTER_MODEL", "AGENT_MODEL", "PERSONA_MODEL", "FREE_TIER_DAILY_LIMIT",
+           "LLM_MAX_RETRIES"]
 
 # Measured, not documented — from the 429 body on 2026-08-19. Defined above the key
 # guard because the guard quotes it.
@@ -155,6 +156,23 @@ warnings.filterwarnings("ignore", message=r".*uses fixed sampling defaults.*",
 
 # Overridable from .env so LB can move a job to another model without editing code — which is
 # the whole reason this file exists, since the name used to be hardcoded in seven places.
+# How many times a failed request is retried. **Zero, and that is measured.**
+#
+# The google-genai SDK retries a 429 with exponential backoff - 1.78s, 2.54s, 4.44s, 8.79s,
+# 16.5s - and on 2026-08-22 that turned one turn into **217 seconds** while the free tier was
+# gone. A daily quota does not come back in 8 seconds, so every one of those retries was
+# certain to fail before it was sent. Worse, the turn thread is the thread that drains the
+# microphone: 3,568 audio frames were dropped while he sat there retrying.
+#
+# Measured with the quota actually exhausted: default (6) took 217s to give up, 0 took **0.2s**.
+#
+# The cost of this is real and worth naming: a genuinely transient blip - a dropped wifi packet,
+# a 503 - now fails the turn instead of being retried invisibly. That is the right trade at
+# 40 words per turn. He says "something went wrong", LB asks again, and it costs three seconds
+# rather than three minutes of being deaf. Override with ODDBALL_LLM_MAX_RETRIES if a flaky
+# link ever makes that the wrong call.
+LLM_MAX_RETRIES = int(os.environ.get("ODDBALL_LLM_MAX_RETRIES", "0"))
+
 ROUTER_MODEL = os.environ.get("ODDBALL_ROUTER_MODEL", "gemini-3.5-flash-lite")
 AGENT_MODEL = os.environ.get("ODDBALL_AGENT_MODEL", "gemini-3.5-flash")
 PERSONA_MODEL = os.environ.get("ODDBALL_PERSONA_MODEL", "gemini-3.5-flash-lite")

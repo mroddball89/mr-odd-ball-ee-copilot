@@ -1,6 +1,6 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
-from engine.models import AGENT_MODEL
+from engine.models import AGENT_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 
 EVALUATION_PROMPT = """
@@ -17,7 +17,7 @@ Your job is to grade the user's answer.
 
 def evaluate_quiz_answer(question: str, correct_answer: str, user_answer: str) -> str:
     # 1. Initialize the LLM
-    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1, max_retries=LLM_MAX_RETRIES)
     
     # 2. Build the grading prompt
     prompt_template = ChatPromptTemplate.from_template(EVALUATION_PROMPT)
