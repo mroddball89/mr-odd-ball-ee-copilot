@@ -774,6 +774,44 @@ It is bounded now: everything inside 60 days, plus every exam and project at any
 due then". Measured on the Pi after the first real sync: 89 lines listed of 139, 6,332
 characters, ~1,583 tokens.
 
+## Syllabus -> vault note
+
+Course policies are a one-time extraction into `vault/courses/`, not a vector store. Uploading a
+syllabus with the paperclip triggers it on the background thread; by hand:
+
+```bash
+ssh oddball-pi 'cd ~/mr-odd-ball && venv/bin/python tools/syllabus_to_vault.py --all'
+ssh oddball-pi 'cd ~/mr-odd-ball && venv/bin/python tools/syllabus_to_vault.py --all --force'
+```
+
+**One Gemini call per document**, against a 20-a-day tier (D3), so `--all` skips anything that
+already has a note and `--force` is what redoes them. The background job converts only the file
+that was just uploaded, never the whole folder.
+
+Verified on the Pi with LB's real 13-page POSC 201 syllabus: instructor, office hours, a
+five-line grading breakdown, the full late policy and five standing rules, with no due dates
+carried across and nothing invented.
+
+**A scanned PDF is refused before the API call.** Zero extractable characters is the normal state
+of a photographed syllabus, and a model handed an empty document writes a plausible invented one.
+Check for this first if a conversion produces nothing:
+
+```bash
+ssh oddball-pi 'cd ~/mr-odd-ball && venv/bin/python -c "
+import sys; sys.path.insert(0,\".\")
+from tools.syllabus_to_vault import read_pdf_text, SYLLABUS_DIR
+for p in SYLLABUS_DIR.glob(\"*.pdf\"):
+    t, n = read_pdf_text(p)
+    print(len(t), \"chars\", n, \"pages\", p.name)"'
+```
+
+Needs `pypdf`, now declared in `requirements.txt` and in `stage_install.sh`'s `agents` stage. It
+was already installed everywhere — but only transitively, via `langchain-community`.
+
+```bash
+ssh oddball-pi 'cd ~/mr-odd-ball && venv/bin/python tools/verify_syllabus.py'   # 40 checks
+```
+
 ## The vault
 
 `vault/` is LB's long-term Markdown memory (D13), written by the HARDWARE, FIRMWARE and

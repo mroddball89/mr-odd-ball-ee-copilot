@@ -781,3 +781,62 @@ answer a course-POLICY question — late penalties, grading splits, exam formats
 - [ ] He now has no answer at all for "what's the late policy". If that turns out to matter, the
       cheapest restoration is not the RAG — it is `save_to_vault`, which already exists: LB tells
       him the policy once and it is in the Markdown vault, greppable, for the term.
+
+## Syllabus -> vault note: policies back, without the RAG (2026-08-23)
+
+LB: *"dropping it into the Markdown Vault takes 5 seconds, avoids RAG overhead, and keeps the
+system fast and lightweight."* D24. This puts back what D23 removed, at a fraction of the cost.
+
+- [x] `tools/syllabus_to_vault.py` — pypdf -> one structured Gemini call -> `vault/courses/*.md`
+- [x] **A textless PDF never reaches the model.** The guard is upstream of the API call, so a
+      folder of scans costs nothing. A model handed an empty document invents a whole syllabus.
+- [x] **Absence is written as absence.** Every empty field renders *not stated in the syllabus*
+      rather than being dropped — otherwise "no late policy" and "never converted" look the same
+- [x] `knowledge_vault.write_note(..., replace=True)` — a regenerated note REPLACES. The
+      `save_to_vault` tool still appends and does not expose `replace`: a build step may rebuild
+      its own artifact, a model may not erase a note LB dictated.
+- [x] Wired to the upload path via the `_Indexer`'s new `syllabus` job — off the turn, one call,
+      named files only (never `convert_all`)
+- [x] `pypdf` declared in `requirements.txt` and `stage_install.sh`. It was installed everywhere
+      already, but only TRANSITIVELY via langchain-community.
+- [x] `tests/fixtures/make_syllabus_pdf.py` — a hand-built text-bearing PDF, so the harness needs
+      neither a real syllabus in a public repo nor a PDF library on the Pi
+- [x] `tools/verify_syllabus.py` — 40 checks, no key, no API call
+
+### Verified on the Pi, against LB's real syllabus
+
+`Morgan Syllabus POSC 201 Fall 2026` — 13 pages — produced `vault/courses/POSC201.md`: instructor
+with office and email, office hours verbatim, a five-line grading breakdown, the full late policy,
+and five standing rules (attendance, classroom rules, textbook, Respondus lockdown, plagiarism).
+
+**Nothing invented, and no due dates carried across** — the fixture deliberately contains
+"Homework 4 is due on October 14, 2026" and no date reached the note. The vault note is named
+`POSC201`, which is exactly the course code the Canvas feed uses.
+
+### The bug only running it could find
+
+`read_from_vault` is a **substring** scan with no tokenising. The first real note had a heading
+called "Late and missed work", so:
+
+    read_from_vault("office hours")  -> found
+    read_from_vault("late policy")   -> NOT FOUND      <- the likeliest question there is
+
+Fixed in the NOTE, not the searcher — tokenising a tool three agents depend on would make every
+two-word query match too much. Every note now carries a `*Search terms:*` line. All six phrasings
+verified against the real searcher on the Pi.
+
+### Still open
+
+- [ ] **The extraction quality is proved on ONE syllabus.** POSC 201 is a well-structured
+      13-page document with explicit headings. A terse two-page outline, or one that states its
+      grading as prose rather than a list, has never been tried. Convert the next one with
+      `--dry-run` first and read it before it goes in the vault.
+- [ ] **`MIN_USABLE_CHARS = 400` is a guess**, not a measurement. It is well clear of the two
+      cases seen (0 characters for a scan, 794 for the fixture, thousands for the real one), but
+      nobody has found the boundary where a real syllabus falls under it.
+- [ ] A syllabus already in `data/academic/` before this existed is not converted until
+      `--all` is run by hand. Only the upload path triggers it.
+- [ ] The note is reached by HARDWARE, FIRMWARE and GENERAL through `read_from_vault` — but NOT
+      by ACADEMIC, which has no vault tool and answers from the calendar alone. So "what's my
+      late policy" works best asked plainly; asked as a coursework question it routes to ACADEMIC
+      and he says he does not know. Worth deciding whether ACADEMIC should carry the vault tool.

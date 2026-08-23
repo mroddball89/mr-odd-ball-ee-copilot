@@ -1939,3 +1939,101 @@ technically detailed, and rested on a redundancy that a previous commit had alre
 which is easy to happen when the work is moving faster than the person directing it can re-read
 it. The useful thing was not to refuse, and not to quietly comply either: it was to name what
 would actually be lost, in one sentence, and then do the whole job properly.
+
+## D24 — Putting the syllabus back, as a note instead of an index
+
+**2026-08-23.** D23 removed the academic RAG and with it every answer about a course policy.
+This restores those answers at a fraction of the cost, and LB's framing is the design:
+*"dropping it into the Markdown Vault takes 5 seconds, avoids RAG overhead, and keeps the system
+fast and lightweight."*
+
+    the RAG    a Chroma collection, torch on the answer path, chunk retrieval at question time,
+               re-embedding on every upload, and a syllabus that could ground a firmware answer
+    this       one API call, once, producing a Markdown file that `grep` can find
+
+`tools/syllabus_to_vault.py` reads a PDF with `pypdf`, sends the text to Gemini with a
+structured-output schema, and writes `vault/courses/<CODE>.md`. After that it is free forever:
+`read_from_vault` is already bound to HARDWARE, FIRMWARE and GENERAL.
+
+### The failure this module exists to prevent
+
+**An extraction is a model writing facts into long-term memory.** Everything else in the vault
+was dictated by LB. This is the first writer that is a language model, and once a note is in
+`vault/courses/` the other agents read it back as though he had written it himself.
+
+Two guards, neither optional:
+
+**A textless PDF never reaches the model.** LB's Pi camera PDFs loaded as perfectly good page
+objects with **zero extractable characters** (D12), which is the normal state of a photographed
+syllabus. A model handed an empty document does not report an empty document — it writes a
+complete, plausible, entirely invented course policy. The guard runs *before* the network call,
+so a folder of scans costs nothing, and the refusal says `no API call was made` because a silent
+skip is indistinguishable from success.
+
+**Absence is recorded as absence.** Every field may be an empty string, the prompt insists on it,
+and the renderer prints *not stated in the syllabus* rather than dropping the heading. Dropping
+it would make "this syllabus has no late policy" and "nobody has run the converter" identical in
+a grep, and those call for opposite actions. The note is stamped with its source file and date,
+so a reader can always tell a machine wrote it.
+
+Due dates are **excluded on purpose**. They come from Canvas (D22), and a date copied out of a
+PDF goes stale and then contradicts the feed. The fixture deliberately contains "Homework 4 is
+due on October 14, 2026" and no date reaches the note.
+
+### `replace`, and why the model cannot reach it
+
+`save_to_vault` appends and never overwrites, correctly: the model does not know what is already
+in a note, so "save the pinout" arriving twice must not lose the first one.
+
+That is exactly wrong for a **derived** artifact. A corrected syllabus re-uploaded would stack a
+stale late policy above the current one in one file, and `read_from_vault` would return both with
+nothing to say which is current — the conflicting-data failure D22 and D23 removed from the
+calendar, rebuilt inside the vault.
+
+So `write_note(..., replace=True)` is a Python argument on a module function, and the `@tool`
+wrapper never passes it. **A build step may rebuild its own artifact; a model may not silently
+erase a note LB dictated.**
+
+### Verified against a real syllabus, not a fixture
+
+`Morgan Syllabus POSC 201 Fall 2026`, 13 pages, already on the Pi. It produced instructor with
+office and email, office hours verbatim, a five-line grading breakdown, the complete late policy
+(*"Late assignments will NOT be accepted and will receive a grade of zero"*), and five standing
+rules including the Respondus lockdown requirement and the plagiarism policy.
+
+Nothing invented, no dates carried across, and the note is named `POSC201` — exactly the course
+code the Canvas feed uses, so the two halves line up without either knowing about the other.
+
+### The bug only running it could find
+
+`read_from_vault` is a **substring** scan against filename or body, with no tokenising and no
+stemming. That is the right trade for dozens of notes and no index, and the consequence is that
+a note is findable only by words it literally contains. The first real note had a heading called
+"Late and missed work":
+
+    read_from_vault("office hours")  -> found
+    read_from_vault("late policy")   -> NOT FOUND
+
+The likeliest question of all, missing. Fixed in the **note**, not the searcher: tokenising a
+tool three agents already depend on would make every two-word query match far more than it
+should. Every note now carries a `*Search terms:*` line, and all six phrasings are verified
+against the real searcher.
+
+### And L11, walked into twice in the same file
+
+The harness check "converts named files, never `convert_all`" was first written as
+`"convert_all" not in source` — which matched the docstring sentence *explaining* that
+`convert_all` is not used. That is [[L11]] verbatim, a lesson already in this repo.
+
+The second attempt stripped lines starting with `#` or a quote, and still failed, because a
+docstring's *middle* lines start with neither. It works now because it walks the **AST** and
+collects `ast.Call` names, which is the only version that is actually about code.
+
+### The rule
+
+**When you delete a capability, the cheapest replacement is usually not the one you deleted.**
+The academic RAG answered policy questions by embedding hundreds of chunks and retrieving four
+of them per question, forever. The same questions are answered by one extraction into one file
+that `grep` finds — because a syllabus is a handful of static facts, not a corpus. The RAG was
+the right tool for datasheets and the wrong one here, and that only became visible after it was
+removed for an unrelated reason.

@@ -90,6 +90,13 @@ requests>=2.0,<3
 # The feed URL is a CREDENTIAL and lives in .env as ODDBALL_CANVAS_ICS. See tools/canvas_sync.py.
 icalendar>=6.0,<8
 
+# Syllabus -> vault note (tools/syllabus_to_vault.py), added 2026-08-23.
+#
+# pypdf was already installed here, but only ever TRANSITIVELY, via langchain-community's PDF
+# loaders. That module now imports it by name, so it is declared: a dependency you rely on and
+# do not name is one that disappears when the package that happened to pull it changes.
+pypdf>=4.0
+
 # =======================================================================================
 # Gesture approval. Added 2026-08-21.
 #
