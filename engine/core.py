@@ -100,9 +100,18 @@ def _failure_line(exc: Exception) -> str:
     """
     text = str(exc)
     if "RESOURCE_EXHAUSTED" in text or "429" in text:
+        from engine import quota
         from engine.models import FREE_TIER_DAILY_LIMIT
-        return (f"I've used up my {FREE_TIER_DAILY_LIMIT} free questions for today. "
-                "The utility stuff still works — ask me the time.")
+
+        if quota.is_daily_exhaustion(text):
+            # LB's words, first, because this is the sentence he asked to hear and the one
+            # that stops him debugging a fault that is not there.
+            return ("API quota exceeded for today. That's my "
+                    f"{FREE_TIER_DAILY_LIMIT} free questions gone until it resets. "
+                    "The utility stuff still works — ask me the time.")
+        # A per-MINUTE 429 is a different animal: it clears in seconds, and telling him to
+        # come back tomorrow over a burst would be wrong.
+        return "I'm being rate limited for a moment. Ask me again in a few seconds."
     if "NOT_FOUND" in text or "404" in text:
         return "That model name isn't valid any more. The details are on the screen."
     if "PERMISSION_DENIED" in text or "API key" in text:
@@ -181,6 +190,25 @@ class Engine:
         except Exception as exc:                       # noqa: BLE001 — the answer path never dies
             LOG.exception("turn failed")
             t.extras.append(f"error {type(exc).__name__}")
+
+            # Remember a daily exhaustion so the NEXT turn does not pay to rediscover it.
+            # Latched per model, because D3 split the jobs across three model names precisely
+            # so that one running dry does not silence the others.
+            from engine import quota
+            from engine.models import AGENT_MODEL, PERSONA_MODEL, ROUTER_MODEL
+
+            if quota.is_daily_exhaustion(exc):
+                # Matched with `names_model`, NOT `in`: AGENT_MODEL is a strict prefix of
+                # ROUTER_MODEL, so a substring test latches both off one exhaustion.
+                named = [m for m in (ROUTER_MODEL, AGENT_MODEL, PERSONA_MODEL)
+                         if m and quota.names_model(str(exc), m)]
+                # Nothing named means we cannot tell which bucket ran dry. Latch NOTHING
+                # rather than guess: a wrong latch costs a day of silence, and the next turn
+                # now fails in 0.2s (LLM_MAX_RETRIES=0) rather than 217s, so rediscovering it
+                # is cheap. Guessing was only ever worth it when the retry was expensive.
+                for model in named:
+                    quota.note(model, exc)
+                t.extras.append(f"quota latched: {','.join(named) if named else 'none (unnamed model)'}")
             return Response(
                 speech=_failure_line(exc),
                 cards=[Card(CardKind.ERROR, type(exc).__name__, str(exc))],
@@ -199,6 +227,21 @@ class Engine:
         # The free tier, BEFORE the router. See `_free_turn`.
         response = self._free_turn(text, t)
         if response is None:
+            # The router's model may already be known out of quota. Asking again costs a round
+            # trip to be told the same thing, and before LLM_MAX_RETRIES went to 0 it cost up
+            # to 217 seconds of it. The free path above still ran, so the time, the date, a
+            # conversion and a launch all keep working — which is the whole point of the latch.
+            from engine import quota
+            from engine.models import ROUTER_MODEL
+
+            if quota.exhausted(ROUTER_MODEL):
+                t.extras.append("router quota latched — not calling")
+                LOG.info("skipping the router: %s is out of quota until %s",
+                         ROUTER_MODEL, quota.status().get(ROUTER_MODEL, "?"))
+                raise RuntimeError(
+                    "RESOURCE_EXHAUSTED: quotaId GenerateRequestsPerDayPerProjectPerModel-"
+                    f"FreeTier for {ROUTER_MODEL} (known locally, no request was sent)")
+
             t0 = time.monotonic()
             decision = router_agent(text)
             t.route_s = time.monotonic() - t0

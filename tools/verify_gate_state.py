@@ -57,6 +57,7 @@ if len(_k) < 20 or any(p in _k.lower() for p in ("paste", "here", "your-key", "x
 
 from engine.response import Card, CardKind, Pending, Response         # noqa: E402
 from engine.turn import Turn                                          # noqa: E402
+from orchestrator.classify_yes import is_yes                          # noqa: E402
 
 PASSED = 0
 FAILED = 0
@@ -110,7 +111,13 @@ class FakeBridge:
 
 
 class FakeSpeaker:
+    """Records every sentence, so the retry line is asserted rather than assumed."""
+
+    def __init__(self) -> None:
+        self.said: list[str] = []
+
     def speak(self, text, on_envelope=None, on_start=None):
+        self.said.append(text)
         if on_start:
             on_start()
 
@@ -157,8 +164,9 @@ class GateEngine:
                         raw="OS Execution Result: 45000")
 
 
-def build(bridge: FakeBridge, engine) -> Turn:
-    return Turn(recorder=None, transcriber=None, engine=engine, speaker=FakeSpeaker(),
+def build(bridge: FakeBridge, engine, speaker=None) -> Turn:
+    return Turn(recorder=None, transcriber=None, engine=engine,
+                speaker=speaker or FakeSpeaker(),
                 bridge=bridge, gate=FakeGate(), frames=None, greeting=[], gate_tail_s=0.0,
                 thinking_state="thinking")
 
@@ -233,6 +241,123 @@ check(plain.calls == 1, "an ungated turn asks exactly once", f"{plain.calls}")
 check(bridge4.states[0] == "thinking",
       "and still shows the thinking pose while the answer is produced",
       f"states: {bridge4.states}")
+
+
+# =========================================================================================
+section("5. the SPOKEN gate — LB's Firefox failure, and the three ways out")
+# =========================================================================================
+
+import tools.gesture_control as gc                                    # noqa: E402
+from engine.turn import Timings                                       # noqa: E402
+
+
+class VoiceGateHarness:
+    """Drives `_spoken_gate_answer` with scripted transcripts and a scripted camera.
+
+    Reproduces the measured 2026-08-22 failure. LB's COMMANDS transcribed (mic rms 0.28-0.33)
+    and his CONFIRMATIONS did not (0.017-0.020 — Whisper returned ""). `is_yes("")` is None,
+    None declines, and the decline was SILENT, which is why he asked for Firefox four times
+    and concluded the launcher was broken. It was not; it was never approved.
+    """
+
+    def __init__(self, transcripts, gesture="NO_CAMERA"):
+        self.bridge = FakeBridge(approve=None)          # no HUD clicks on this path
+        self.speaker = FakeSpeaker()
+        self.engine = GateEngine(self.bridge)
+        self.turn = build(self.bridge, self.engine, self.speaker)
+        self._scripted = list(transcripts)
+        self._gesture = gesture
+        self.captures = 0
+        self.camera_checks = 0
+
+        class _Cap:
+            outcome = "SPOKE"                            # never Outcome.SILENT
+            audio = None                                 # _stt is faked; nothing reads it
+
+        harness = self
+
+        class _Stt:
+            def transcribe(self, _audio):
+                harness.captures += 1
+                text = harness._scripted.pop(0) if harness._scripted else ""
+
+                class _Heard:
+                    pass
+                h = _Heard()
+                h.text, h.took_s = text, 0.1
+                return h
+
+        self.turn._capture = lambda: _Cap()
+        self.turn._stt = _Stt()
+
+    def run(self):
+        def fake_gesture():
+            self.camera_checks += 1
+            return self._gesture
+
+        saved = gc.get_gesture
+        gc.get_gesture = fake_gesture
+        try:
+            return self.turn._spoken_gate_answer(Timings())
+        finally:
+            gc.get_gesture = saved
+
+
+# --- a clear spoken yes still works, and must NOT pay for the camera ----------------------
+h = VoiceGateHarness(["yes"])
+got = h.run()
+check(is_yes(got) is True, "a clear spoken 'yes' approves", f"got {got!r}")
+check(h.camera_checks == 0,
+      "...and the camera is NOT consulted when voice was readable",
+      f"{h.camera_checks} check(s) — one costs ~2.2s (D15), so this must stay 0")
+
+h = VoiceGateHarness(["no"])
+check(is_yes(h.run()) is False, "a clear spoken 'no' declines")
+
+# --- THE BUG: an unheard yes, rescued by the camera ---------------------------------------
+h = VoiceGateHarness(["", ""], gesture="THUMBS_UP")
+got = h.run()
+check(is_yes(got) is True,
+      "an unheard 'yes' is rescued by a THUMBS UP — this is the Firefox case",
+      f"got {got!r}, camera consulted {h.camera_checks}x")
+check(h.camera_checks >= 1, "the camera IS consulted once the transcript is empty")
+
+# --- the audible decline -------------------------------------------------------------------
+h = VoiceGateHarness(["", ""], gesture="NO_CAMERA")
+got = h.run()
+check(got == "", "nothing readable anywhere still DECLINES — the gate never defaults open",
+      f"got {got!r}")
+check(any("didn't catch that" in said for said in h.speaker.said),
+      "...and he SAYS SO out loud instead of failing silently", f"said: {h.speaker.said}")
+check(any("thumbs up" in said and "say yes" in said for said in h.speaker.said),
+      "...naming both ways to answer", f"said: {h.speaker.said}")
+check(h.captures == 2, "he listens again after the retry line, exactly once",
+      f"{h.captures} capture(s); GATE_ATTEMPTS={Turn.GATE_ATTEMPTS}")
+
+# --- an open palm is not an approval. D13's whole safety argument. -------------------------
+h = VoiceGateHarness(["", ""], gesture="OPEN_PALM")
+check(h.run() == "", "an OPEN PALM is not an approval, however often it is seen")
+
+# --- the retry is a real second chance -----------------------------------------------------
+h = VoiceGateHarness(["", "yes"], gesture="NO_CAMERA")
+check(is_yes(h.run()) is True, "a 'yes' on the SECOND attempt is heard and approves")
+
+# --- a camera that raises must not approve, and must not take the turn down ----------------
+h = VoiceGateHarness(["", ""], gesture="NO_CAMERA")
+
+
+def _boom():
+    raise RuntimeError("camera exploded")
+
+
+_saved = gc.get_gesture
+gc.get_gesture = _boom
+try:
+    check(h.turn._spoken_gate_answer(Timings()) == "",
+          "a camera that RAISES declines cleanly rather than crashing the gate")
+finally:
+    gc.get_gesture = _saved
+
 
 
 print("\n" + "=" * 78)

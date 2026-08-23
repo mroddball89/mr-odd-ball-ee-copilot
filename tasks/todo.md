@@ -501,3 +501,20 @@ and still useful if a pywebview window is ever wanted for something else.
       for a format-version change, and it costs no API calls and no fixtures to maintain.
 - [ ] `vme-wren.kicad_pcb` (70 MB) is refused by the 50 MB guard. Correct for now. If LB ever
       has a board that big, the answer is streaming or a summary pass, not a bigger constant.
+
+## From D20 (2026-08-22) — the Firefox session
+
+- [ ] **The microphone, still.** Measured: captures that transcribe are CLIPPING at 0.9999
+      peak; captures that fail sit at 0.015-0.019 RMS. Gain is already maxed (16/16, +30 dB),
+      so there is no usable middle. D20 routes around it with the thumbs up; it does not fix
+      it. Options in order of effort: move it closer / off the desk surface, drop the gain and
+      re-measure the range, or a different microphone.
+- [ ] **`oddball.service` has no `WAYLAND_DISPLAY`.** Confirmed on the running process — it
+      starts ~8s after boot, before the desktop imports its environment into the user manager
+      (D10 defect 1). Harmless today because `find_display()` globs the socket, but the unit is
+      still wrong. Either `After=graphical-session.target` or an ExecStartPre that imports the
+      environment.
+- [ ] Re-measure gesture approval latency now that WARMUP_FRAMES is 5 (was 4). The 2,217 ms
+      table in gesture_control.py is the 08-21 figure and says so.
+- [ ] Consider a HUD chip showing "quota exhausted until <time>" when the latch is on. He says
+      it once; the screen could keep saying it.

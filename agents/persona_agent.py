@@ -31,7 +31,7 @@ from __future__ import annotations
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from engine.models import PERSONA_MODEL
+from engine.models import PERSONA_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from tools.knowledge_vault import (VAULT_INSTRUCTION, VAULT_TOOLS, followup_prompt,
                                    run_vault_calls)
@@ -81,7 +81,7 @@ def run_persona_agent(query: str) -> str:
     """
     # Warmer than the other agents on purpose. The firmware agent runs at 0.1 because a
     # register number has one right value; a joke told the same way twice stops being one.
-    llm = ChatGoogleGenerativeAI(model=PERSONA_MODEL, temperature=0.8)
+    llm = ChatGoogleGenerativeAI(model=PERSONA_MODEL, temperature=0.8, max_retries=LLM_MAX_RETRIES)
 
     history = format_memory_for_llm()
     prompt_template = ChatPromptTemplate.from_template(PERSONA_PROMPT_TEMPLATE)

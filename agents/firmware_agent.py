@@ -36,7 +36,7 @@ import logging
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from engine.models import AGENT_MODEL
+from engine.models import AGENT_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Response
 from engine.split import SPOKEN_INSTRUCTION, split
@@ -108,7 +108,7 @@ def run_firmware_agent_response(query: str) -> Response:
 
 def _answer(query: str) -> tuple[str, list[dict]]:
     # 1. Initialize the LLM
-    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1, max_retries=LLM_MAX_RETRIES)
 
     # 2. Retrieve from the local datasheet store. None means it was never built.
     context, sources = "", []
