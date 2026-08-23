@@ -44,6 +44,19 @@ Documentation=file:%h/mr-odd-ball/docs/DEPLOY.md
 After=pipewire.service pipewire-pulse.service wireplumber.service
 Wants=pipewire.service wireplumber.service
 
+# The graphical session, for the boxes where systemd owns it.
+#
+# On LB's Pi it owns nothing: lightdm execs labwc-pi, which execs labwc, and
+# `systemctl --user is-active graphical-session.target` reports **inactive** (measured
+# 2026-08-23). Ordering against a target that never activates imposes no wait, so on THIS
+# machine these two lines are inert and `ExecStartPre` below is what actually does the job.
+#
+# They are still declared, for two reasons: they are correct on any box whose session IS
+# systemd-managed, and the day something starts populating that target here, the ordering is
+# already right. What they are NOT is the fix — see tools/wait_for_display.sh.
+After=graphical-session.target
+Wants=graphical-session.target
+
 # Give up after 3 failures in 5 minutes rather than restarting forever. A microphone that has
 # gone into digital silence (the C270 does this) fails identically every time, and a service
 # that respawns into it for hours only makes the journal harder to read.
@@ -70,6 +83,11 @@ WorkingDirectory=%h/mr-odd-ball
 #
 # Cost: a 16kHz mono WAV per captured utterance, ~50KB for 1.6s. At the observed 0.45 wakes a
 # minute that is ~2MB/hour against 97GB free. `captures/` is gitignored.
+# Wait for the compositor's environment before starting. `Linger=yes` starts the user manager
+# at BOOT, so without this the assistant came up ~8 seconds after power-on, while labwc was
+# still loading, and inherited no WAYLAND_DISPLAY at all (D10 defect 1, measured again
+# 2026-08-22). The script always exits 0 — a missing screen must never stop a VOICE assistant.
+ExecStartPre=%h/mr-odd-ball/tools/wait_for_display.sh
 ExecStart=%h/mr-odd-ball/venv/bin/python main.py --voice --log %h/mr-odd-ball/oddball.log --save-captures %h/mr-odd-ball/captures
 
 # ExecStart was orchestrator/run_wake.py until 2026-08-19. It is main.py --voice now: the
@@ -84,7 +102,9 @@ ExecStart=%h/mr-odd-ball/venv/bin/python main.py --voice --log %h/mr-odd-ball/od
 # TimeoutStartSec was 180 for a cold GGUF off the SD card. faster-whisper is now the only slow
 # load left, so this could come down — left alone until somebody has actually timed a cold boot,
 # because a start timeout that is too tight fails as "he did not come up after a reboot".
-TimeoutStartSec=180
+# Must exceed wait_for_display.sh's ceiling (90s) plus real startup, or systemd kills the
+# unit while it is legitimately waiting — which would look exactly like a crash loop.
+TimeoutStartSec=300
 
 Restart=on-failure
 RestartSec=5

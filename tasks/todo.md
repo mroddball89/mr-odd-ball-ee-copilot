@@ -518,3 +518,18 @@ and still useful if a pywebview window is ever wanted for something else.
       table in gesture_control.py is the 08-21 figure and says so.
 - [ ] Consider a HUD chip showing "quota exhausted until <time>" when the latch is on. He says
       it once; the screen could keep saying it.
+
+## From the boot-race fix (2026-08-23)
+
+- [ ] **Reboot the Pi to confirm the fix on the path it was written for.** Everything so far is
+      a simulation — `unset-environment` + restart, which reproduces the race exactly but not
+      the boot. After a reboot:
+        systemctl --user show oddball -p ActiveState -p NRestarts
+        PID=$(systemctl --user show oddball -p MainPID --value)
+        tr '\0' '\n' < /proc/$PID/environ | grep WAYLAND_DISPLAY    # expect wayland-0
+        journalctl --user -u oddball -b | grep wait_for_display     # how long it waited
+- [ ] **CRLF keeps coming back from the Windows side.** Every Python-scripted edit
+      (`Path.write_text`) reintroduces it — 23 files on 2026-08-23, including
+      `config/oddball.service`, where it reached the Pi's installed unit. systemd tolerated it;
+      shell scripts do not. DEPLOY.md has the check and the fix script. Worth a pre-deploy hook
+      rather than remembering.
