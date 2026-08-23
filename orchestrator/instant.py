@@ -101,6 +101,41 @@ def _any(text: str, *words: str) -> bool:
     return any(_has(text, w) for w in words)
 
 
+def _is_bare(text: str, phrases: tuple[str, ...], filler: frozenset[str]) -> bool:
+    """Does one of `phrases` BE the utterance, rather than merely appear inside it?
+
+    The end-anchor rule, in one place. A phrase counts when removing it leaves nothing behind
+    but `filler` — so "okay, goodnight" is a dismissal while "I bought it at the goodbye sale"
+    is not, and "hey mr odd ball" is a doorbell while "what does mr odd ball run on" is a
+    question to answer.
+
+    Extracted 2026-08-23 because this algorithm had been written out three times over —
+    `_is_dismissal`, `is_wake`, and the social intents that needed it before they could be
+    promoted in front of the router. Three copies of the one rule that holds D38 back is three
+    places for it to drift apart.
+
+    `filler` stays a PARAMETER because it is precisely the part that must not be shared: "hey"
+    is filler around a dismissal and is the entire point of a wake phrase, and sharing one set
+    would make "hey mr odd ball" reduce to nothing and match every wake phrase at once.
+
+    Args:
+        text:    already normalised — callers holding raw input call `normalise` first.
+        phrases: the triggers, matched as whole words.
+        filler:  words that may be left over and still count as nothing.
+
+    Returns:
+        True when some phrase matched AND only filler remained. Trying every phrase matters:
+        "thanks a lot" fails the anchor on "thanks" and passes it on "thanks a lot".
+    """
+    for phrase in phrases:
+        if not _has(text, phrase):
+            continue
+        rest = re.sub(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", " ", text)
+        if not [w for w in rest.split() if w not in filler]:
+            return True
+    return False
+
+
 # --- the handlers. Each takes the Query and `now`, and returns a line. ---
 
 def _say_time(_q: Query, now: datetime) -> str:
@@ -276,6 +311,59 @@ _WAKE_FILLER = frozenset({
 })
 
 
+# --- the social three: greeting, thanks, identity ------------------------------------------
+#
+# These matched long before they were trusted. What changed 2026-08-23 is that they are now
+# answered WITHOUT consulting the router (`Engine.FREE_INTENTS`), and their old predicates
+# could not survive that promotion:
+#
+#     `_any(text, "hello", "hi", "hey", ...)`   -> "hey whats the trace width for 5 amps"
+#     `_has(text, "who", "you")`                -> "who would you recommend for a resistor supplier"
+#     `_any(text, "thanks", ...)`               -> "thanks, now whats the trace width"
+#
+# Every one of those is a question for an AGENT that a bare keyword answers with "Hey LB.".
+# Behind the router it cost a wasted classification; in front of it, it removes the agent from
+# the answer path entirely. D38, for the seventh time: the danger is never the intent that
+# fails to match, it is the one that matches too much.
+#
+# So they take the same end-anchor every other promoted intent takes — the greeting has to BE
+# the utterance. `tools/verify_router.py` asserts both directions, and mutation-tests it by
+# putting the bare matchers back.
+_HELLO_PHRASES = (
+    "hello", "hi", "hey", "howdy", "greetings", "yo",
+    "good morning", "good afternoon", "good evening",
+)
+
+_THANKS_PHRASES = (
+    "thanks", "thank you", "thanks a lot", "thanks a bunch", "thank you very much",
+    "cheers", "appreciate it", "much appreciated", "youre a legend", "nice one",
+)
+
+# Narrower than the predicate it replaces, and deliberately. `_has(text, "who", "you")` wanted
+# both words ANYWHERE, which is true of "who would you recommend for a resistor supplier" —
+# a WEB question. Naming the phrases keeps every fixture in verify_stt/define/calc/formulas
+# green ("who are you", "what are you", "whats your name") and drops only the false ones.
+_IDENTITY_PHRASES = (
+    "who are you", "who r you", "who you are", "what are you",
+    "your name", "who is this", "who am i talking to",
+    "introduce yourself", "tell me about yourself",
+)
+
+# Function words and social noise ONLY. **No technical noun may ever appear here** — that is
+# the property that keeps "hey whats the trace width" out of the greeting, and the one
+# `verify_router.py` checks by prefixing an EE corpus with "hey" and "thanks" and asserting
+# nothing is claimed. A wrong match here costs an agent, not an action, which is why this set
+# can be wider than _DISMISS_FILLER without being more dangerous.
+_SOCIAL_FILLER = frozenset({
+    "ok", "okay", "alright", "alrighty", "well", "so", "now", "then", "please", "just",
+    "um", "uh", "mr", "odd", "ball", "oddball", "buddy", "man", "dude", "there", "again",
+    "you", "u", "your", "my", "me", "i", "am", "is", "it", "a", "an", "the", "and",
+    "whats", "what", "tell", "hey", "hi", "hello", "good", "very", "much", "lot", "bunch",
+    "really", "thanks", "thank", "cheers", "to", "for", "this", "that", "about",
+    "yourself", "talking", "are", "who", "morning", "afternoon", "evening",
+})
+
+
 def is_wake(text: str) -> bool:
     """Is this typed line asking him to wake up, rather than a sentence that mentions him?
 
@@ -287,15 +375,7 @@ def is_wake(text: str) -> bool:
     him and must be answered, not treated as a doorbell.
     """
     flat = normalise(text)
-    if not flat:
-        return False
-    for phrase in _WAKE_PHRASES:
-        if not _has(flat, phrase):
-            continue
-        rest = re.sub(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", " ", flat)
-        if not [w for w in rest.split() if w not in _WAKE_FILLER]:
-            return True
-    return False
+    return bool(flat) and _is_bare(flat, _WAKE_PHRASES, _WAKE_FILLER)
 
 
 def is_sleep(text: str) -> bool:
@@ -320,13 +400,7 @@ def _is_dismissal(text: str) -> bool:
     behind but filler — which allows "okay, goodnight" and "Mr Odd Ball, that's all for now"
     while refusing any sentence that is *about* something else.
     """
-    for phrase in _SLEEP_PHRASES:
-        if not _has(text, phrase):
-            continue
-        rest = re.sub(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", " ", text)
-        if not [w for w in rest.split() if w not in _DISMISS_FILLER]:
-            return True
-    return False
+    return _is_bare(text, _SLEEP_PHRASES, _DISMISS_FILLER)
 
 # Ordered, and the order is load-bearing: the first match wins, so anything specific must sit
 # above anything general. "what time is it" would otherwise be caught by a bare "what".
@@ -423,11 +497,12 @@ INTENTS: list[tuple[str, Callable[[Query], bool], Callable[[Query, datetime], st
     ("sleep",    lambda q: _is_dismissal(q.text), _say_goodnight),
     ("stop",     lambda q: _any(q.text, "stop", "cancel", "never mind", "nevermind",
                                "forget it"), _say_ok),
-    ("identity", lambda q: _has(q.text, "who", "you") or _has(q.text, "your", "name")
-     or _has(q.text, "what", "are", "you"), _say_identity),
-    ("thanks",   lambda q: _any(q.text, "thanks", "thank you", "cheers"), _say_welcome),
-    ("hello",    lambda q: _any(q.text, "hello", "hi", "hey", "good morning", "good evening"),
-     _say_hello),
+    # The social three, end-anchored — see _HELLO_PHRASES for why. Their slots in this table
+    # are unchanged; only the predicates tightened. `sleep` stays above `hello` because
+    # "good night" is one word away from "good morning" and means the opposite.
+    ("identity", lambda q: _is_bare(q.text, _IDENTITY_PHRASES, _SOCIAL_FILLER), _say_identity),
+    ("thanks",   lambda q: _is_bare(q.text, _THANKS_PHRASES, _SOCIAL_FILLER), _say_welcome),
+    ("hello",    lambda q: _is_bare(q.text, _HELLO_PHRASES, _SOCIAL_FILLER), _say_hello),
 ]
 
 # What he says when Tier 0 has nothing. Phase 2 replaces this branch with the local model

@@ -148,11 +148,36 @@ def _targets(catalogue, roles) -> tuple[str, ...]:
     Longest-first is what makes "file manager" reachable when "files" also exists — the same
     reason `app_catalogue._spelling_order` sorts that way.
     """
-    from tools.app_catalogue import _norm
+    from tools.app_catalogue import ALIASES, _norm
 
     phrases = {_norm(a.name) for a in catalogue}
     phrases |= {_norm(a.entry_id) for a in catalogue}
     phrases |= set(roles)
+    # Spoken nicknames — "vscode" for "Visual Studio Code". `resolve()` expands them, but it
+    # never sees the utterance: this function decides what counts as naming an app at all, so
+    # a nickname missing from here is a nickname the free path cannot recognise.
+    phrases |= set(ALIASES)
+
+    # TRAILING sub-phrases of a multi-word Name, so "KiCad Schematic Editor" is also reachable
+    # as "schematic editor" and "KiCad PCB Editor" as "pcb editor". Measured 2026-08-23: both
+    # of those failed here and fell through to the paid router, even though
+    # `app_catalogue.resolve()` resolves them perfectly well on its tier 4 (a whole-word phrase
+    # in the Name). The catalogue knew the answer; this function never asked the question.
+    #
+    # **Two words minimum.** A single trailing word is "editor", "manager", "files" — exactly
+    # the words `ROLES` already owns and deliberately maps to a CATEGORY rather than to
+    # whichever app happens to end in them. Adding them here would let "open the editor" pick
+    # KiCad's schematic editor over a text editor, which is the ambiguity ROLES exists to
+    # resolve. Leading words are skipped for the same reason: "kicad schematic" is not a thing
+    # anybody says, and "visual studio" would shadow "visual studio code".
+    #
+    # Ambiguity is still never guessed — `resolve()` returns every hit and `propose_launch`
+    # asks. This widens what can be NAMED, not what can be assumed.
+    for app in catalogue:
+        words = _norm(app.name).split()
+        for i in range(1, max(1, len(words) - 1)):
+            phrases.add(" ".join(words[i:]))
+
     return tuple(sorted((p for p in phrases if p), key=len, reverse=True))
 
 

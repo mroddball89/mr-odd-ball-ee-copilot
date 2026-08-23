@@ -227,29 +227,36 @@ class Engine:
         # The free tier, BEFORE the router. See `_free_turn`.
         response = self._free_turn(text, t)
         if response is None:
-            # The router's model may already be known out of quota. Asking again costs a round
-            # trip to be told the same thing, and before LLM_MAX_RETRIES went to 0 it cost up
-            # to 217 seconds of it. The free path above still ran, so the time, the date, a
-            # conversion and a launch all keep working — which is the whole point of the latch.
-            from engine import quota
-            from engine.models import ROUTER_MODEL
+            # Second free pass: the turn needs an agent, but not a model to say WHICH agent.
+            # Above the quota latch on purpose — the same reasoning the latch states about the
+            # free tier, so "sync Canvas" and "CPU temp" keep working after the router is dry.
+            destination = self._hinted_route(text, t)
 
-            if quota.exhausted(ROUTER_MODEL):
-                t.extras.append("router quota latched — not calling")
-                LOG.info("skipping the router: %s is out of quota until %s",
-                         ROUTER_MODEL, quota.status().get(ROUTER_MODEL, "?"))
-                raise RuntimeError(
-                    "RESOURCE_EXHAUSTED: quotaId GenerateRequestsPerDayPerProjectPerModel-"
-                    f"FreeTier for {ROUTER_MODEL} (known locally, no request was sent)")
+            if destination is None:
+                # The router's model may already be known out of quota. Asking again costs a
+                # round trip to be told the same thing, and before LLM_MAX_RETRIES went to 0 it
+                # cost up to 217 seconds of it. The free paths above still ran, so the time,
+                # the date, a conversion and a launch all keep working — the point of the latch.
+                from engine import quota
+                from engine.models import ROUTER_MODEL
+
+                if quota.exhausted(ROUTER_MODEL):
+                    t.extras.append("router quota latched — not calling")
+                    LOG.info("skipping the router: %s is out of quota until %s",
+                             ROUTER_MODEL, quota.status().get(ROUTER_MODEL, "?"))
+                    raise RuntimeError(
+                        "RESOURCE_EXHAUSTED: quotaId GenerateRequestsPerDayPerProjectPerModel-"
+                        f"FreeTier for {ROUTER_MODEL} (known locally, no request was sent)")
+
+                t0 = time.monotonic()
+                decision = router_agent(text)
+                t.route_s = time.monotonic() - t0
+                t.route = decision.destination.value
+                LOG.info("route %r -> %s (%s)", text, t.route, decision.reasoning)
+                destination = decision.destination
 
             t0 = time.monotonic()
-            decision = router_agent(text)
-            t.route_s = time.monotonic() - t0
-            t.route = decision.destination.value
-            LOG.info("route %r -> %s (%s)", text, t.route, decision.reasoning)
-
-            t0 = time.monotonic()
-            response = self._dispatch(decision.destination, text, t)
+            response = self._dispatch(destination, text, t)
             t.agent_s = time.monotonic() - t0
 
         response = self._with_backup_reminder(response, t)
@@ -266,7 +273,21 @@ class Engine:
     # MATH problem and `formula` answers it with a formula. It stays behind the router, where
     # it has always been, until its matcher earns promotion. D38, for the sixth time: the
     # danger is never the intent that fails to match, it is the one that matches too much.
-    FREE_INTENTS = frozenset({"time", "date", "convert", "constant", "define", "calc"})
+    # The social three, promoted 2026-08-23. `instant.py` already held canned answers for
+    # them ("Hey LB.", "Any time.", "I'm Mr Odd Ball...") and still charged a router call to
+    # reach a PERSONA agent that would improvise a different one. D3's first listed remedy is
+    # "widen UTILITY — every question it absorbs is a free question", and a greeting is the
+    # purest case of that.
+    #
+    # They could not be promoted as written. `hello` fired on a bare "hey", so "hey what's the
+    # trace width for 5 amps" was answered "Hey LB." — behind the router that wasted a
+    # classification; in front of it, it removes HARDWARE from the answer path entirely. All
+    # three now take the end-anchor rule (`instant._is_bare`): the greeting has to BE the
+    # utterance. `tools/verify_router.py` mutation-tests that by putting the bare matchers back.
+    SOCIAL_INTENTS = frozenset({"hello", "thanks", "identity"})
+
+    FREE_INTENTS = frozenset({
+        "time", "date", "convert", "constant", "define", "calc"}) | SOCIAL_INTENTS
 
     def _free_turn(self, text: str, t: Turnlog) -> Response | None:
         """Answer without spending a Gemini call, or return None to let the router decide.
@@ -310,11 +331,51 @@ class Engine:
                               AgentRoute.OS.value, t)
 
         if reply.handled and reply.intent in self.FREE_INTENTS:
-            t.route = AgentRoute.UTILITY.value
+            # The answer is canned either way; what differs is the label on the HUD's route
+            # chip and in the Turnlog. "utility" is the wrong word for a greeting — LB was
+            # talking TO him, which is what PERSONA means.
+            route = (AgentRoute.PERSONA if reply.intent in self.SOCIAL_INTENTS
+                     else AgentRoute.UTILITY).value
+            t.route = route
             t.extras.append(f"free:{reply.intent}")
-            return Response(speech=reply.text, route=AgentRoute.UTILITY.value, raw=reply.text)
+            return Response(speech=reply.text, route=route, raw=reply.text)
 
         return None
+
+    def _hinted_route(self, text: str, t: Turnlog) -> "AgentRoute | None":
+        """The destination, when naming it needs no model. See `orchestrator/route_hint.py`.
+
+        The band between `_free_turn` (needs no agent at all) and `router_agent` (needs
+        judgement): "sync Canvas" is ACADEMIC and "CPU temp" is OS whatever model you have.
+
+        **Saves the router leg only** — 750 ms on Windows, 9.8 s measured on the Pi. The agent
+        behind it still costs what it costs, so this is one call of two or three rather than a
+        free turn, and saying otherwise would overstate it.
+
+        `t.route_s` is deliberately left at 0.0, exactly as on a free turn, so the Turnlog
+        reads `route 0ms -> academic` and the saving is legible in the log rather than inferred.
+
+        Returns:
+            An `AgentRoute`, or None to let the paid router decide — which is the answer for
+            anything ambiguous, and for every keyword this repo refuses to match on.
+        """
+        from orchestrator import route_hint
+
+        try:
+            hint = route_hint.look_up(text)
+            route = AgentRoute(hint) if hint else None
+        except Exception:                                              # noqa: BLE001
+            # D10's lesson, stated where it was learned: a silent fall-through to the paid
+            # path is how the free tier died for a day without anyone noticing. Logged loudly.
+            LOG.exception("route hint failed; falling back to the router")
+            return None
+
+        if route is None:
+            return None
+        t.route = route.value
+        t.extras.append(f"free route:{route.value}")
+        LOG.info("route %r -> %s (local, no api call)", text, route.value)
+        return route
 
     def _with_backup_reminder(self, response: Response, t: Turnlog) -> Response:
         """The 15-day clock. Appended to the SHOWN half, never the spoken one: a system alarm

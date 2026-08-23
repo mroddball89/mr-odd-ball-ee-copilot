@@ -529,6 +529,64 @@ def s7_free_intent() -> None:
                   f"{utterance!r} is a launch of {expect!r}",
                   f"got {req.app!r}" if req else "not recognised as a launch")
 
+        # A multi-word Name is reachable by its TAIL. Added 2026-08-23 (D27): "fire up the
+        # schematic editor" and "pull up the pcb editor" both failed here and fell through to
+        # the paid router, even though `resolve()` answers them on its tier 4. The catalogue
+        # knew; `_targets` never asked. On this fixture set the same rule reaches VLC.
+        for utterance, expect in [
+            ("open the media player", "media player"),
+            ("open media player", "media player"),
+            ("launch the web browser", "web browser"),
+        ]:
+            req = ask(utterance)
+            check(req is not None and req.app == expect,
+                  f"{utterance!r} names {expect!r} off a multi-word Name",
+                  f"got {req.app!r}" if req else "not recognised as a launch")
+
+        check(ask("open the media player") is not None
+              and _cat.resolve("media player", CATALOGUE).app.name == "VLC media player",
+              "...and it resolves to exactly one app, not a guess between several")
+
+        # A SINGLE trailing word is not a target — "editor", "manager", "player" belong to
+        # ROLES, which maps them to a category rather than to whichever app ends in them.
+        for utterance in ["open the player", "open the manager"]:
+            check(ask(utterance) is None,
+                  f"{utterance!r} is NOT a launch — one trailing word is a role, not a name",
+                  f"claimed {ask(utterance)}")
+
+        # Spoken nicknames (D27). "vscode" is not the Name, not the entry id and not a role,
+        # so nothing in the four resolution tiers could reach it. It is an EXACT key, not a
+        # fuzzy match, and it names no app on its own — with VS Code uninstalled it resolves
+        # to nothing, exactly as its full name does.
+        with tempfile.TemporaryDirectory() as _t:
+            _d = Path(_t)
+            (_d / "code.desktop").write_text(
+                "[Desktop Entry]\nType=Application\nName=Visual Studio Code\nExec=code\n",
+                encoding="utf-8")
+            vscode_cat = load_catalogue((_d,))
+            _cat.cached_catalogue = lambda: vscode_cat
+
+            for utterance in ["open vscode", "launch vs code", "open code",
+                              "open visual studio code"]:
+                req = ask(utterance)
+                check(req is not None
+                      and _cat.resolve(req.app, vscode_cat).app.name == "Visual Studio Code",
+                      f"{utterance!r} reaches Visual Studio Code",
+                      f"got {req.app!r}" if req else "not recognised as a launch")
+
+            # The anchor still governs a nickname exactly as it governs a name.
+            for utterance in ["how do i open vscode", "is vscode installed",
+                              "open vscode and delete my files"]:
+                check(ask(utterance) is None, f"{utterance!r} is NOT a launch",
+                      f"claimed {ask(utterance)}")
+
+            check(all(_cat.resolve(alias, CATALOGUE).app is None
+                      for alias in _cat.ALIASES),
+                  "an alias for an app that is NOT installed resolves to nothing",
+                  "the alias table must never imply an app exists")
+
+        _cat.cached_catalogue = lambda: CATALOGUE
+
         # THE negatives. Every one names something launchable and none is a request to launch
         # it. D38 for the sixth time — and the first time where a false match RUNS something.
         for utterance in [

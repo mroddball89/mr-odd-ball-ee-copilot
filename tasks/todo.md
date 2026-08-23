@@ -93,7 +93,9 @@ him running on the Pi desktop transparently today:
 
 - [x] `verify_split.py` — **and prove it bites**: plant a fenced C++ block in the prose path
 - [x] `verify_engine.py` (gates + quiz + failure lines, 97 checks, probe bites) — nothing executes without an explicit yes
-- [ ] `verify_router.py` — all 9 routes reachable, `PERSONA`/`UTILITY` don't swallow EE questions
+- [x] `verify_router.py` — 164 checks, probe bites 4/4. Ten routes now, not nine. The second
+      half of this line was the real job: the zero-token hints (D27) refuse every ambiguous
+      keyword, and M3 proves it by restoring the rejected dictionary and going 21 checks red
 - [x] quiz covered by `verify_engine.py`; `verify_chat.py` + `verify_os_guard.py` added
 - [ ] `verify_rag.py` — needs datasheet PDFs in `data/` to be meaningful
 - [ ] End-to-end on the Pi, six scenarios
@@ -945,3 +947,106 @@ not measurements, and the panel exists to replace them with numbers.
 - [ ] `media/` has no chart for this. A detection-rate-vs-threshold sweep, run from the saved
       frames the window's `s` key collects, is the figure — and per the house rule a chart is not
       finished without the CSV beside it.
+
+---
+
+## 2026-08-23 — Zero-token route hints, and the keyword list that was refused
+
+Asked for an extensive local keyword dictionary in `router.py` to skip the Gemini Flash
+classification. Goal was right and the cost is measured (D3, D1: a router round trip on every
+paid turn, 750 ms on Windows and **9.8 s on the Pi**). The implementation had two problems that
+only showed up on reading the routing path first, and both are written up in **D27**.
+
+### What was already built — and the three apps that turned out not to be
+
+**Most of the app-launch half.** `open`/`launch`/`start`/`run`/`bring up`/`fire up`/`pull up`
+plus KiCad, Firefox, Chromium and the terminal have cost zero tokens since D10 landed on
+2026-08-21 (`orchestrator/launch_intent.py`), resolving targets against the Pi's XDG desktop
+database rather than a hardcoded list. Rebuilding it in `router.py` would have been dead code
+at best — the free tier runs before the router — or a launch path that skips `Engine._gate`
+at worst.
+
+**But three of the named targets did not work,** and only a fixture showed it. Handing the
+launcher a Pi-shaped `.desktop` tree (six entries, `TemporaryDirectory`, on Windows) caught
+`schematic editor`, `pcb editor` and `vscode` all falling through to the paid router:
+
+- `_targets` offered only whole names, so `resolve()`'s fourth tier — *a whole-word phrase in
+  the Name*, which answers "schematic editor" against "KiCad Schematic Editor" — was never
+  reachable from the free path. Trailing sub-phrases of multi-word names are now targets, two
+  words minimum (one trailing word is "editor"/"manager"/"player", which `ROLES` owns).
+- `vscode` is a nickname and no tier can reach one. `app_catalogue.ALIASES` maps it and
+  "vs code" to "visual studio code" before the tiers run — an exact key, not a fuzzy match,
+  and it implies nothing about what is installed.
+
+`verify_launch.py` is 208 checks now, up from 194; its five mutations still bite.
+
+### What was refused, and why
+
+Six collisions between the specified rules and routes they did not account for. Two worth
+repeating here:
+
+- `[a-z]{3,4}` + digits → ACADEMIC matches **`esp32`**, `stm32`, `msp430`, `pic16` — the
+  FIRMWARE keywords from the same request. Two rules in one document claiming the same string.
+- `vault`/`remember`/`save` → VAULT, and **there is no VAULT route**. The vault is a tool bound
+  into HARDWARE, FIRMWARE, ACADEMIC and PERSONA. "Remember I used a 10k resistor on the amp
+  board" wants `save_to_vault` *inside* the agent that can also read the KiCad file; routing it
+  anywhere strips the tools off it.
+
+### What shipped
+
+- `orchestrator/route_hint.py` — a pure function of a string, called from `_routed_turn`
+  between `_free_turn` and the quota latch (above the latch on purpose, so hinted turns survive
+  a dry router). ACADEMIC for Canvas-sync / course-paperwork / deadline **phrases**, OS for
+  machine-stat **phrases**. Course codes are read from `vault/courses/*.md` — the ACADEMIC
+  agent's own notes — the way `app_catalogue` reads apps from XDG, which is what kills the
+  `esp32` collision structurally instead of by exception. An upload is refused before anything
+  else, because a new upload is always GENERAL.
+- `instant._is_bare` — the end-anchor rule, extracted. It existed three times over
+  (`_is_dismissal`, `is_wake`, and the social intents that needed it); both old call sites now
+  delegate.
+- `hello` / `thanks` / `identity` promoted into `Engine.FREE_INTENTS`, labelled PERSONA rather
+  than UTILITY. They needed the anchor first: `hello` fired on a bare "hey", so *"hey what's the
+  trace width for 5 amps"* was answered **"Hey LB."**, and `identity` claimed *"who would you
+  recommend for a resistor supplier"*. Both now fall through correctly.
+- `tools/verify_router.py` — 164 checks, keyless, closes the Stage 8 item.
+
+### The numbers
+
+| turn | before | after |
+|---|---|---|
+| "hello" / "thanks" / "who are you" | 1 router + 1 persona | **0** |
+| "sync canvas" | 1 router + academic | academic only |
+| "what's the CPU temp" | 1 router + 2 OS calls | 2 OS calls |
+| "what's the trace width for 5 amps" | 1 router + agent | unchanged, deliberately |
+
+**Only the social three are actually free.** The ACADEMIC and OS hints save one call of two or
+three — the agent still runs — and saying otherwise would overstate what this does.
+
+### Verified
+
+164/164 on the new harness, 4/4 mutations bite. Full sweep green with no regressions:
+`verify_launch` (194, 5/5 probes), `verify_engine` (106, probe bites), `verify_academic` (31),
+`verify_agents` (53), `verify_upload` (169), `verify_formulas` (894), `verify_calc` (820),
+`verify_define` (7068), `verify_convert` (1599), `verify_wake` (42), `verify_typed` (81),
+`verify_stt` (36), `verify_chat` (39), `verify_gate_state` (20), `verify_os_guard` (75),
+`verify_split` (93), `verify_speakable` (59), `verify_syllabus` (40).
+
+The two mutations worth naming restore *designs that were specified*, not bugs that shipped:
+M3 puts the bare-keyword dictionary back (**21 checks red**) and M4 the naive course-code regex
+(**9 red**). Without those, D27 is an opinion; with them it is a thing that fails on demand.
+
+### Still open
+
+- [ ] **Nothing here has run on the Pi.** `vault/courses/` does not exist on Windows, so the
+      course-code tier returned an empty tuple for every check in section 6 except the one that
+      builds a fake vault in a `TemporaryDirectory`. The rule is exercised; the real course
+      list is not. First Pi run should confirm `known_courses()` finds his actual notes.
+- [ ] **The 9.8 s Pi router leg is still unmeasured after this change.** The hint removes that
+      leg for coursework and stat turns, which is exactly the family LB asks most, but the
+      re-measure at `Stage 8` is still owed a number. `media/` was explicitly out of scope for
+      this pass — the before/after chart is the natural next artifact and the data for it is one
+      `measure_turn.py` run on the Pi.
+- [ ] `_STATS` and `_POLICY` are phrase lists, and phrase lists are wrong at the edges by
+      construction. "is the sd card full" missed on the first harness run because the phrase was
+      written as "how full is the sd card". Every future miss costs one router call and should be
+      added as a phrase, never widened into a keyword.
