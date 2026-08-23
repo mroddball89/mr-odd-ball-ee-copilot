@@ -278,7 +278,13 @@ can hold. `kilohm` and `megohm` (the standard spellings) both work.
 had never been able to look at an actual design. It now has two tools,
 `tools/kicad_parser.py`: `extract_kicad_bom` reads a schematic's parts, `analyze_kicad_pcb`
 reads a board's layer stack, nets and footprints. Both work offline and neither needs KiCad
-installed, which matters because the Pi does not have it and never will.
+installed, which matters because the Pi did not have it.
+
+**That last clause said "and never will", and on 2026-08-22 it stopped being true** — LB
+installed KiCad 9.0.2 on the Pi. It changes nothing about the design — the whole point is that
+`kiutils` reads the files directly, so the parser never depended on KiCad being absent or
+present — but a flat prediction in a decision log is a thing people navigate by, and this one
+was wrong. See D19 for what the install bought: a free validation corpus.
 
 **The parser is `kiutils`, not a regex.** A `.kicad_sch` is an S-expression whose useful fields
 sit four levels deep inside quoted strings that may themselves contain brackets. A regex over
@@ -1342,3 +1348,78 @@ Both numbers remain guesses at the same suspected cause (an underexposed frame),
 D14 is about: **there is no detection-rate measurement to tune against.** What makes them
 acceptable is direction — a missed thumbs-up costs one retry and falls back to the keyboard.
 The honest next step is a measurement, not another nudge. Tracked in `tasks/todo.md`.
+
+---
+
+## D19 — The parser met 29 files it did not help shape, and got all of them
+
+**2026-08-22.** LB installed KiCad 9.0.2 on the Pi and asked whether the parser works. It does,
+and the install is worth more than the answer: `kicad-demos` ships **85 schematics and 16
+boards** written by KiCad itself, at a format version this parser has never seen.
+
+That matters because **every fixture in `tests/fixtures/kicad/` is hand-written.** They were
+built to pin known hazards (D9), which is the right way to test the hazards — and it means the
+whole existing corpus was authored by the same person who wrote the parser, against the same
+mental model of the format. A hand-written fixture cannot surprise you about what KiCad
+actually emits.
+
+### The result
+
+| | parsed | failed | refused by design |
+|---|---|---|---|
+| schematics (root sheet per project) | **14** | 0 | — |
+| boards | **15** | 0 | 1 |
+
+**1,319 parts across 14 designs, 0 failures.** The largest is `vme-wren` at **820 parts across
+36 hierarchical sheets** — an order of magnitude past anything in the fixtures, and the sheet
+walk handled it.
+
+The D9 fixes are visible in the output rather than merely asserted by a harness:
+
+- `Copper layers: 2 (F.Cu, B.Cu)` and `4 (F.Cu, In1.Cu, ...)` — not the 29 that
+  `len(board.layers)` returns once adhesive, paste, silkscreen, mask, courtyard, fab and the
+  nine user layers are counted.
+- `Nets: 52 named, 53 including KiCad's unassigned net 0` — the off-by-one that inflates every
+  net count on every board, forever, reported instead of absorbed.
+
+### The one refusal is the size guard, and it is the right answer
+
+`vme-wren.kicad_pcb` is **70 MB**, over `_MAX_BYTES` (50 MB), and comes back as *"vme-wren.kicad_pcb
+is 70 megabytes, which is larger than I will read in the middle of a conversation."* A sentence
+that is true, actionable and speakable — not a hang, not an OOM, and not a traceback. Note that
+its **schematic** parsed fine at 820 parts; it is the board that is enormous.
+
+### Name resolution, which is the part that exists for the voice
+
+Pointed at the demos as `ODDBALL_KICAD_ROOT`, a dictated name behaves as D9 requires:
+
+    "video"              -> resolved, 186 parts across 8 sheets
+    "pic programmer"     -> "That name matches more than one file and I will not guess between them"
+    "tiny tapeout"       -> same, and lists the candidates
+    "nonexistent board"  -> a clear not-found naming where it looked
+
+The demos are an unusually adversarial root — most projects hold several `.kicad_sch` files
+because sub-sheets are files too — so ambiguity is the *correct* outcome for most of them, and
+refusing is the whole point. Answering confidently about the wrong board is worse than asking
+which one, because the answer is right about something LB did not ask about.
+
+### What this does not prove
+
+These are **demo files**, curated by the KiCad project to load cleanly. They are not evidence
+about a half-finished board with a broken symbol link in it, which is the state LB's own designs
+will actually be in. The hand-written fixtures still carry that job — they hold the malformed
+cases on purpose, and nothing here replaces them.
+
+Nor is it a regression suite yet: it was run once, by hand, from a scratch script. Wiring
+`/usr/share/kicad/demos` into `tools/verify_kicad.py` as an *optional* corpus (skipped when the
+directory is absent, so Windows and a fresh clone stay green) is tracked in `tasks/todo.md`.
+
+### The measurement script had the bug, not the parser
+
+First run reported two schematics as EMPTY. Both were fine — 820 parts and 160 parts. The check
+was `"0 parts" in out`, which matches inside **"820 parts"**.
+
+That is **L11, committed the previous day**, in a throwaway script written by the same person
+who wrote the lesson. Recorded because the lesson evidently needs the second telling: a
+substring check over free text finds the substring wherever it lives, and the failure looks
+like a finding rather than like a bug.

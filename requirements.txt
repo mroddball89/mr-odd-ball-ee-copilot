@@ -36,7 +36,8 @@ sympy>=1.13
 #
 # Reads .kicad_sch and .kicad_pcb S-expressions into Python objects. Pure Python, no compiler,
 # ~93KB, and it does NOT need KiCad installed — which matters, because the Pi does not have it
-# and never will. Tested against 1.4.8 on Python 3.12; tools/verify_kicad.py pins the parts of
+# (KiCad 9.0.2 was installed there on 2026-08-22; kiutils still does not need it — see D9/D19).
+# Tested against 1.4.8 on Python 3.12; tools/verify_kicad.py pins the parts of
 # the API this repo actually uses, since `Schematic.symbols` (the obvious name) does not exist
 # and the real one is `schematicSymbols`.
 kiutils>=1.4.8
