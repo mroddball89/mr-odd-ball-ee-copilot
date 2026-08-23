@@ -93,6 +93,17 @@ do_install() {
     chmod 0644 "$UNIT_DIR/$UNIT" "$AUTOSTART_DIR/$DESKTOP"
     say "paths point at $REPO"
 
+    # The unit's ExecStartPre. Made executable HERE and not left to the deploy, because the
+    # tarball is packed on Windows where the exec bit is not reliably carried — and a
+    # non-executable ExecStartPre fails the unit with status=203/EXEC, which reads like a
+    # missing interpreter rather than a missing permission.
+    if [ -f "$REPO/tools/wait_for_display.sh" ]; then
+        chmod 0755 "$REPO/tools/wait_for_display.sh"
+        say "wait_for_display.sh is executable"
+    else
+        say "WARNING: tools/wait_for_display.sh is missing — the unit will fail to start"
+    fi
+
     systemctl --user daemon-reload
     systemctl --user enable "$UNIT"
     say "installed and enabled"

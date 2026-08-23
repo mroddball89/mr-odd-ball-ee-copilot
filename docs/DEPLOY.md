@@ -248,6 +248,92 @@ exact `apt install` line for whichever are missing. It does **not** install them
 run detached and unattended, and `sudo` in a detached job either blocks forever on a password
 prompt or succeeds silently where it should have asked.
 
+## The boot race, and why `After=graphical-session.target` is not the fix here
+
+**2026-08-23.** `Linger=yes` starts the systemd **user manager at boot**, so `oddball.service`
+came up ~8 seconds after power-on — measured 2026-08-22: boot at 21:07:03, PID 1336 at
+21:07:11 — while lightdm was still bringing labwc up. A process started then inherits no
+`WAYLAND_DISPLAY`, because the compositor has not published one yet. Confirmed on the running
+service: it had `XDG_RUNTIME_DIR` and nothing else. That is D10 defect 1, still live.
+
+### The obvious fix does nothing on this box
+
+The textbook answer is `After=graphical-session.target`. Measured here:
+
+```
+$ systemctl --user is-active graphical-session.target
+inactive
+
+$ systemctl --user list-units --type=target --state=active
+basic.target  default.target  paths.target  sockets.target  timers.target
+```
+
+**The session is not systemd's.** lightdm execs `labwc-pi`, which execs `labwc`:
+
+```
+1274  /usr/sbin/lightdm
+1305    lightdm --session-child 10 14
+1329      /usr/bin/labwc -m
+```
+
+Nothing in that chain populates or activates `graphical-session.target`, and **ordering after a
+target that never activates imposes no wait at all**. The directive reads like a fix and is
+inert. It is still declared in the unit — it is correct wherever the session *is* systemd-managed,
+and it costs nothing where it is not — but it is not what does the work here.
+
+### What actually waits: `tools/wait_for_display.sh`
+
+An `ExecStartPre=` that polls until `WAYLAND_DISPLAY` appears **in the systemd user manager's
+environment**, which is the thing a service started afterwards actually inherits. Not the socket
+file: nothing on this box runs `systemctl --user import-environment`, the variable arrives via
+`dbus-update-activation-environment` from the compositor or the portal at a moment we do not
+control, so the honest thing to wait on is the end state rather than any of the steps.
+
+**The property this rests on was measured, not assumed.** A variable set — including set
+*externally*, while `ExecStartPre` is still running — is visible to `ExecStart`:
+
+```
+ExecStartPre=/bin/sh -c 'sleep 8'      # PROBE2 set from another shell at t=3s
+ExecStart  -> captured=[set_externally_at_3s]
+```
+
+And the whole race, simulated end to end without a reboot:
+
+```
+t=0   systemctl --user unset-environment WAYLAND_DISPLAY ; restart oddball
+t=4   SubState=start-pre                     <- holding, which is the point
+t=4   systemctl --user set-environment WAYLAND_DISPLAY=wayland-0
+t=12  active/running, NRestarts=0
+      WAYLAND_DISPLAY in the process -> wayland-0
+```
+
+Before this change the same process had no `WAYLAND_DISPLAY` at all.
+
+### It never blocks the boot, and `TimeoutStartSec` had to move
+
+On timeout (90 s, `ODDBALL_DISPLAY_WAIT_S`) the script **exits 0** and lets him start anyway.
+He is a *voice* assistant: wake word, ears, answers and speech need no screen, and refusing to
+start because no monitor is attached would be a worse failure than the one being fixed.
+`app_launcher.find_display()` still globs `$XDG_RUNTIME_DIR/wayland-[0-9]` as the fallback —
+which is the only reason launching worked at all on 2026-08-22.
+
+`TimeoutStartSec` went 180 -> **300**, because it must exceed the 90 s wait plus real startup or
+systemd kills the unit *while it is legitimately waiting*, which presents as a crash loop.
+
+**The script must be executable.** `install_autostart.sh` chmods it, rather than trusting the
+tarball: it is packed on Windows, where the exec bit is not reliably carried, and a
+non-executable `ExecStartPre` fails the unit with `status=203/EXEC` — which reads like a missing
+interpreter rather than a missing permission.
+
+### Checking it after a reboot
+
+```bash
+systemctl --user show oddball -p ActiveState -p NRestarts
+PID=$(systemctl --user show oddball -p MainPID --value)
+tr '\0' '\n' < /proc/$PID/environ | grep WAYLAND_DISPLAY     # expect wayland-0
+journalctl --user -u oddball -b | grep wait_for_display      # how long it waited
+```
+
 ## Gesture approval: a second, small Python 3.12 venv
 
 **This section was wrong twice before it was right. The short version:** mediapipe lives in its
