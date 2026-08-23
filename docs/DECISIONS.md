@@ -1841,3 +1841,101 @@ secret, it arrives in the same sentence as the feature request, and it gets past
 because that is where URLs go. The test is not "does this look like a key" but "what can someone
 do if they have it" — and for a Canvas feed the answer is "read everything, forever, without
 logging in". Treat it like the API key, because it is one.
+
+## D23 — Removing the syllabus RAG, and the premise for removing it was already gone
+
+**2026-08-23.** LB: *"Because it is so reliable, having a redundant system that parses syllabus
+PDFs is creating unnecessary complexity and risk of conflicting data. I want to completely excise
+the Syllabus PDF / Academic RAG feature."*
+
+Done, in full. The reasoning is recorded because **the stated premise was not true when it was
+stated**, and that was said before the deletion rather than after.
+
+### The redundancy had already been removed
+
+D22, one commit earlier, retired PDF *date extraction* entirely. By the time this request
+arrived nothing scraped a date from a syllabus, nothing wrote a deadline from one, and the two
+writers of `academic_calendar.json` were separated by a `source` field so that neither could
+erase the other. **There was no conflicting data and no redundant system.**
+
+What remained of the academic RAG was one capability, and it overlapped with nothing: *policy
+prose*. "Late homework loses 10% per day." "The midterm is 25% of the grade." "This section
+covers chapters 1 through 6." A calendar feed carries titles and dates and none of that.
+
+So this change does not simplify a duplicated path. It removes the only path that could answer a
+question about how a course is run, and the honest description of the trade is:
+
+    lost:    every question about a course policy, format, or grading
+    gained:  ~250 lines, one Chroma collection, one torch import off the ACADEMIC turn
+
+LB was told this, and confirmed it by asking again in the same message. It is his product and
+his call — the ACADEMIC route is a schedule manager now, and it says so.
+
+### What "he cannot answer that" has to be taught explicitly
+
+The dangerous part of removing a retrieval path is not the deletion. It is that **a model asked
+about a late policy with no context will answer from what universities usually do**, fluently,
+and that is D11's fabrication arriving through a door D11 does not cover — the old prompt
+guarded against inventing a *date*, because dates were the thing it had context for.
+
+So the new prompt carries a section that did not exist before:
+
+    WHAT YOU CANNOT ANSWER:
+    You do not have his syllabi... You have titles and dates and nothing else.
+    ...Do NOT describe what such a policy usually says. A plausible late penalty is worse than
+    admitting you do not have it, because it stops him checking the real one.
+
+`tools/verify_academic.py` section 2 pins both halves. A prompt is the only enforcement there
+is, so the check is that the sentence is present, not that the model obeys it.
+
+### The exclusion outlived the collection, and now matters more
+
+`tools/vector_db.py` had two collections precisely because a semantic search cannot tell a course
+outline from a datasheet: one pool would let a syllabus ground a firmware answer and be cited as
+one. The `academic` collection is deleted. **`data/academic/` is still excluded from the walk.**
+
+That is the load-bearing half of what survived. While there were two pools, a leak had somewhere
+legitimate to land; there is one pool now and it is the one the FIRMWARE agent retrieves from. So
+the exclusion went from a tidiness measure to the only barrier, and it is asserted in two
+harnesses rather than one.
+
+`data/academic/` also still exists, and had to: `academic_calendar.json` lives in it.
+
+### The upload category was kept, and that is not inconsistency
+
+`process_inbox_file(category="academic")` still works. It moves the file and requests **no**
+rebuild, and the sentence it returns says he cannot read it.
+
+Deleting the category would have been the tidier-looking choice and is wrong: an uploaded
+syllabus would then have nowhere to go, so it would be filed as a `datasheet` — landing in the
+one pool the firmware agent retrieves from, and grounding a register-level answer in a course
+outline. **A destination that stores and admits it cannot read beats no destination at all.**
+
+The PDF-only rule on that path was dropped at the same time, because it was there so a `.txt`
+would not be filed somewhere only a PDF loader looks. Nothing looks now, so refusing a file for
+that reason would be refusing it for a reason that no longer exists.
+
+### What was actually deleted
+
+    agents/academic_agent.py   retrieval, the Sources card, NO_SYLLABI, the syllabus prompt half
+    tools/vector_db.py         ACADEMIC_COLLECTION and its build; the exclusion KEPT
+    tools/academic_calendar.py extract_deadlines_from_syllabi, _documents_by_source,
+                               EXTRACTION_PROMPT, Deadline, SyllabusExtraction, and with them
+                               the pydantic and typing imports and this module's only use of
+                               pypdf. It is a reader now, and its CLI prints instead of building.
+
+`pypdf` reaches `data/` through exactly one caller: `vector_db.load_pdfs`, for the firmware
+agent's datasheets. That was directive 3's requirement and it is now structurally true rather
+than merely observed.
+
+**Untouched, and checked rather than assumed:** `agents/firmware_agent.py`,
+`agents/hardware_agent.py`, `tools/kicad_parser.py`, `engine/server.py` and the paperclip in
+`hud/face-preview.html` have a zero-line diff.
+
+### The rule
+
+**When the reason for a change has expired, say so before making it.** The request was specific,
+technically detailed, and rested on a redundancy that a previous commit had already removed —
+which is easy to happen when the work is moving faster than the person directing it can re-read
+it. The useful thing was not to refuse, and not to quietly comply either: it was to name what
+would actually be lost, in one sentence, and then do the whole job properly.

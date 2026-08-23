@@ -471,40 +471,73 @@ with_temp_data(_find_cases)
 
 
 def _academic_case(tmp: Path, fake: _FakeIndexer) -> None:
+    """A syllabus is STORED and not read. The absence of a rebuild is the assertion.
+
+    Both halves of this used to be true and are not: dates were extracted with a model (D22
+    retired that) and prose was embedded for retrieval (D23 removed the academic RAG). What is
+    left is a filing cabinet, and the danger is that he describes it as more than that.
+    """
     (F.INBOX_DIR / "ECE350_syllabus.pdf").write_bytes(b"%PDF")
     out = F.process_inbox_file.invoke(
         {"filename": "ECE350_syllabus.pdf", "category": "academic"})
     check((tmp / "academic" / "ECE350_syllabus.pdf").is_file(),
           "an academic PDF lands in data/academic/", out[:70])
     check(not (F.INBOX_DIR / "ECE350_syllabus.pdf").exists(), "and leaves the inbox")
-    # Vectors ONLY, and the absence of the calendar job is the assertion — not an oversight.
-    # Deadlines come from tools/canvas_sync.py now, because a syllabus PDF is a snapshot whose
-    # dates may already have moved. Extracting them here would spend an API call to write rows
-    # that are wrong, and would then be overwritten by the next sync.
-    check(fake.calls and fake.calls[0][0] == {"vectors"},
-          "it asks for the vector store and NOT the calendar — Canvas owns the dates now",
+
+    # NO rebuild. data/academic/ is excluded from the datasheet walk, so a rebuild would spend
+    # the 11.4s fixed cost re-embedding the datasheets and do nothing at all for this file.
+    check(fake.calls == [],
+          "and starts NO index rebuild — nothing reads a syllabus any more",
           str(fake.calls))
-    check(fake.calls[0][1] == {"ECE350_syllabus.pdf"},
-          "and still names the one file it filed", str(fake.calls[0][1]))
-    check("sync Canvas" in out or "sync" in out.lower(),
-          "and the answer points him at Canvas for the dates", out[-70:])
-    check("not searchable" in out.lower() or "background" in out.lower(),
-          "and says the index is not ready yet", out[-60:])
+
+    lowered = out.lower()
+    check("cannot read it" in lowered or "not read" in lowered,
+          "the answer says plainly that he cannot read it", out[-80:])
+    check("canvas" in lowered,
+          "and points him at Canvas for the schedule", out[-70:])
+    check("searchable" not in lowered and "indexing" not in lowered,
+          "and does NOT imply it will become searchable", out)
 
 
 with_temp_data(_academic_case)
 
 
-def _academic_refuses_non_pdf(tmp: Path, fake: _FakeIndexer) -> None:
+def _academic_takes_any_suffix(tmp: Path, fake: _FakeIndexer) -> None:
+    """A non-PDF syllabus is filed too, now that nothing parses it.
+
+    It used to be refused, and that was right while the file had to be READ — a .txt filed
+    somewhere only a PDF loader looks is a file that has silently vanished. Nothing reads any of
+    them now, so the PDF-only rule would refuse a file for a reason that no longer exists.
+    """
     (F.INBOX_DIR / "notes.txt").write_bytes(b"hi")
     out = F.process_inbox_file.invoke({"filename": "notes.txt", "category": "academic"})
-    check((F.INBOX_DIR / "notes.txt").exists(),
-          "a non-PDF syllabus is left in the inbox rather than filed where nothing reads it",
-          out[:80])
-    check(not fake.calls, "and no rebuild is started for it")
+    check((tmp / "academic" / "notes.txt").is_file(),
+          "a non-PDF course document is filed rather than refused", out[:70])
+    check(not fake.calls, "and no rebuild is started for it either")
 
 
-with_temp_data(_academic_refuses_non_pdf)
+with_temp_data(_academic_takes_any_suffix)
+
+
+def _syllabus_stays_out_of_the_datasheets(tmp: Path, fake: _FakeIndexer) -> None:
+    """The exclusion that is now the ONLY thing keeping a syllabus out of firmware answers.
+
+    While there were two collections, a leak had a second pool to land in. There is one pool
+    now, and it is the one the FIRMWARE agent retrieves from — so `data/academic/` being
+    excluded from the walk is load-bearing in a way it was not before.
+    """
+    import tools.vector_db as V
+
+    check(V.EXCLUDED_FROM_DATASHEETS.name == "academic",
+          "vector_db still excludes data/academic/ from the datasheet walk",
+          str(V.EXCLUDED_FROM_DATASHEETS))
+    check(not hasattr(V, "ACADEMIC_COLLECTION"),
+          "and the academic collection constant is gone, not merely unused")
+    check(V.DATASHEET_COLLECTION == "datasheets",
+          "the datasheet collection is untouched — the firmware RAG still works")
+
+
+with_temp_data(_syllabus_stays_out_of_the_datasheets)
 
 
 def _datasheet_case(tmp: Path, fake: _FakeIndexer) -> None:
@@ -744,8 +777,12 @@ check("sync_canvas_calendar" in AC.ACADEMIC_PROMPT_TEMPLATE
       and "Do NOT call it to answer an ordinary question" in AC.ACADEMIC_PROMPT_TEMPLATE,
       "and is told when to call it and when not to — a sync per question is a network "
       "round trip per turn")
-check("using ONLY the provided local document context" in AC.ACADEMIC_PROMPT_TEMPLATE,
-      "and the strict-grounding directive SURVIVED the change")
+check("using ONLY the calendar below" in AC.ACADEMIC_PROMPT_TEMPLATE
+      and "say you do not know" in AC.ACADEMIC_PROMPT_TEMPLATE,
+      "and the strict-grounding directive SURVIVED the RAG removal, both halves")
+check("You do not have his syllabi" in AC.ACADEMIC_PROMPT_TEMPLATE,
+      "and he is told he can no longer answer policy questions at all",
+      "the removal cost that capability; a model not told so will invent one")
 
 # The feed URL is a credential. There must be no default in the source, or committing the file
 # publishes the token — this repo has a GitHub remote.

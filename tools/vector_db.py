@@ -29,24 +29,28 @@ RAG pipeline nobody retrieves from is a slow way of doing nothing.
 has never been built, so a fresh clone with no PDFs in it still runs and simply answers without
 grounding — and says so.
 
-## Two collections, one store (2026-08-21)
+## One collection: datasheets (2026-08-23)
 
-The ACADEMIC route reads LB's syllabi, and syllabi are PDFs in `data/` exactly like datasheets
-are. Left in one pool they would be retrieved for each other: a semantic search for "GPIO
-configuration" ranks by similarity alone and has no idea that a chunk came from a course
-outline, so a firmware answer can be grounded in a syllabus and cite it as a datasheet.
+There were briefly two. `data/academic/` was embedded into an `academic` collection for the
+ACADEMIC route, kept apart from the datasheets because a semantic search for "GPIO
+configuration" ranks by similarity alone and cannot tell that a chunk came from a course
+outline — so a firmware answer could be grounded in a syllabus and cite it as a datasheet.
 
-So the build writes **two named collections** into the same `CHROMA_PATH`:
+**The academic collection is gone** (D23). That route reads LB's Canvas calendar now and does no
+retrieval at all, so the store is back to the one job it started with:
 
     datasheets    everything under data/ EXCEPT data/academic/   -> firmware_agent
-    academic      data/academic/                                 -> academic_agent
 
-Chroma keeps collections separate at query time, which is a stronger guarantee than a metadata
-filter — there is no filter to forget to pass, and the default is the safe one.
+`data/academic/` is **still excluded from the walk**, and that exclusion is the load-bearing half
+of what survives. The directory did not go away — it holds `academic_calendar.json`, and LB may
+still keep syllabus PDFs there for his own reference. Dropping the exclusion along with the
+collection would sweep those into the datasheets pool and reintroduce exactly the cross-grounding
+the split existed to prevent, with no collection boundary left to catch it.
 
-**This renames the existing collection.** Chroma's default name is `langchain`, which is what
-every store built before today used. A store built earlier will look *empty* under the new
-names rather than failing, so anyone upgrading must rebuild:
+**A store built before 2026-08-21 will look empty.** Chroma's default collection name is
+`langchain`; this one is `datasheets`. An older store opens fine under the new name and yields
+nothing rather than failing, so anyone upgrading must rebuild. The same is true for anyone whose
+store still holds the retired `academic` collection — it is simply never opened now:
 
     python tools/vector_db.py
 
@@ -76,14 +80,17 @@ LOG = logging.getLogger("oddball.vector_db")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = REPO_ROOT / "data"          # put your PDFs here
-ACADEMIC_PATH = DATA_PATH / "academic"  # ...except syllabi, which go here
+# Not a datasheet folder, and skipped by the walk. It holds `academic_calendar.json` (synced
+# from Canvas) and any syllabus PDFs LB keeps for his own reference — neither is something the
+# FIRMWARE agent should retrieve. With the academic collection gone, this exclusion is now the
+# ONLY thing keeping a course outline out of a register-level answer.
+EXCLUDED_FROM_DATASHEETS = DATA_PATH / "academic"
 CHROMA_PATH = REPO_ROOT / "chroma_db"   # gitignored; a build artifact, rebuildable
 
-# The two collections. Named constants rather than string literals at the call sites, because a
+# The one collection. A named constant rather than a literal at the call sites, because a
 # typo in a collection name does not raise — Chroma happily opens a new, empty one, and the
 # agent then answers ungrounded while reporting that no documents cover the question.
 DATASHEET_COLLECTION = "datasheets"
-ACADEMIC_COLLECTION = "academic"
 
 # Small and fast, runs locally, no key and no network. 384 dimensions.
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
@@ -93,8 +100,9 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 # turn budget is two of them.
 _embeddings = None
 
-# Keyed by collection name. Was a single object when there was a single collection; a dict
-# because two agents now read from the same store and each must get its own handle back.
+# Keyed by collection name. There is one collection again, so this holds a single entry in
+# practice — kept as a dict because `get_retriever` still takes a `collection` argument and
+# opening a second one should cache rather than clobber.
 _stores: dict[str, object] = {}
 
 
@@ -117,10 +125,9 @@ def get_retriever(k: int = 4, collection: str = DATASHEET_COLLECTION):
         k:          how many chunks to return. Four at 500 characters is ~2000 characters of
                     context, which is a couple of register tables and still leaves room in the
                     prompt.
-        collection: which collection to search. Defaults to the datasheets, so the existing
-                    firmware call site did not have to change — and so that a caller who
-                    forgets the argument gets the datasheets rather than a silently empty
-                    collection named after their typo.
+        collection: which collection to search. There is only one, and the default is it — the
+                    argument survives so that a caller who forgets it gets the datasheets rather
+                    than a silently empty collection named after their typo.
 
     Returns:
         A LangChain retriever, or None. None is not an error — it means "nothing has been
@@ -128,8 +135,8 @@ def get_retriever(k: int = 4, collection: str = DATASHEET_COLLECTION):
         ungrounded and says so rather than falling over.
 
         A collection that exists but is EMPTY returns a working retriever that yields zero
-        chunks. That is deliberately not special-cased here: both agents already handle "no
-        chunks came back" with an explicit sentence, and the alternative is a document count
+        chunks. That is deliberately not special-cased here: the firmware agent already handles
+        "no chunks came back" with an explicit sentence, and the alternative is a document count
         via Chroma's private `_collection`, which is a fragile thing to make the answer path
         depend on.
     """
@@ -179,9 +186,9 @@ def format_chunks(docs) -> tuple[str, list[dict]]:
 def load_pdfs(root: Path, exclude: Path | None = None) -> list:
     """Every PDF page under `root`, minus anything under `exclude`.
 
-    Public because `tools/academic_calendar.py` reads the same syllabi this loads, and two
-    copies of "walk a directory for PDFs" is two places for the recursive-glob bug above to
-    come back.
+    Kept public, and kept taking `exclude`, though `build_vector_database` is now its only
+    caller: the exclusion of `data/academic/` is the thing standing between a syllabus and a
+    firmware answer, and burying it inside the builder would make it easy to drop by accident.
 
     Args:
         root:    directory to walk.
@@ -225,7 +232,7 @@ def _build_collection(documents: list, collection_name: str, label: str) -> int:
     Args:
         documents:       pages from `_load_pdfs`.
         collection_name: which Chroma collection to write.
-        label:           what to call these in the printed output ("datasheets", "syllabi").
+        label:           what to call these in the printed output.
 
     Returns:
         How many chunks were written. Zero means there was nothing to ingest.
@@ -293,34 +300,25 @@ def _build_collection(documents: list, collection_name: str, label: str) -> int:
 
 
 def build_vector_database():
-    """Build both collections from `data/`. Safe to re-run; that is how you update it."""
+    """Build the datasheet collection from `data/`. Safe to re-run; that is how you update it."""
     print(f"1. Loading PDFs from {DATA_PATH}...")
-    datasheets = load_pdfs(DATA_PATH, exclude=ACADEMIC_PATH)
-    syllabi = load_pdfs(ACADEMIC_PATH)
-    print(f"   Loaded {len(datasheets)} datasheet pages and {len(syllabi)} syllabus pages.")
+    datasheets = load_pdfs(DATA_PATH, exclude=EXCLUDED_FROM_DATASHEETS)
+    print(f"   Loaded {len(datasheets)} datasheet page(s).")
 
-    if not datasheets and not syllabi:
-        print(f"   No PDFs found under {DATA_PATH}. Put datasheets in there (or syllabi in "
-              f"{ACADEMIC_PATH}) and run again.")
+    if not datasheets:
+        print(f"   No PDFs found under {DATA_PATH}. Put datasheets in there and run again.")
+        print(f"   ({EXCLUDED_FROM_DATASHEETS} is skipped on purpose — it is not a datasheet "
+              f"folder.)")
         return
 
     print(f"2. Chunking and embedding into {CHROMA_PATH}...")
     written = _build_collection(datasheets, DATASHEET_COLLECTION, "datasheets")
-    written += _build_collection(syllabi, ACADEMIC_COLLECTION, "syllabi")
-
-    # Each empty collection is called out by name. A silent skip is how you end up asking the
-    # academic agent a question it cannot answer and blaming the agent — the store was simply
-    # never given anything to read.
-    if not datasheets:
-        print(f"   (nothing for the datasheets collection — put PDFs under {DATA_PATH})")
-    if not syllabi:
-        print(f"   (nothing for the academic collection — put syllabi under {ACADEMIC_PATH})")
 
     if not written:
         # Loud, because this is the state that most looks like success from the outside: the
         # install worked, the build "ran", and every grounded answer will still be ungrounded.
         print("\nNOTHING WAS WRITTEN. The store is empty, so `get_retriever()` still returns "
-              "None\nand both grounded agents will keep answering without documents.")
+              "None\nand the firmware agent will keep answering without documents.")
         return
 
     print(f"Database built successfully — {written} chunks.")

@@ -15,14 +15,12 @@ decision Mr Odd Ball makes out loud, and LB can disagree with it in the same sen
 
 ## Three destinations, and what each one costs
 
-    academic     -> data/academic/           rebuild the vector store (policies, not dates)
+    academic     -> data/academic/           stored only — nothing reads it (D23)
     datasheet    -> data/<folder>/           rebuild the vector store
     schematic    -> data/projects/<project>/ nothing, unless it brought a PDF with it
 
-Deadlines are NOT extracted from an uploaded syllabus. `tools/canvas_sync.py` pulls them from
-LB's live Canvas feed instead, because a PDF is a snapshot and a moved date is wrong in it. A
-syllabus is still ingested for its PROSE — the late policy, the grading split, what the course
-covers — which is what it is actually good for.
+Only the datasheet path indexes anything now. Deadlines come from Canvas, and the syllabus RAG
+that answered policy questions was removed at LB's request.
 
 `tools/kicad_parser.py` reads `.kicad_sch` and `.kicad_pcb` live off the disk, so a schematic is
 usable the instant it is moved. A PDF is not: nothing in this repo can read a PDF except through
@@ -39,9 +37,9 @@ chunk — `import torch` 2.1 s, `import langchain_huggingface` 1.3 s, and 8.0 s 
 page cache. `media/data/2026-08-23-index-rebuild-familyhub.csv`.
 
 That fixed toll is paid however small the upload, and the per-chunk part multiplies by **the
-whole corpus** rather than by the new file, because `build_vector_database()` rebuilds both
-collections from scratch. So the first datasheet costs ~15 s and the fiftieth costs a great deal
-more, which is why nothing here promises LB a duration.
+whole corpus** rather than by the new file, because `build_vector_database()` rebuilds the
+datasheet collection from scratch. So the first datasheet costs ~15 s and the fiftieth costs a
+great deal more, which is why nothing here promises LB a duration.
 
 These tools are called from inside an agent turn. Even the 11.4 s floor is a face frozen in the
 `thinking` pose with the microphone shut and an LLM call waiting underneath it — and it only
@@ -60,18 +58,18 @@ hands the rebuild to a background thread. **What it returns says which of the tw
 and it deliberately does not say how long, because the honest answer depends on how much LB has
 uploaded so far. `index_status` is how he answers "is it ready yet".
 
-## The calendar extraction is no longer called from here
+## A syllabus is stored, not read
 
-`extract_deadlines_from_syllabi()` is still in `tools/academic_calendar.py` and still works, as
-a manual fallback for a course that is not in Canvas. Nothing on this path invokes it. It was
-made incremental first, for the reason below, and that reason still applies to a hand-run:
+Filing one used to do two things: extract its dates with a model, and embed its prose for
+retrieval. **Both are gone** — dates come from `tools/canvas_sync.py` (D22) and the academic
+RAG was removed entirely (D23). `_file_academic` now moves the file and says so, and requests
+no rebuild at all, because `data/academic/` is excluded from the datasheet walk and a rebuild
+would re-embed the datasheets for nothing.
 
-## Why the calendar extraction is incremental
-
-`extract_deadlines_from_syllabi()` re-reads every syllabus and spends one API call per file. D3
-measured the free tier at 20 requests per model per day, so uploading one syllabus to a folder
-holding five would spend a quarter of the day's quota re-extracting four files that have not
-changed. It now takes a `sources` argument, and this module passes the one file that arrived.
+The category is kept rather than deleted, and that is deliberate. Without it an uploaded
+syllabus has nowhere to go, so it would be filed as a `datasheet` — landing in the one pool the
+FIRMWARE agent retrieves from, and grounding a register-level answer in a course outline. A
+destination that stores and admits it cannot read is better than no destination at all.
 """
 
 from __future__ import annotations
@@ -546,9 +544,10 @@ def process_inbox_file(filename: str, category: str, project: str = "",
 
     `filename`: the file's name as shown by `list_inbox`, e.g. 'ECE350_syllabus.pdf'.
     `category`: one of
-        'academic'  — a course syllabus, schedule or policy document. Goes to data/academic/
-                      and becomes searchable for its policies. Its DATES are not read from it —
-                      those come from Canvas.
+        'academic'  — a course syllabus or policy document. It is STORED in data/academic/ for
+                      him to open and is NOT read, indexed or searchable. Say so plainly; do not
+                      imply you will be able to answer questions about it. His dates come from
+                      Canvas instead.
         'datasheet' — a component datasheet, reference manual or application note. Goes to a
                       folder under data/ and becomes searchable by the firmware agent.
         'schematic' — a KiCad file (.kicad_sch, .kicad_pcb, .kicad_pro), a gerber or project
@@ -586,22 +585,22 @@ def process_inbox_file(filename: str, category: str, project: str = "",
 
 
 def _file_academic(source: Path, suffix: str) -> str:
-    if suffix != ".pdf":
-        return (f"{source.name} is a {suffix} file. Syllabus text is only readable from a PDF — "
-                f"nothing in the academic pipeline reads {suffix}, so filing it there would "
-                f"make it invisible. It is still in the inbox.")
+    """File a syllabus. It is STORED, not read — nothing indexes or parses it any more.
 
+    No rebuild is requested, and that is not an omission. `data/academic/` is excluded from the
+    datasheet walk (`vector_db.EXCLUDED_FROM_DATASHEETS`), so a rebuild would spend the 11.4s
+    fixed cost re-embedding the datasheets and do nothing whatever for this file. And the
+    exclusion has to stay: without it a course outline lands in the pool the FIRMWARE agent
+    retrieves from, and there is no second collection left to catch it.
+
+    The honest sentence is therefore "I have put it somewhere, and I cannot read it." Saying
+    anything warmer would be the failure this module's whole prompt block is written against.
+    """
     target = _move(source, ACADEMIC_DIR)
-    # Vectors only. Dates come from `tools/canvas_sync.py` now — the live feed is authoritative
-    # and a syllabus PDF is a snapshot whose dates may already have moved, so extracting them
-    # here would spend an API call to add rows that are wrong. It also takes the academic upload
-    # path from two model calls to zero. The syllabus RAG is exactly what a PDF IS good for and
-    # is untouched.
-    _INDEXER.request({"vectors"}, sources={target.name})
-    return (f"Filed {target.name} to data/academic/. I am rebuilding the syllabus index in the "
-            f"background, so its policies are NOT searchable until that finishes — use "
-            f"index_status to check. Its dates are not read from it: ask me to sync Canvas for "
-            f"those.")
+    return (f"Filed {target.name} to data/academic/, where LB can open it — but I cannot read "
+            f"it. I do not index syllabi any more: dates come from his Canvas feed, and course "
+            f"policies are not something I can look up at all now. Ask me to sync Canvas for "
+            f"the schedule.")
 
 
 def _file_datasheet(source: Path, suffix: str, folder: str) -> str:

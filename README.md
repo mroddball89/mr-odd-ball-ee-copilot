@@ -26,7 +26,7 @@ When nothing free matches, `router.py` uses Pydantic structured output
 | `OS` | `agents/os_agent.py` | runs terminal commands on the Pi, and opens desktop applications (`tools/app_launcher.py`) — **asks first**, for both |
 | `QUIZ` | `agents/quiz_agent.py` | tutor mode; grades conceptually, not word-for-word |
 | `WEB` | `agents/web_agent.py` | DuckDuckGo search — **asks first** |
-| `ACADEMIC` | `agents/academic_agent.py` | coursework deadlines from your **live Canvas feed** (`tools/canvas_sync.py`), and course policies from your own uploaded syllabi — answers from those **only** |
+| `ACADEMIC` | `agents/academic_agent.py` | coursework deadlines from your **live Canvas feed** (`tools/canvas_sync.py`) — a schedule manager, and nothing else. It cannot answer course-policy questions |
 | `UTILITY` | `orchestrator/instant.py` | the free lookups, when the router is reached anyway |
 | `PERSONA` | `agents/persona_agent.py` | chit-chat and jokes — Mr Odd Ball himself |
 | `GENERAL` | `agents/persona_agent.py` | anything outside the scope — **and files whatever you upload** (`tools/file_manager.py`), whichever kind of document it turns out to be |
@@ -133,7 +133,8 @@ including why this is not FastAPI and why it cannot share port 8765 with the rig
 
 ## Local document retrieval
 
-Upload them with the paperclip and he does this for you. To do it by hand, put PDFs under
+This is the **firmware** agent's datasheet store, and it is the only RAG in the system.
+Upload PDFs with the paperclip and he does this for you. To do it by hand, put them under
 `data/` (there are `arduino/`, `datasheets/`, `espressif/`, `raspberry_pi/` and `sensors/`
 subdirectories) and build the vector store once:
 
@@ -145,11 +146,12 @@ It chunks at 500 characters with 150 of overlap — deliberately high, so regist
 code blocks are not cut in half — embeds locally with `all-MiniLM-L6-v2`, and persists to
 ChromaDB. Nothing leaves the machine to do it.
 
-**Two collections, one store.** Everything under `data/` goes to the `datasheets` collection
-and is read by the FIRMWARE agent. `data/academic/` is the exception: syllabi go there, into a
-separate `academic` collection read only by the ACADEMIC agent. A semantic search ranks by
-similarity alone and cannot tell a course outline from a datasheet, so one pool would let a
-syllabus ground a firmware answer and be cited as one.
+**One collection, and one exclusion.** Everything under `data/` goes to the `datasheets`
+collection and is read by the FIRMWARE agent — except `data/academic/`, which is skipped. There
+used to be a second `academic` collection there; it is gone, and the exclusion is what remains.
+It matters more without it: a semantic search ranks by similarity alone and cannot tell a course
+outline from a datasheet, so dropping it would let a syllabus ground a firmware answer and be
+cited as one, with no collection boundary left to catch it.
 
 ## Coursework and deadlines
 
@@ -176,16 +178,21 @@ ODDBALL_CANVAS_ICS=https://<school>.instructure.com/feeds/calendars/user_....ics
 Canvas gives you the link under **Calendar → Calendar Feed**, bottom right. Reset it there if it
 ever leaks.
 
-Syllabi are still uploaded and still indexed — for their **prose**, which is what a syllabus is
-actually good for. The late policy, the grading split, what the course covers:
+### What he cannot do
+
+**He has no access to your syllabi at all.** The academic RAG was removed on 2026-08-23 — he
+does not index, read or search them. Ask about a late penalty, a grading breakdown or an exam
+format and he will say he only has your schedule and that you should check the syllabus
+yourself. He is told explicitly not to describe what such a policy "usually" says, because a
+plausible late penalty is worse than admitting he does not have it: it stops you checking the
+real one.
+
+A syllabus uploaded with the paperclip is still filed to `data/academic/` for you to open, and
+he says plainly that he cannot read it.
 
 ```bash
-python tools/vector_db.py           # embeds them into the academic collection
-python tools/academic_calendar.py   # the old PDF date extractor, kept as a fallback
+python tools/academic_calendar.py   # print the calendar, and what the agent is shown
 ```
-
-The extractor still works for a course that is not in Canvas, and it will never overwrite a
-Canvas date — the two writers own their own rows through a `source` field.
 
 The ACADEMIC agent answers from those documents and **only** those documents — asked something
 the syllabi do not cover, it says it does not know rather than describing what a course

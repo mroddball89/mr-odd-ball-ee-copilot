@@ -734,3 +734,50 @@ anything with a time and an 11:59 PM due time is stored as 03:59Z the next day.
 - [ ] The sync is not on a schedule. It runs when LB asks. A daily `systemd --user` timer is the
       obvious next step and is deliberately not built — a background job that rewrites his
       deadlines without being asked is a thing to decide on, not to assume.
+
+## Excise the syllabus RAG — ACADEMIC is Canvas-only (2026-08-23)
+
+LB: *"having a redundant system that parses syllabus PDFs is creating unnecessary complexity and
+risk of conflicting data... completely excise the Syllabus PDF / Academic RAG feature."* D23.
+
+**Said before doing it: the premise had already expired.** D22 retired PDF date extraction one
+commit earlier, so nothing conflicted. What was actually deleted is the only path that could
+answer a course-POLICY question — late penalties, grading splits, exam formats. LB confirmed.
+
+- [x] `agents/academic_agent.py` — retrieval gone, Sources card gone, `NO_SYLLABI` gone, prompt
+      rewritten as a schedule manager
+- [x] **New prompt section teaching him what he CANNOT answer.** Removing context does not stop
+      a model answering a policy question; it makes it answer from convention. That is D11's
+      fabrication through a door D11 did not cover.
+- [x] `tools/vector_db.py` — `ACADEMIC_COLLECTION` and its build removed; **the `data/academic/`
+      exclusion KEPT**, and it matters more now that there is no second pool to catch a leak
+- [x] `tools/academic_calendar.py` — `extract_deadlines_from_syllabi`, `_documents_by_source`,
+      `EXTRACTION_PROMPT`, `Deadline`, `SyllabusExtraction`, and the pydantic/typing imports.
+      A reader now; its CLI prints the calendar instead of building it.
+- [x] `pypdf` reaches `data/` through exactly one caller — `vector_db.load_pdfs`, for datasheets
+- [x] Upload category `academic` KEPT, as a store-only destination. Deleting it would send an
+      uploaded syllabus to `datasheet` and into the firmware agent's pool.
+- [x] `tools/verify_academic.py` rewritten — section 2 now proves retrieval does NOT happen, and
+      that he is told he cannot answer policy questions
+- [x] Firmware/hardware/KiCad/upload endpoint/paperclip: **zero-line diff**, verified with
+      `git diff --stat`
+
+### Verified
+
+`verify_upload` 166/166, `verify_academic` 29/29, `verify_agents` 53/53, `verify_engine`
+106/106, `verify_chat` 39/39, `verify_typed` 81/81, `verify_split` 93/93, `verify_kicad`
+168/168, `verify_os_guard` 75/75, `verify_speakable` 59/59, `verify-rig` 38/38.
+
+### Still open
+
+- [x] ~~`--store` has never been run since the change.~~ **Run on the Pi 2026-08-23: 34/34**,
+      with real embeddings. A syllabus under `data/academic/` is provably not retrievable by the
+      firmware agent, which is the only barrier left now that the second collection is gone.
+      It stays opt-in (it pulls torch), so re-run it after any change to `load_pdfs`:
+      `venv/bin/python tools/verify_academic.py --store`
+- [ ] Any existing `chroma_db/` on a box still holds the retired `academic` collection. Nothing
+      opens it, so it is inert — but it is stale bytes on an SD card. A rebuild drops it:
+      `rm -rf chroma_db && venv/bin/python tools/vector_db.py`
+- [ ] He now has no answer at all for "what's the late policy". If that turns out to matter, the
+      cheapest restoration is not the RAG — it is `save_to_vault`, which already exists: LB tells
+      him the policy once and it is in the Markdown vault, greppable, for the term.
