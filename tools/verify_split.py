@@ -43,7 +43,7 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 from engine.response import CardKind                        # noqa: E402
-from engine.split import is_speakable, split                # noqa: E402
+from engine.split import expand_symbols, is_speakable, split   # noqa: E402
 
 PASSED = 0
 FAILED = 0
@@ -224,6 +224,78 @@ check("GPIO enable register" in shown or "GPIO enable register" in r.speech,
 r = split(REPLY_HARDWARE, route="hardware")
 check("35.12" in " ".join(c.body for c in r.cards),
       "a number that cannot be spoken is still written down")
+
+# =========================================================================================
+section("6. symbols become words, so a correct sentence is not thrown away")
+# =========================================================================================
+
+# TWO different failures, and they are worth separating because only one of them loses words.
+#
+# (a) REJECTION. `is_speakable()` refuses text containing Ω μ ° ± τ, and a refused sentence is
+#     replaced wholesale by "I've put it on the screen." Writing the answer in correct
+#     engineering notation was the reliable way to stop it being said AT ALL. These go from
+#     dropped to spoken, and that is the fix that matters.
+for original, expected_word in [
+    ("The trace needs 0.9 mm for a 20°C rise.",        "degrees Celsius"),
+    ("Use a 10 kΩ resistor.",                          "kilohms"),
+    ("That is 5 Ω.",                                   "ohms"),
+    ("A 100 μF capacitor.",                            "microfarads"),
+    ("Tolerance is ±5 percent.",                       "plus or minus"),
+    ("The time constant τ is 1 ms.",                   "tau"),
+    ("The area is 4 mm².",                             "squared"),
+]:
+    check(is_speakable(original) is not None,
+          f"{original[:32]!r:36} was REJECTED before", "if this fails the premise is stale")
+    expanded = expand_symbols(original)
+    check(is_speakable(expanded) is None and expected_word in expanded,
+          f"{original[:32]!r:36} -> now spoken", f"expanded: {expanded}")
+
+# (b) MISPRONUNCIATION. `&` and `%` are not in the rejected set — they were always spoken, just
+#     badly, because Piper renders them as a stumble or as nothing. Expanding them changes how
+#     the sentence SOUNDS, not whether it is said. Asserted separately so the two are not
+#     confused: an earlier version of this harness claimed these were rejected, which was
+#     simply untrue and would have quietly overstated what the fix does.
+for original, expected_word in [("Efficiency is 85%.", "percent"),
+                                ("Set R1 & R2 the same.", "and")]:
+    check(is_speakable(original) is None,
+          f"{original[:32]!r:36} was already speakable", "not a rejection case")
+    check(expected_word in expand_symbols(original),
+          f"{original[:32]!r:36} -> pronounced properly", expand_symbols(original))
+
+# Prefix before bare unit. This ordering is the whole reason _EXPANSIONS is a tuple and not a
+# dict comprehension over a set — "kΩ" must be matched before "Ω".
+check(expand_symbols("10 kΩ") == "10 kilohms" and expand_symbols("10 Ω") == "10 ohms",
+      "a prefixed unit is not split into 'k ohms'",
+      f"{expand_symbols('10 kΩ')!r} / {expand_symbols('10 Ω')!r}")
+check(expand_symbols("20°C") == "20 degrees Celsius",
+      "°C is matched before the bare degree sign", expand_symbols("20°C"))
+
+# Punctuation must survive. The first version of this deleted it: the space-trimming regex
+# was written with a backreference that got eaten, so "5 Ω." became "5 ohms" with the full
+# stop gone — and a sentence with no terminator changes how Piper lands the prosody.
+check(expand_symbols("That is 5 Ω.").endswith("ohms."),
+      "the full stop survives expansion", expand_symbols("That is 5 Ω."))
+check(expand_symbols("At 5 Ω, it works") == "At 5 ohms, it works",
+      "a comma survives, with no space before it", expand_symbols("At 5 Ω, it works"))
+
+# Untouched when there is nothing to do — the common case must not be reformatted.
+plain = "The cutoff frequency is 15.92 hertz."
+check(expand_symbols(plain) == plain, "text with no symbols is returned unchanged")
+check(expand_symbols("") == "" and expand_symbols(None) is None,
+      "empty and None are safe")
+
+# And end to end through split(), which is what actually runs on the turn path.
+r = split("SPOKEN: The rise is 20°C at 4.7 kΩ.", route="hardware")
+check("degrees Celsius" in r.speech and "kilohms" in r.speech,
+      "split() speaks an expanded SPOKEN: line", r.speech)
+check("I've put" not in r.speech,
+      "...instead of falling back to 'it's on the screen'", r.speech)
+
+# The CARD keeps the symbols. It is read, not heard, and "20°C" is correct on screen.
+r = split("The rise is 20°C at 4.7 kΩ.", route="hardware")
+shown = " ".join(c.body for c in r.cards)
+check("°C" in shown or "20°C" in shown,
+      "the card keeps the original notation — expansion is for the ear only", shown[:70])
 
 # =========================================================================================
 

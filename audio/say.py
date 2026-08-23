@@ -234,6 +234,16 @@ def speakable(text: str) -> str:
     punctuation that gives the voice its prosody. Returns "" only if there was nothing
     pronounceable to begin with.
     """
+    # Symbols to words FIRST, before anything is stripped. Not all of these reach here through
+    # `engine/split.py` — greetings, the permission gate's question and anything a harness
+    # speaks directly go straight to the Speaker — and the same rule as the emoji note above
+    # applies: this is a property of the synthesiser, so it belongs where no call site can
+    # forget it. `split()` expands earlier as well, because there it decides whether a sentence
+    # is spoken AT ALL; here it only decides how it sounds. Expanding twice is harmless — the
+    # second pass finds no symbols left.
+    from engine.split import expand_symbols                            # noqa: PLC0415
+    text = expand_symbols(text)
+
     text = _UNSPEAKABLE.sub(" ", text)
     text = _MARKUP.sub("", text)
     return re.sub(r"\s+", " ", text).strip()

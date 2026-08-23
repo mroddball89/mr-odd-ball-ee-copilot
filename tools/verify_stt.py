@@ -399,19 +399,35 @@ if cfg:
     check(route_ms < 5.0, "routing is free compared to everything else",
           f"{route_ms:.3f}ms per turn, averaged over 200")
 
-    # 2.5s, PLAN.md's Phase 2 target and the same BUDGET_S that tools/measure_llm.py ranks
-    # models against. It was 2.0 here, which was Phase 1's number from when every turn was a
-    # reflex answer with no model in it.
+    # 2.5s is PLAN.md's Phase 2 target and the same BUDGET_S that tools/measure_llm.py ranks
+    # models against.
     #
-    # Raised deliberately rather than to make a failure go away: LB was being cut off
-    # mid-question on 2026-08-13, hangover went 0.75 -> 1.10, and this check went red. The
-    # half-of-budget rule is kept — the point is that the hangover must never dominate the
-    # turn — but it is now measured against the budget the system actually has.
+    # ## The half-of-budget rule is RETIRED, and this is the honest version of why
+    #
+    # It read `hangover < budget / 2` — "the hangover must never dominate the turn". On
+    # 2026-08-22 LB raised the hangover to 2.0s because he was still being cut off when he
+    # pauses mid-sentence, and at 2.0s of a 2.5s budget the rule fires correctly: **the
+    # hangover now does dominate the turn.** That is not a bug in the config, it is the trade
+    # he chose, and re-inflating `budget` to 4.1 so the ratio passes would be a lie about what
+    # the answer budget is — the exact "assert the old rule and call it green" mistake D8 is
+    # about, pointed the other way.
+    #
+    # So the ratio is replaced by an explicit CEILING, and the cost it was guarding is printed
+    # on every run instead of being hidden behind a pass. The guard is still real: a typo'd
+    # 5.0 or a creep to 3.0 fails here, and an out-of-range value is separately rejected at
+    # load (see the `hangover_s = 50.0` check above).
+    #
+    # If the share below climbs much past 80%, the fix is no longer a bigger number. It is
+    # push-to-talk, or a VAD that can tell a thinking pause from a finished sentence — both of
+    # which end the utterance on intent rather than on a stopwatch. Tracked in tasks/todo.md.
     budget = 2.5
     hangover = listen_cfg["hangover_s"]
-    check(hangover < budget / 2,
-          "the end-of-speech hangover leaves room for the rest of the turn",
-          f"hangover {hangover}s of a {budget}s budget — the remainder is STT plus synthesis")
+    ceiling = 2.0
+    share = hangover / budget * 100
+    check(hangover <= ceiling,
+          "the end-of-speech hangover is within the agreed ceiling",
+          f"hangover {hangover}s, ceiling {ceiling}s — and that is {share:.0f}% of the {budget}s "
+          f"answer budget, spent as silence on EVERY turn, including the free lookups")
 
 
 # ============================================================ 6. real whisper (optional)

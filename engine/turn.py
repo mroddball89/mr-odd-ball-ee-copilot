@@ -379,6 +379,23 @@ class Turn:
                         t.extras.append(f"gate answered by click: {answer}")
 
             self._quiet(self._bridge.clear_pending)
+
+            # The thinking pose, BEFORE the action runs. This line is the whole of the
+            # "he falls asleep while running a command" bug.
+            #
+            # `Engine.ask(answer)` on an approved gate is not a question — it is
+            # `resume_os_action()`, which spawns a subprocess and waits on it. The state at
+            # that moment was last set to "listening" (the spoken path, two blocks up) or was
+            # never moved off "speaking" (the typed path), and `run_voice.py` has an idle timer
+            # that drops the face to the RESTING state — `sleeping` — after a delay it does not
+            # know is about to be spent working. So the one part of a turn that visibly takes
+            # time was the one part showing no sign of life.
+            #
+            # Set unconditionally rather than only for `kind == "os"`: a web search is a network
+            # round trip on the same path, and a rule that names one route is a rule the next
+            # route forgets.
+            self._bridge.set_state(self._thinking)
+
             # Empty string is deliberate and load-bearing: Engine.ask("") declines the pending
             # action AND closes the gate. Anything short of a clear yes is a no.
             outcome = self._engine.ask(answer)

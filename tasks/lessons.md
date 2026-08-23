@@ -381,3 +381,61 @@ Bonus, caught in the same hour by reading the log rather than trusting it: WebKi
 fired on every failure and the delay stayed at 1s forever. It logged "retrying in 1s" eight
 times in a row and looked like a working retry loop. Exponential backoff that never backs off
 is a thing you only notice if you read the numbers.
+
+## A wheel-tag query answers a question about one release SERIES, not about a package
+
+**2026-08-22 (D14).** I queried PyPI for `mediapipe` aarch64 wheels, saw `cp39`–`cp312`,
+and wrote up "this cannot install on the Pi's Python 3.13" as a measured platform limit.
+It was true of the `0.10.x` series and false of the package: `1.0.1` ships one
+`py3-none-manylinux_2_28_aarch64` wheel that installs on any Python 3.
+
+LB read the write-up and asked for a Python 3.12 venv rebuild on the strength of it — on a
+Debian trixie box that has no `python3.12` package, no `uv` and no `pyenv`. The wrong finding
+would have cost an interpreter build and a 1.9 G venv rebuild to pin a November 2024 release.
+
+**The rule:** sort the releases, look at the NEWEST, and check whether the tag *shape* changed.
+`py3-none` appearing where `cp3xx` used to be is a packaging decision with consequences. A
+major version bump is exactly when a maintainer changes ABI tags, drops APIs, or both — here it
+did both, because 1.x also removed `mp.solutions`.
+
+**The worse half:** the wrong finding was written up *persuasively* — a table, a stated
+provenance, an all-caps warning. Confidence and formatting made a partial check read as
+settled, and it propagated straight into a work request from LB. **Write up what was actually
+queried** ("the 0.10.x wheels"), not the generalisation it appears to support. A finding stated
+more broadly than it was checked is the kind of error that gets acted on.
+
+---
+
+## L13 — A prescribed fix names a mechanism; check the mechanism exists before applying it
+
+**From:** D18. Six bugs arrived with six fixes attached. Applied literally, one of them
+(`pause_threshold = 2.0`) would have edited a library this project does not use, and another
+(hold `cv2.VideoCapture` open in `__init__`) would have added a held camera device and a
+lifecycle to manage in exchange for **zero milliseconds** — because the object it caches on
+lives for exactly one detection inside a child process that then exits.
+
+Two others were already built and shipped: markdown and code-block stripping, and the vault
+being reachable from GENERAL. Applying those would have been a second implementation of
+something already working, which is how two mechanisms end up disagreeing later.
+
+**Why:** a bug report is authoritative about the **symptom** and speculative about the
+**cause**. "The TTS skips words" was true and important; "because the LLM includes markdown"
+was wrong, and the real cause — `is_speakable()` refusing the whole sentence over a `°`, and
+substituting a canned line — was both worse and invisible from outside. Fixing the named cause
+would have left the symptom exactly where it was, and it would have looked like the fix failed
+rather than like the diagnosis missed.
+
+Same shape as [[L7]] and [[L10]]: a correct observation attached to the wrong mechanism.
+
+**How to apply:** for each prescribed fix, grep for the thing it names **first**. If it does
+not exist, find this stack's analogue and say which one you changed. If it already exists, say
+so and do not build a second one. If it exists but the fix would not help, measure the thing it
+claims to improve before deciding — the gesture latency table already existed and settled the
+question in one read, showing the camera open was 204 ms of 2,217 ms while the mediapipe import
+was 1,009 ms.
+
+And when a raised number goes red in a harness, read what the harness was protecting before
+changing it. `hangover < budget / 2` was not stale — it fired **correctly**, because a 2.0 s
+hangover really does dominate a 2.5 s budget. Widening the budget to make the ratio pass would
+have been [[L4]] in reverse: green, and asserting something untrue. The cost is now printed on
+every run instead.

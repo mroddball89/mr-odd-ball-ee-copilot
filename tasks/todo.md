@@ -468,3 +468,23 @@ and still useful if a pywebview window is ever wanted for something else.
       is what was asked for and it looks right for a 1-3s call. If it grates over a 10s one,
       the gentler option is a new `rock` gesture (small travel, no spin) rather than tuning
       `roll`, which `happy` also uses via `finish`.
+
+## Follow-ups from D18 (2026-08-22)
+
+- [ ] **Measure gesture detection rate before tuning it again.** `WARMUP_FRAMES` (4 -> 5) and
+      `MIN_DETECTION_CONFIDENCE` (0.6 -> 0.5) were both changed on a *guess* at the cause — an
+      underexposed frame. There is still no detection-rate-versus-warmup-count measurement, so
+      the next nudge would be guessing on top of a guess (D14). Save a set of frames and score
+      them.
+- [ ] **The persistent gesture worker.** This is the actual fix for approval latency: the
+      measured 2,217 ms is 1,009 ms of `import mediapipe` paid per approval, against 204 ms to
+      open the camera. Keeping a pipe open would bring it to ~850 ms. Deliberately not done as
+      part of D18 — it turns a subprocess call into a lifecycle to manage.
+- [ ] **Watch the hangover share.** `hangover_s` is 2.00 s, which is 80% of the 2.5 s answer
+      budget, spent as silence on EVERY turn including the free lookups. `verify_stt.py` prints
+      that share on every run. If LB starts complaining about waiting on fast answers instead of
+      being cut off, the fix is not a smaller number either — it is push-to-talk, or a VAD that
+      ends on intent rather than on a stopwatch.
+- [ ] Grammar nit in `expand_symbols`: "a 10 kilohms resistor" should be "kilohm" when the unit
+      is attributive. Correct when it stands alone ("that is 5 ohms"), which is the common case.
+      Needs part-of-speech awareness to fix properly; not worth it yet.

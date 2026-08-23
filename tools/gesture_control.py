@@ -65,6 +65,11 @@ One approval, end to end from the assistant's venv, median of 10 trials on the P
     ------------------------------------
     TOTAL                   2,217 ms   (min 2,197, max 2,271 — very tight)
 
+**That table is the 2026-08-21 measurement and WARMUP_FRAMES is now 5**, so expect ~2,367 ms
+until it is re-measured. The row is left at 4 rather than quietly edited to 5: the numbers
+beside it were measured together, and a table with one value swapped by hand is a table that
+no longer describes any single run.
+
 **Only 102 ms of that is detection.** The rest is a whole Python interpreter and a mediapipe
 import, thrown away and rebuilt every time, because the work cannot happen in this process.
 `media/charts/gesture-approval-latency.svg` plots it; the CSVs are beside it.
@@ -79,6 +84,16 @@ freshly opened camera are auto-exposure garbage and a black frame reliably detec
 so cutting it is a trade of reliability for latency, and there is no measurement of detection
 rate versus warmup count to make that trade on. Guessing here would be the exact mistake D14
 is about.
+
+It went the other way on 2026-08-22: **4 -> 5**, with `MIN_DETECTION_CONFIDENCE` 0.6 -> 0.5,
+after LB reported thumbs-up going undetected. Both changes point at the same suspected cause —
+an underexposed frame — and both are still guesses, for the reason above: there is no
+detection-rate measurement to tune against. What makes them acceptable is direction. A missed
+thumbs-up costs one retry and falls back to the keyboard; neither change can turn a non-approval
+into an approval, because that decision is `_classify()`, which is pure geometry.
+
+**The honest next step is a measurement, not another nudge** — detection rate against warmup
+count and confidence, over a set of saved frames. Tracked in `tasks/todo.md`.
 
 The camera is NOT held open between calls. An approval happens a few times an hour and a held
 `VideoCapture` is a device nobody else can use.
@@ -133,7 +148,27 @@ FRAME_FPS = 15
 
 # The first frame off a freshly opened camera is auto-exposure garbage: on the Pi's module it
 # is usually near-black, and a black frame reliably detects no hand. Pull and discard a few.
-WARMUP_FRAMES = 4
+#
+# 5 as of 2026-08-22, up from 4. The measured cost is ~150 ms per frame on this webcam (it
+# gives ~6.6 fps, not the 15 requested), so this buys a little more auto-exposure settle time
+# for 150 ms of the 2.2 s budget. Raised alongside the confidence drop below, because both
+# failures LB reported — "it didn't see my thumb" — are consistent with an underexposed frame.
+WARMUP_FRAMES = 5
+
+# How sure mediapipe must be that it is looking at a hand at all.
+#
+# 0.5 as of 2026-08-22, down from 0.6, because LB reported thumbs-up going undetected. It is
+# ONE constant now rather than a literal repeated in each API branch — two numbers that must
+# agree is one number somebody edits.
+#
+# Lowering this is safe in a way that is worth being explicit about, because "make approval
+# more forgiving" sounds like the opposite: this threshold governs *is there a hand in frame*,
+# NOT *is it a thumbs up*. The gesture decision is `_classify()`, which is pure geometry with
+# no confidence in it, and it still demands the other four fingers be curled — an open palm
+# is not an approval at any detection confidence. So this makes the hand easier to FIND and
+# does not make approval easier to GET.
+MIN_DETECTION_CONFIDENCE = 0.5
+MIN_TRACKING_CONFIDENCE = 0.5
 
 # Hand landmark indices, named. `landmarks[8]` in a boolean expression is how the open-palm
 # and thumbs-up tests come to look identical to a reviewer. Identical in both mediapipe APIs.
@@ -338,8 +373,8 @@ class GestureRecognizer:
                         base_options=mpp.BaseOptions(model_asset_path=str(MODEL_PATH)),
                         running_mode=vision.RunningMode.IMAGE,
                         num_hands=1,
-                        min_hand_detection_confidence=0.6,
-                        min_tracking_confidence=0.6,
+                        min_hand_detection_confidence=MIN_DETECTION_CONFIDENCE,
+                        min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
                     ))
             except Exception as exc:                                      # noqa: BLE001
                 self.why = f"the Tasks landmarker would not load ({type(exc).__name__}: {exc})"
@@ -359,8 +394,8 @@ class GestureRecognizer:
             try:
                 hands = mp.solutions.hands.Hands(
                     max_num_hands=1,
-                    min_detection_confidence=0.6,
-                    min_tracking_confidence=0.6,
+                    min_detection_confidence=MIN_DETECTION_CONFIDENCE,
+                    min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
                 )
             except Exception as exc:                                      # noqa: BLE001
                 self.why = f"Hands() would not construct ({type(exc).__name__}: {exc})"

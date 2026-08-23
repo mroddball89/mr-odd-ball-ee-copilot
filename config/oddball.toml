@@ -159,14 +159,28 @@ wait_s = 1.5
 # too short and he cuts you off mid-sentence, too long and every answer is late by the
 # difference. It is spent on every turn, so it is part of the latency budget.
 #
-# 1.10 as of 2026-08-13, raised from 0.75 because LB reported being cut off mid-question in
-# the first live Phase 2 session. 0.75 was itself a raise from 0.6, for the same reason.
+# 2.00 as of 2026-08-22, raised from 1.10 — LB reported being cut off when he pauses
+# mid-sentence. This is the FOURTH raise for the same complaint: 0.6 -> 0.75 -> 1.10 -> 2.00.
+# Every previous one was too small, and a setting that has been raised three times and is still
+# wrong is a setting that was being nudged rather than solved. 2.0s is long enough to hold a
+# thinking pause ("what's the trace width for... uh... five amps"), which is the case that was
+# failing.
 #
 # The pressure changed with Phase 2. Under Phase 1 every turn was a ~1.6s reflex answer, so a
 # third of a second of hangover was a third of the whole turn. Now a Tier 1 or Tier 3 answer
-# costs 3-4s anyway, so 0.35s more silence is a much smaller share of the wait — and being
-# cut off mid-sentence costs a whole retry, which is far more expensive than 0.35s.
-hangover_s = 1.10
+# costs 3-4s anyway, so more silence is a much smaller share of the wait — and being cut off
+# mid-sentence costs a whole retry, which is far more expensive than the delay.
+#
+# What this COSTS, stated plainly: 0.9s is added to every single turn, including the free
+# lookups that answer in milliseconds. "What time is it" now waits 2s of silence before he
+# starts. That is the trade LB asked for, and it is the right one only while being cut off is
+# the more common complaint. If he starts saying he is waiting on a fast answer, this is the
+# number to look at first.
+#
+# NOTE the other half of this bug, already fixed above: `threshold = 0.35`. Quiet trailing
+# syllables scored under Silero's default 0.5, so the hangover started early and expired
+# mid-word. Lengthening the hangover cannot fix a clock that starts too soon — both are needed.
+hangover_s = 2.00
 
 # Hard cap on one utterance, so a television cannot record forever. 15, up from 10, after a
 # live turn hit the cap mid-question and was transcribed from a truncated recording.

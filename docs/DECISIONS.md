@@ -1218,3 +1218,127 @@ pinning it to a corner, and writing four decision entries about it, without once
 the character it drew already existed somewhere in the repo. Four rounds of real debugging —
 D14, D15, D16, and the placement work — went into a component that should not have been built.
 The debugging was sound. The thing being debugged should not have existed.
+
+---
+
+## D18 — Six reported bugs: four real, one already built, one that would have made things worse
+
+**2026-08-22.** LB reported six synchronisation and latency faults, with a prescribed fix for
+each. Checked against the code before touching it, they sorted into four different kinds, and
+that sorting is the useful part of this entry.
+
+| # | reported | what was actually there |
+|---|---|---|
+| 1 | TTS drops words; strip markdown, remove code, expand symbols | markdown and code **already handled**; symbol expansion missing, and it was the real cause |
+| 2 | avatar sleeps while the OS agent runs bash | **real bug, confirmed** |
+| 3 | mic cuts off on a pause; raise `pause_threshold` to 2.0 | no `speech_recognition` in this stack; `hangover_s` is the analogue, raised 1.10 -> 2.00 |
+| 4 | vault not bound to GENERAL; add error logging | **already bound**; logging was genuinely absent |
+| 5 | hold the camera open in `__init__` to kill 2-3 s of latency | **would save nothing and cost something — not done** |
+| 6 | flush frames, lower confidence to 0.5 | flushing already existed; confidence lowered |
+
+### 1 — the words were not dropped by the synthesiser, they were refused by policy
+
+The report said the TTS engine skips words because of markdown. `audio/say.py:speakable()` has
+stripped markdown and emoji since 2026-08-13, and `engine/split.py` lifts fenced code onto
+cards and **rejects** any spoken candidate containing a fence. Both were already done.
+
+What was missing is symbol expansion, and the failure it causes is far worse than a stumble:
+`is_speakable()` refuses text containing Ω μ ° ± τ ², and a refused sentence is **replaced
+wholesale** by "I've put it on the screen." So *"The trace needs 0.9 mm for a 20°C rise"* was
+never spoken — not mispronounced, not truncated, **not said at all** — and the more correctly
+an agent wrote an engineering answer, the more reliably it was thrown away.
+
+`expand_symbols()` runs on the candidate **before** the gate judges it. Note what it does not
+do: the gate is unchanged and still runs on everything. This only normalises the input, so a
+sentence is refused for being unsayable rather than for spelling "ohms" with a Greek letter.
+On the harness corpus, seven sentences went from dropped to spoken.
+
+Cards keep the original notation — a card is read, not heard, and `20°C` is right on screen.
+
+### 2 — the real one, and it was one missing line
+
+`Turn._deliver()` resolves a gate with `Engine.ask(answer)`, and on an **approved** gate that
+is not a question — it is `resume_os_action()`, spawning a subprocess and waiting on it.
+Nothing set a state first. The last state set was `listening` (spoken path, waiting for the
+yes) or `speaking` (typed path), and `run_voice.py`'s idle timer then drops the face to the
+resting state — `sleeping` — after a delay that knows nothing about the work about to happen.
+
+The one stretch of a turn that visibly takes time was the one stretch showing no sign of life.
+
+Set unconditionally rather than for `kind == "os"`: a web search is a network round trip on the
+same path, and a rule that names one route is a rule the next route forgets.
+`tools/verify_gate_state.py` asserts the state **at the instant the action runs** — checking it
+afterwards proves nothing, because the interesting moment is already over — and the fix is
+mutation-tested: remove the line and two checks go red.
+
+### 3 — the prescribed knob does not exist here, and the analogue has now been raised four times
+
+There is no `speech_recognition` in this project; capture is a custom VAD over openWakeWord's
+Silero. The analogue is `hangover_s`, and it has now gone **0.6 -> 0.75 -> 1.10 -> 2.00**, every
+time for the same complaint. A number raised three times and still wrong was being nudged rather
+than solved.
+
+**What it costs, stated rather than buried: 0.9 s is added to every turn**, including the free
+lookups that answer in microseconds. "What time is it" now waits 2 s of silence first.
+
+`tools/verify_stt.py` held `hangover < budget / 2` — "the hangover must never dominate the
+turn" — and at 2.0 s of a 2.5 s budget it fired correctly, because **it now does dominate**.
+Re-inflating the budget to 4.1 so the ratio passes would have been a lie about what the answer
+budget is. The ratio is replaced by an explicit ceiling, and the harness now **prints the 80%
+share on every run** rather than hiding it behind a pass. If that share climbs further, the
+answer is not a bigger number — it is push-to-talk, or a VAD that can tell a thinking pause
+from a finished sentence.
+
+### 4 — already routed; the gap was that failures were invisible
+
+`save_to_vault` and `read_from_vault` are bound to firmware, hardware **and persona** — and
+`engine/core.py` sends GENERAL to persona, so GENERAL has had the vault all along.
+
+The real gap: every failure path returned a string and logged nothing. The model then
+*paraphrases* that string, so the spoken version of a failure is one smoothed-over sentence
+with the cause gone. The log is the only place an errno survives. `PermissionError` is now
+named explicitly — the vault lives under the repo, and a repo deployed by `tar` over ssh can
+arrive read-only, which is exactly the failure LB asked to be able to see.
+
+### 5 — the camera fix would have bought nothing, and this is why
+
+The request: move `cv2.VideoCapture(0)` into `__init__` so the stream stays open, killing the
+2-3 s block.
+
+**`get_gesture()` in the parent always spawns a child process** — `--once`, whose own help text
+is "print exactly one gesture token on stdout and exit". That is not an optimisation, it is
+crash isolation: mediapipe 1.x on this Pi does not raise, it **SIGKILLs** (D15), and doing the
+work in-process risks killing the voice loop at a security prompt.
+
+So a `GestureRecognizer` lives for exactly one detection and dies with its process. Caching the
+camera on the instance saves **zero milliseconds**, because the open happens once per process
+either way. From the measured 2,217 ms:
+
+    import mediapipe        1,009 ms   45%   <-- the actual cost
+    warmup frames             602 ms   27%
+    open camera               204 ms    9%   <-- all that __init__ could ever touch
+    build landmarker           55 ms
+    inference                  47 ms
+    interpreter start          22 ms
+
+Holding the device would also make it unavailable to anything else for the whole session, for a
+feature used a few times an hour. **The real fix is the persistent worker** — pay the 1.0 s
+import once, keep a pipe open, ~850 ms per approval — which was already considered and tracked.
+Implementing the requested change would have added a held device and a lifecycle to manage in
+exchange for nothing measurable.
+
+### 6 — done, and honestly still a guess
+
+`WARMUP_FRAMES` 4 -> 5 and detection confidence 0.6 -> 0.5, now **one named constant** instead
+of a literal repeated in each of the two mediapipe API branches.
+
+Worth being explicit, because "make approval more forgiving" sounds like a safety change and is
+not: this threshold governs *is there a hand in frame*, **not** *is it a thumbs up*. The gesture
+decision is `_classify()`, pure geometry with no confidence in it, and it still requires the
+other four fingers curled — an open palm is not an approval at any detection confidence. So
+this makes a hand easier to **find** and does not make approval easier to **get**.
+
+Both numbers remain guesses at the same suspected cause (an underexposed frame), for the reason
+D14 is about: **there is no detection-rate measurement to tune against.** What makes them
+acceptable is direction — a missed thumbs-up costs one retry and falls back to the keyboard.
+The honest next step is a measurement, not another nudge. Tracked in `tasks/todo.md`.

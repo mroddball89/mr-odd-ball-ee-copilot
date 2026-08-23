@@ -44,10 +44,13 @@ cannot serve.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
 from langchain_core.tools import tool
+
+LOG = logging.getLogger("oddball.vault")
 
 __all__ = ["VAULT_DIR", "VAULT_TOOLS", "VAULT_INSTRUCTION", "followup_prompt",
            "save_to_vault", "read_from_vault", "run_vault_calls"]
@@ -131,6 +134,20 @@ def save_to_vault(filename: str, content: str, folder: str = "notes") -> str:
         # Tools in this repo report failure as text rather than raising: an exception here
         # becomes a crash in whichever agent called it, and "I could not write that down" is
         # a far better thing for LB to hear than a traceback read out loud.
+        #
+        # But the RETURNED string is all the model sees, and the model paraphrases it — so the
+        # spoken version of a failure is one sentence with the cause smoothed out of it. The
+        # log is the only place the actual errno survives, and a vault that silently fails to
+        # write is indistinguishable from one that saved nothing worth reading back.
+        LOG.exception("vault WRITE failed: folder=%r filename=%r", folder, filename)
+        if isinstance(exc, PermissionError):
+            # Called out by name because it is the failure LB is most likely to hit and the
+            # least likely to guess: the vault lives under the repo, and a repo deployed by
+            # `tar` over ssh can arrive owned by another user or read-only.
+            LOG.error("  -> PERMISSION DENIED writing under %s. Check ownership and mode: "
+                      "ls -la %s", VAULT_DIR, VAULT_DIR)
+            return (f"Failed to write to Vault: permission denied on {VAULT_DIR}. "
+                    f"The directory is not writable by the user running me.")
         return f"Failed to write to Vault: {exc}"
 
 
@@ -178,6 +195,7 @@ def read_from_vault(search_term: str) -> str:
                     f"context budget. Narrow the search term to see them.]")
         return out
     except Exception as exc:                                              # noqa: BLE001
+        LOG.exception("vault READ failed: search_term=%r under %s", search_term, VAULT_DIR)
         return f"Failed to search Vault: {exc}"
 
 
@@ -231,6 +249,11 @@ def run_vault_calls(tool_calls: list[dict]) -> list[tuple[str, str]]:
             out.append((chosen.name, str(chosen.invoke(call.get("args", {})))))
         except Exception as exc:                                          # noqa: BLE001
             # Binding the arguments is what raises here — the tools themselves never do.
+            # Logged with the arguments the MODEL chose, because that is the thing under
+            # suspicion: a tool that "does not trigger" is usually a tool being called with a
+            # field it does not have, and the returned sentence never says which field.
+            LOG.exception("vault tool %s failed to run with args=%r",
+                          chosen.name, call.get("args", {}))
             out.append((chosen.name, f"That vault tool could not be run: "
                                      f"{type(exc).__name__}: {exc}"))
     return out
