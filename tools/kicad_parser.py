@@ -58,10 +58,14 @@ D30's failure mode. The copper count is reported as the headline and the table s
 He is voice-first. A dictated path does not survive Whisper — "slash home slash pi slash amp
 dot kicad underscore sch" comes back as prose. So `_resolve` takes a real path when it is given
 one (the typed channel, D6, can paste one), and otherwise treats the string as a **project
-name** and searches `ODDBALL_KICAD_ROOT` (`.env`, default `~/kicad`). Matching ignores case,
-spaces and punctuation, so "the amp board" finds `amp_board/amp_board.kicad_sch`. Two matches
-are reported as two matches — never guessed between, because picking one silently is how you
-answer a question about the wrong board.
+name** and searches two roots: `data/projects/`, where `tools/file_manager.py` files anything LB
+uploads through the paperclip, and then `ODDBALL_KICAD_ROOT` (`.env`, default `~/kicad`).
+Matching ignores case, spaces and punctuation, so "the amp board" finds
+`amp_board/amp_board.kicad_sch`. Two matches are reported as two matches — never guessed
+between, because picking one silently is how you answer a question about the wrong board.
+
+The uploads directory is searched first and needs no build step: this module reads the file off
+the disk at question time, so a schematic is answerable the second it is filed.
 """
 
 from __future__ import annotations
@@ -80,7 +84,8 @@ except ImportError:                                                       # prag
     Board = None
     Schematic = None
 
-__all__ = ["extract_kicad_bom", "analyze_kicad_pcb", "kicad_root", "SCH_EXT", "PCB_EXT"]
+__all__ = ["extract_kicad_bom", "analyze_kicad_pcb", "kicad_root", "search_roots",
+           "UPLOADED_PROJECTS", "SCH_EXT", "PCB_EXT"]
 
 SCH_EXT = ".kicad_sch"
 PCB_EXT = ".kicad_pcb"
@@ -88,6 +93,16 @@ PCB_EXT = ".kicad_pcb"
 # Where a bare project NAME is looked up. Overridable from .env, matching the convention in
 # engine/models.py — LB keeps his designs in different places on the Pi and on Windows.
 DEFAULT_KICAD_ROOT = "~/kicad"
+
+# The second place a name is looked up: schematics LB uploaded through the paperclip in the chat
+# panel, filed here by `tools/file_manager.py`. Searched FIRST, because a board he uploaded a
+# minute ago is more likely to be the one he is asking about than one that has been sitting in
+# ~/kicad since term started.
+#
+# This is why an upload is usable immediately with no build step. A `.kicad_sch` is read live off
+# the disk by `_collect` below, so the moment the file manager moves it here, "what's on the amp
+# board" works — unlike a PDF, which is invisible until the vector store has been rebuilt.
+UPLOADED_PROJECTS = Path(__file__).resolve().parents[1] / "data" / "projects"
 
 # A search that walks an entire home directory is a tool that appears to hang. These bound it.
 _MAX_SEARCH_HITS = 400
@@ -126,40 +141,59 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
-def _describe_root(root: Path) -> str:
-    """A sentence about where we looked, for the two error paths that need to say so."""
-    if not root.exists():
-        return (f"I looked under {root}, which does not exist. Set ODDBALL_KICAD_ROOT in .env "
-                f"to wherever your KiCad projects live, or give me the full path to the file.")
-    return (f"I looked under {root}. Set ODDBALL_KICAD_ROOT in .env if your projects are "
-            f"somewhere else, or give me the full path to the file.")
+def search_roots() -> list[Path]:
+    """Every directory a bare project name is looked up in, in priority order.
+
+    Uploaded projects first, then `ODDBALL_KICAD_ROOT`. Only directories that exist are
+    returned, so a machine with no `~/kicad` searches the uploads alone and vice versa — which
+    is the normal state on both of LB's boxes, in opposite directions.
+    """
+    return [root for root in (UPLOADED_PROJECTS, kicad_root()) if root.is_dir()]
+
+
+def _describe_root(roots: list[Path]) -> str:
+    """A sentence about where we looked, for the error paths that need to say so."""
+    if not roots:
+        return (f"I have nowhere to look: there are no uploaded projects in "
+                f"{UPLOADED_PROJECTS}, and {kicad_root()} does not exist. Upload the file with "
+                f"the paperclip, set ODDBALL_KICAD_ROOT in .env, or give me the full path.")
+    where = " and ".join(str(r) for r in roots)
+    return (f"I looked under {where}. Upload it with the paperclip, set ODDBALL_KICAD_ROOT in "
+            f".env if your projects are somewhere else, or give me the full path to the file.")
 
 
 def _search_by_name(name: str, ext: str) -> tuple[Path | None, str]:
-    """Find one file called `name` under the KiCad root. Returns (path, error-message).
+    """Find one file called `name` in any search root. Returns (path, error-message).
 
     Matches the file's own stem OR its parent directory's name, because KiCad names a project
     folder and the file inside it the same thing, and LB says the folder name.
     """
-    root = kicad_root()
-    if not root.is_dir():
-        return None, f"I could not find a {ext} file for {name!r}. {_describe_root(root)}"
+    roots = search_roots()
+    if not roots:
+        return None, f"I could not find a {ext} file for {name!r}. {_describe_root(roots)}"
 
     wanted = _slug(name)
     if not wanted:
         return None, f"{name!r} is not a file path or a project name I can look up."
 
     hits: list[Path] = []
-    for i, path in enumerate(root.rglob(f"*{ext}")):
-        if i >= _MAX_SEARCH_HITS:
+    # The cap is spent across ALL roots rather than per root, so adding the uploads directory
+    # cannot double the worst-case walk of a large home directory.
+    seen = 0
+    for root in roots:
+        for path in root.rglob(f"*{ext}"):
+            if seen >= _MAX_SEARCH_HITS:
+                break
+            seen += 1
+            stem, parent = _slug(path.stem), _slug(path.parent.name)
+            # Either direction: "amp" matches amp_board, and "the amp board" matches amp_board.
+            if wanted in stem or stem in wanted or wanted in parent or parent in wanted:
+                hits.append(path)
+        if seen >= _MAX_SEARCH_HITS:
             break
-        stem, parent = _slug(path.stem), _slug(path.parent.name)
-        # Either direction: "amp" matches amp_board, and "the amp board" matches amp_board.
-        if wanted in stem or stem in wanted or wanted in parent or parent in wanted:
-            hits.append(path)
 
     if not hits:
-        return None, f"I could not find a {ext} file for {name!r}. {_describe_root(root)}"
+        return None, f"I could not find a {ext} file for {name!r}. {_describe_root(roots)}"
 
     # An exact stem match settles it — "amp" beside "amp_v2" is not really ambiguous.
     exact = [p for p in hits if _slug(p.stem) == wanted]

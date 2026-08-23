@@ -33,6 +33,8 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from engine.models import PERSONA_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
+from tools.file_manager import (FILE_INSTRUCTION, FILE_TOOLS, file_followup_prompt,
+                                run_file_calls)
 from tools.knowledge_vault import (VAULT_INSTRUCTION, VAULT_TOOLS, followup_prompt,
                                    run_vault_calls)
 from tools.memory_manager import format_memory_for_llm
@@ -67,6 +69,16 @@ Saying something out loud from the vault is still SPEECH: one to three short sen
 markdown, no file paths. "I've written that down" is the whole confirmation — do not read the
 folder and filename aloud.
 """
+    + FILE_INSTRUCTION
+    + """
+Filing is still SPEECH too. "That's your syllabus — I've filed it and I'm reading the dates out
+of it now" is the whole answer. Do not read a folder path aloud, and do not list what else is in
+the inbox unless he asked.
+
+When you genuinely cannot tell what a file is, one short question is the right answer:
+"Is that a syllabus or a datasheet?" Ask it and stop. Do not guess, and do not file it anyway
+and mention that you were unsure.
+"""
 )
 
 
@@ -92,11 +104,23 @@ def run_persona_agent(query: str) -> str:
     # that I'm using the 2N3904" is a thing LB says in passing, not a hardware query, and it
     # would otherwise route to PERSONA and be forgotten in forty turns.
     #
+    # The file tools are here for the same reason, and this agent is their PRIMARY home:
+    # `router.py` sends every "I just uploaded X" here whatever the file turns out to be,
+    # because one filer that can ask "which is it?" beats four agents each guessing about the
+    # kinds of document they happen to know. Hardware and firmware also carry them, so an
+    # upload announced in the middle of a board question is still filed rather than lost.
+    #
     # Same bounded two-step as the firmware agent: tools on the first pass, off on the second.
-    response = llm.bind_tools(VAULT_TOOLS).invoke(prompt)
+    response = llm.bind_tools(VAULT_TOOLS + FILE_TOOLS).invoke(prompt)
+    calls = getattr(response, "tool_calls", None)
 
-    vault_results = run_vault_calls(getattr(response, "tool_calls", None))
+    vault_results = run_vault_calls(calls)
     if vault_results:
-        response = llm.invoke(followup_prompt(prompt, vault_results))
+        return extract_text_content(llm.invoke(followup_prompt(prompt, vault_results)).content)
+
+    file_results = run_file_calls(calls)
+    if file_results:
+        return extract_text_content(
+            llm.invoke(file_followup_prompt(prompt, file_results)).content)
 
     return extract_text_content(response.content)

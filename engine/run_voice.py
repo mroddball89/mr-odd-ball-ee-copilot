@@ -210,6 +210,9 @@ async def main(argv: list[str] | None = None) -> int:
                          "?ws=<this-machine-ip>:8765")
     ap.add_argument("--no-mic", action="store_true",
                     help="serve the rig without opening the microphone (bridge smoke test)")
+    ap.add_argument("--no-upload", action="store_true",
+                    help="do not bind the file-upload endpoint. The paperclip in the chat "
+                         "panel stops working; everything else is unaffected.")
     ap.add_argument("--device", default=None,
                     help="input device index or name substring, overriding wake.device. "
                          "Indices come from `python audio/wake.py --list-devices` and are NOT "
@@ -275,6 +278,44 @@ async def main(argv: list[str] | None = None) -> int:
     server = await bridge.start()
     loop = asyncio.get_running_loop()
     await bridge.broadcast({"type": "state", "value": rest})
+
+    # The paperclip's other end. A separate HTTP server on its own port, because the bridge is
+    # a WebSocket server and the hook it serves the page from never sees a request BODY —
+    # `engine/server.py` makes the whole argument.
+    #
+    # Wrapped, and the failure is a warning rather than a return: an occupied port must not cost
+    # him his voice. The rig's own upload path already reports "is he running?" on a refused
+    # connection, so a missing endpoint degrades to a paperclip that says so when pressed —
+    # which is the same trade `_quiet()` makes for every other rig call in `engine/turn.py`.
+    upload_server = None
+    if not args.no_upload:
+        try:
+            from engine.server import serve as serve_uploads          # noqa: PLC0415
+
+            upload_server = serve_uploads(args.host or hud_cfg["host"], hud_cfg["upload_port"])
+        except OSError as exc:
+            LOG.warning("no upload endpoint on port %d (%s) — the paperclip will not work",
+                        hud_cfg["upload_port"], exc)
+
+        # What is waiting, named at startup.
+        #
+        # The endpoint accepts a file whether or not anything is listening to the chat, so a
+        # `curl` while the service was stopped — or an upload whose "I just uploaded X" line
+        # got misrouted — leaves a document in `data/inbox/` that nobody is ever told about.
+        # `list_inbox` finds it, but only if LB thinks to ask, and he has no reason to ask
+        # about a file he believes was already filed. One line in the log is the cheapest
+        # thing that makes a silent backlog visible.
+        try:
+            from tools.file_manager import inbox_files                # noqa: PLC0415
+
+            waiting = inbox_files()
+            if waiting:
+                LOG.info("%d file(s) waiting in data/inbox/ — ask him to file %s",
+                         len(waiting), ", ".join(p.name for p in waiting[:5]))
+        except Exception:                                             # noqa: BLE001
+            # A startup convenience is not worth a failed start. Same trade as every rig call
+            # in engine/turn.py: the screen is the second channel, and this is a log line.
+            LOG.exception("could not read the inbox; carrying on")
 
     stop = threading.Event()
     idle_handle: asyncio.TimerHandle | None = None
@@ -564,6 +605,9 @@ async def main(argv: list[str] | None = None) -> int:
         await asyncio.sleep(0.2)          # let the last mouth message reach the rig
         await bridge.broadcast({"type": "state", "value": rest})
         server.close()
+        if upload_server is not None:
+            upload_server.shutdown()
+            upload_server.server_close()
         return 0
 
     if args.simulate:
@@ -636,6 +680,13 @@ async def main(argv: list[str] | None = None) -> int:
     finally:
         stop.set()
         server.close()
+        if upload_server is not None:
+            # `shutdown()` blocks until serve_forever has returned, which is why the server was
+            # given `daemon_threads = True`: without it an upload still in flight would hold
+            # this open, and `systemctl restart oddball` would hang for as long as a 60 MB file
+            # takes to arrive.
+            upload_server.shutdown()
+            upload_server.server_close()
         for worker, q in ((speech_thread, jobs), (turn_thread, turn_jobs)):
             if worker is None:
                 continue

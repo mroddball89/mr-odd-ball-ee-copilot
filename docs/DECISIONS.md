@@ -1555,3 +1555,169 @@ Also unfixed and now recorded: the running service has **no `WAYLAND_DISPLAY`**.
 seconds after boot, before the desktop imported its environment into the user manager, exactly
 as D10 defect 1 describes. It does not matter today because `find_display()` discovers the
 socket, but the unit is still wrong and a future path that trusts the environment will fail.
+
+## D21 — The endpoint I was asked for was on a framework this repo deleted on purpose
+
+**2026-08-23.** LB asked for a paperclip in the chat panel: pick a file, it uploads, Mr Odd Ball
+files it and rebuilds whatever index it feeds. The specification named the endpoint precisely —
+*"Create a new `POST /upload` endpoint in the FastAPI server (`engine/server.py` or
+equivalent)"*.
+
+**There is no FastAPI server.** D17 deleted `ui/` and dropped `fastapi`, `uvicorn` and
+`pywebview` from `requirements.txt` four days ago, and `requirements.txt` still carries the
+gravestone: *"There was briefly a `fastapi` / `uvicorn` / `pywebview` block here."*
+
+So the request as literally written was to reverse a decision that had a reason, and the reason
+had not stopped being true. What LB wants is a paperclip. FastAPI is how he expected to get one.
+Those are different things, and only the first is the deliverable.
+
+`engine/server.py` exists now, at the path he named, serving `POST /upload` and accepting
+`multipart/form-data` — on `http.server`, in a daemon thread, with a hand-rolled multipart
+parser. No new dependency, and nothing new on the voice loop's import path.
+
+### Sharing port 8765 was the first plan, and it is not possible
+
+`orchestrator/hud_bridge.py` serves the rig over HTTP from `websockets`' `process_request` hook,
+which is why the page and its socket live on one port and the rig can derive one from the other.
+The obvious move was to answer `POST /upload` from the same hook.
+
+It cannot be done. Checked against the installed library rather than assumed:
+
+```
+>>> [f.name for f in dataclasses.fields(websockets.http11.Request)]
+['path', 'headers', '_exception']
+```
+
+**A `Request` has no body.** websockets 15.0.1 parses the request line and the headers and stops;
+the bytes of a POST body stay in the transport buffer, where the sans-io frame parser will meet
+them next and make nothing good of them. Reading them means reaching into
+`protocol.reader` — a private stream on a library whose whole job is a different protocol — and
+putting a file transfer on top of it.
+
+So: a second port, 8767. Not 8766, which is `tools/face_stage.py`'s documented port and has to
+stay free so a stage can run beside the live assistant. The rig learns it as a constant with a
+`?up=host:port` override, mirroring the `?ws=` it already had.
+
+### The guard that is not about the network
+
+Binding to 127.0.0.1 stops the *network* reaching the endpoint. It does not stop **the browser on
+this machine**: a `multipart/form-data` POST is a CORS "simple request", so any page LB has open
+can fire one at any loopback port with no preflight. It cannot read the reply — and it does not
+need to, because the file has already landed.
+
+So an `Origin` header, when present, has to be a loopback http(s) origin. Absent — curl, a
+script — is allowed, because that is a shell on the box and a shell already has `cp`.
+
+`null` is refused, and that is the one worth writing down: `null` is what a `file://` page sends,
+and it is also what every sandboxed iframe on the internet sends. The rig only needs the
+paperclip while the assistant is running, and while it is running the page is served over HTTP by
+the bridge. Allowing `null` would have opened a large door for a case that cannot happen.
+
+### The rebuild does not run inside the turn, and that is the whole design
+
+`process_inbox_file` moves the file and then hands the index rebuild to a background thread.
+
+`tools/vector_db.build_vector_database()` imports `langchain_huggingface`, which imports torch
+and transformers, and then re-embeds every page under `data/`. These tools are called from
+**inside an agent turn**: blocking there is a face frozen mid-`thinking` with the microphone shut,
+an LLM call timing out underneath it, and `run_voice.py`'s idle timer dropping him to `sleeping`
+while the work is still running. That is the same bug `engine/turn.py` documents at its
+permission gate — *"he falls asleep while running a command"* — reached by a different road.
+
+So the tool returns two facts, and the prompt makes him say both: the file is filed, and it is
+**not searchable yet**. `index_status` is how he answers "is it ready".
+
+**And then it was measured, on the Pi, and "minutes" was wrong.**
+
+| stage | seconds |
+|---|---|
+| `import torch` | 2.1 |
+| `import langchain_huggingface` | 1.3 |
+| load `all-MiniLM-L6-v2` off the SD card | 8.0 |
+| **before a single chunk is embedded** | **11.4** |
+| per chunk after that | 14.4 ms |
+
+`media/data/2026-08-23-index-rebuild-familyhub.csv`, three trials, spread under 0.15 s. A cold
+page cache costs ~2 s more.
+
+Eleven seconds, not minutes — and every sentence in the repo that said "minutes" was corrected
+to the measurement, including the one the model reads. **The design does not change**, which is
+the useful part: an 11 s freeze on the turn path is still a face stuck in `thinking` with the
+microphone shut, and the per-chunk cost multiplies by the **whole corpus** rather than by the
+uploaded file, because `build_vector_database()` rebuilds both collections from scratch. So the
+first datasheet costs ~15 s and the fiftieth costs far more.
+
+What did change is what he SAYS. The tool used to promise "a few minutes on the Pi"; it now
+promises no duration at all, because the honest answer depends on how much has been uploaded and
+there is no version of that sentence which is true in both cases. D8 and D9 are both about
+confident numbers nobody would question — this is one that was written into a prompt.
+
+Measured, because the in-memory read and the 64 MB cap are choices with a cost and the cost is
+paid on the button:
+
+| uploaded | round trip | throughput |
+|---|---|---|
+| 16 KB — a schematic | **1.5 ms** | — |
+| 1 MB — a datasheet | **4.0 ms** | 265 MB/s |
+| 16 MB — a gerber bundle | 22.9 ms | 733 MB/s |
+| 60 MB — against the cap | 181 ms | 347 MB/s |
+
+Median of three, and the run-to-run spread at the top rung is real — a second run of the same
+script gave 220 ms for the 60 MB rung against this one's 181. That is an SSD and a scheduler,
+not a change in the code, and it is why the committed CSV is the number rather than any sentence
+here. Nothing about the conclusion moves: the top rung is a fifth of a second either way.
+
+`media/data/2026-08-23-upload-latency.csv`, `media/charts/upload-latency.svg`. Loopback on the
+Windows box, not the Pi — the meta file says so and says to re-run it there. The curve is flat
+across everything LB would actually attach, so the simple single-shot design is the right one and
+a streaming upload with a progress bar would be complexity bought with nothing.
+
+### Extraction is incremental now, and that is a quota fix
+
+`extract_deadlines_from_syllabi()` re-read every syllabus and spent one API call per file. Filing
+one uploaded syllabus into a folder holding five would have spent a quarter of the day's free tier
+(D3: 20 requests per model per day) re-reading four documents that had not changed. It now takes a
+`sources` argument and the file manager passes the one file that arrived.
+
+That merge has a failure mode which had to be closed before it could ship: an incremental run drops
+the target file's old deadlines from the carry-over set on the assumption it is about to re-read
+them. If the API call then fails — a 429, a network blip — those deadlines are gone, and the only
+symptom is a deadline banner that quietly stops appearing. The failure branch puts them back.
+
+### Two bugs the harnesses found, and one only a live run could
+
+`tools/verify_upload.py` is 134 checks. Two of them failed the first time on real defects:
+
+**`project_file` could never match.** `_CATEGORIES` is looked up by slug, and `_slug` strips the
+underscore — so the key `"project_file"`, a word the prompt offers the model *by name*, was
+unreachable. The keys are slugged at build time now. A lookup table whose keys are not in the form
+the lookup uses is a table with silent holes in it.
+
+**`relative_to(REPO_ROOT)` raises.** It was building the "Filed it to data/espressif/" sentence,
+inside a tool called from an agent turn — where a raised exception becomes a spoken traceback.
+
+And then the thing no harness had thought to ask. The first real end-to-end run, curl to
+paperclip endpoint to `file_manager --list`:
+
+```
+2 file(s) waiting in data/inbox/:
+  .gitkeep         (1 KB)  — category unclear
+  flat.kicad_sch   (6 KB)  — looks like a schematic
+```
+
+**`.gitkeep` is committed so the folder survives a fresh clone**, and it therefore looked to him
+like something LB had uploaded and wanted filed. The fix is one clause; the lesson is that the
+harness tested `data/inbox` against a *temporary directory it had made itself*, which by
+construction contained only what the test put there. The real directory has a file in it that the
+repository put there, and no test that builds its own world was ever going to see that.
+`tools/verify_upload.py` covers it now, including `.DS_Store` and `Thumbs.db`, which arrive at the
+same door.
+
+### The rule
+
+**When a request names a framework, check whether the framework is there before building on it.**
+The deliverable was a paperclip. FastAPI was one person's guess at the plumbing, made from outside
+the repo, and it was four days out of date. Building it as specified would have reversed D17
+without anyone deciding to — the commit message would have said "add upload endpoint" and the
+diff would have said "reinstate FastAPI, uvicorn and an ASGI stack on the voice loop's import
+path". A specification is evidence about the goal, not about the codebase.

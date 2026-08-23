@@ -4,6 +4,8 @@ from engine.models import AGENT_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from engine.split import SPOKEN_INSTRUCTION
 from tools.trace_calculator import calculate_ipc2221_trace_width
+from tools.file_manager import (FILE_INSTRUCTION, FILE_TOOLS, file_followup_prompt,
+                                run_file_calls)
 from tools.kicad_parser import analyze_kicad_pcb, extract_kicad_bom
 from tools.knowledge_vault import (VAULT_INSTRUCTION, VAULT_TOOLS, followup_prompt,
                                    run_vault_calls)
@@ -26,6 +28,11 @@ Both accept a full file path OR just the project's name, so pass whatever the us
 He is usually speaking rather than typing, so a name like "the amp board" is normal and correct
 to pass straight through.
 
+Those two tools look in `data/projects/` first — that is where a schematic goes when the user
+uploads one with the paperclip in the chat panel — and then in his own KiCad folder. So a board
+he uploaded a minute ago is readable by name straight away, with no build step. Use
+`list_project_files` when you need to know which projects exist or what is inside one.
+
 {chat_history}
 
 EXAMPLE 1:
@@ -43,7 +50,7 @@ Result: 3x 10k R_0805_2012Metric R1, R2, R4
 AI: Yes — three of them, R1, R2 and R4, all 0805.
 
 User Question: {question}
-""" + VAULT_INSTRUCTION + SPOKEN_INSTRUCTION
+""" + VAULT_INSTRUCTION + FILE_INSTRUCTION + SPOKEN_INSTRUCTION
 
 # The tools return complete, correct answers — and ones that cannot be said out loud. The trace
 # calculator carries "°C" and a bracketed millimetre conversion; the KiCad tools return a
@@ -79,10 +86,11 @@ Answer the user's question in one or two short sentences, using only what is abo
 # as "the model asked for a tool that does not exist". With one tool that could not happen.
 # With three it can.
 #
-# The two vault tools are appended rather than listed: they are the SAME two objects the
+# The vault and file tools are appended rather than listed: they are the SAME objects the
 # firmware and persona agents bind, imported from one place, so the three agents cannot end up
 # writing to three different folders or describing the tool three different ways.
-TOOLS = [calculate_ipc2221_trace_width, extract_kicad_bom, analyze_kicad_pcb] + VAULT_TOOLS
+TOOLS = ([calculate_ipc2221_trace_width, extract_kicad_bom, analyze_kicad_pcb]
+         + VAULT_TOOLS + FILE_TOOLS)
 _BY_NAME = {t.name: t for t in TOOLS}
 
 # How much of a tool result is shown to the summarising model. A 200-part BOM is thousands of
@@ -128,6 +136,18 @@ def run_hardware_agent(query: str) -> str:
             joined = "\n\n".join(text for _name, text in vault_results)
             return f"{summary}\n\nTool Execution Result: {joined}"
 
+        # Filing an upload is taken next, separately, and for the same reason as the vault:
+        # SUMMARY_PROMPT_TEMPLATE is written entirely around "a hardware tool measured this,
+        # quote it exactly", and pointing that at "Filed amp.kicad_sch to data/projects/" tells
+        # a model to quote numbers out of a sentence that has none. `file_followup_prompt`
+        # carries the one rule that matters here instead — never claim it is indexed yet.
+        file_results = run_file_calls(response.tool_calls)
+        if file_results:
+            summary = extract_text_content(
+                llm.invoke(file_followup_prompt(prompt, file_results)).content)
+            joined = "\n\n".join(text for _name, text in file_results)
+            return f"{summary}\n\nTool Execution Result: {joined}"
+
         tool_call = response.tool_calls[0]
         chosen = _BY_NAME.get(tool_call.get("name", ""))
         if chosen is None:
@@ -135,7 +155,8 @@ def run_hardware_agent(query: str) -> str:
             # if/elif chain reached as a NameError.
             return (f"I tried to use a tool called {tool_call.get('name')!r}, which I do not "
                     f"have. I can calculate IPC-2221 trace widths, read a KiCad schematic's "
-                    f"bill of materials, or summarise a KiCad board.\n"
+                    f"bill of materials, summarise a KiCad board, and file a document you "
+                    f"uploaded.\n"
                     f"SPOKEN: I reached for a tool I do not have, so I could not answer that.")
 
         # The tools themselves never raise — but binding the arguments can, when the model

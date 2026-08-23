@@ -288,6 +288,18 @@ greeting = [
 host = "127.0.0.1"
 port = 8765
 
+# The file-upload endpoint — the other end of the paperclip in the chat panel. It has to be a
+# SECOND port and cannot share 8765: that port is served by `websockets`, whose process_request
+# hook is handed a request with headers and no BODY, so a POST body is unreadable there.
+# engine/server.py has the full argument.
+#
+# 8766 is deliberately skipped — that is `tools/face_stage.py`'s documented port, and a stage
+# has to be able to run beside the live assistant.
+#
+# The rig hardcodes 8767 as its default and takes `?up=host:port` as an override, so changing
+# this means changing the URL the rig is opened with too.
+upload_port = 8767
+
 [brain]
 # Phase 2 — Tiers 1 and 3, reached only when Tier 0 could not answer. Which of the two gets a
 # question is decided by orchestrator/classify.py, and that is a privacy boundary: read it

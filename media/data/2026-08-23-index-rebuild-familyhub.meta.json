@@ -1,0 +1,19 @@
+{
+  "what": "Time an index rebuild spends before embedding its first chunk, plus the per-chunk rate afterwards.",
+  "why": "tools/file_manager.py runs the rebuild on a background thread and makes Mr Odd Ball say a document is not searchable yet. That costs LB an extra exchange, so it has to be justified by a number rather than by an assumption that embedding is slow.",
+  "conditions": {
+    "box": "familyhub \u2014 Linux 6.18.39+rpt-rpi-2712 aarch64",
+    "python": "3.13.5",
+    "torch": "2.13.0+cpu",
+    "model": "all-MiniLM-L6-v2, 384 dim, from the local HuggingFace cache",
+    "trials": 3,
+    "chunks_per_trial": 50,
+    "page_cache": "warm \u2014 the model had been loaded earlier in the session"
+  },
+  "headline": "11.4 s before a single chunk is embedded, then 14.4 ms/chunk",
+  "caveats": [
+    "Warm page cache. The FIRST rebuild after a reboot pays SD-card read for the model and measured ~2 s longer (13.5 s against 11.25 s) on the same box.",
+    "Per-chunk is measured on short synthetic strings and is a floor, not a datasheet.",
+    "A rebuild re-embeds the WHOLE corpus. The fixed cost is paid once per rebuild; the per-chunk cost multiplies by every document ever uploaded, not by the new one."
+  ]
+}

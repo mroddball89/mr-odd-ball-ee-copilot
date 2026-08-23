@@ -29,7 +29,7 @@ When nothing free matches, `router.py` uses Pydantic structured output
 | `ACADEMIC` | `agents/academic_agent.py` | your syllabi and coursework deadlines — answers from your own uploaded documents **only** |
 | `UTILITY` | `orchestrator/instant.py` | the free lookups, when the router is reached anyway |
 | `PERSONA` | `agents/persona_agent.py` | chit-chat and jokes — Mr Odd Ball himself |
-| `GENERAL` | `agents/persona_agent.py` | anything outside the scope |
+| `GENERAL` | `agents/persona_agent.py` | anything outside the scope — **and files whatever you upload** (`tools/file_manager.py`), whichever kind of document it turns out to be |
 
 ## The two security gates
 
@@ -55,10 +55,14 @@ a board has, and it parses the real file with `kiutils` rather than guessing.
 - `analyze_kicad_pcb` — reads a `.kicad_pcb` and reports copper layer count, nets, footprints
   placed and board thickness.
 
-Point it at a real path, or just say the project's name — a name is searched for under
-`ODDBALL_KICAD_ROOT` (set in `.env`; defaults to `~/kicad`), since a dictated file path rarely
-survives speech-to-text intact. If a name matches more than one file, it asks which one rather
-than guessing.
+Point it at a real path, or just say the project's name — a name is searched for in
+`data/projects/`, where anything you upload with the paperclip is filed, and then under
+`ODDBALL_KICAD_ROOT` (set in `.env`; defaults to `~/kicad`). Names rather than paths, because a
+dictated file path rarely survives speech-to-text intact. If a name matches more than one file,
+it asks which one rather than guessing.
+
+The FIRMWARE agent has both tools too, so "which pin is the HX711 clock on" is answered by
+reading your board rather than from a reference design it half-remembers.
 
 See `docs/DECISIONS.md` (D9) for why `kiutils` rather than a hand-rolled parser, and
 `tools/verify_kicad.py` for the harness.
@@ -81,10 +85,57 @@ python main.py
 
 `.env` is gitignored and must stay that way.
 
+## Uploading documents — the paperclip
+
+There is a paperclip beside the chat input. Press it, pick a file, and it is uploaded, sorted
+and indexed without touching the file system.
+
+```
+📎  ->  data/inbox/  ->  "I just uploaded ECE350_syllabus.pdf."  ->  he files it
+```
+
+The upload is a `POST /upload` to `engine/server.py` on port **8767** (stdlib `http.server`,
+started alongside the rig by `engine/run_voice.py`). On success the page injects that sentence
+into the chat as though you had typed it — so it reaches `router.py` like any other question,
+routes to GENERAL, and the persona agent calls `process_inbox_file`. If the filename does not
+make the category obvious, he asks which it is rather than guessing.
+
+| he files it as | it lands in | and then |
+|---|---|---|
+| `academic` | `data/academic/` | vector store **and** deadline calendar rebuild |
+| `datasheet` | `data/<folder>/` | vector store rebuild |
+| `schematic` | `data/projects/<project>/` | nothing — it is readable immediately |
+
+Accepts `.pdf`, `.txt`, `.md`, `.csv`, `.kicad_sch`, `.kicad_pcb`, `.kicad_pro`, `.kicad_prl`,
+`.net`, `.zip` and common image formats, up to 64 MB. A zip — a gerber bundle, a zipped KiCad
+project — is unpacked into the project folder, with any member pointing outside it skipped and
+reported.
+
+**An index rebuild runs in the background**, because it loads torch and re-embeds everything
+under `data/` — measured on the Pi at **11.4 s before it embeds anything**, then 14.4 ms per
+chunk, and the per-chunk part multiplies by your whole library rather than by the new file. He
+is prompted to say a document is *being indexed*, never that it is ready, and never to promise
+you a duration; ask him whether it is done and he checks. A KiCad file needs no rebuild at all —
+it is parsed off the disk at question time, so it is answerable the moment it is filed.
+
+The same thing from a shell, if you prefer one:
+
+```bash
+curl -F file=@ECE350_syllabus.pdf http://127.0.0.1:8767/upload
+python tools/file_manager.py --list
+python tools/file_manager.py --file ECE350_syllabus.pdf --as academic
+```
+
+The endpoint binds loopback only, and a request carrying an `Origin` header must carry a local
+one — a `multipart/form-data` POST is a CORS simple request, so without that check any page in
+any browser on the machine could write into the inbox. `docs/DECISIONS.md` (D21) has the rest,
+including why this is not FastAPI and why it cannot share port 8765 with the rig.
+
 ## Local document retrieval
 
-Put PDFs under `data/` (there are `arduino/`, `espressif/`, `raspberry_pi/` and `sensors/`
-subdirectories), then build the vector store once:
+Upload them with the paperclip and he does this for you. To do it by hand, put PDFs under
+`data/` (there are `arduino/`, `datasheets/`, `espressif/`, `raspberry_pi/` and `sensors/`
+subdirectories) and build the vector store once:
 
 ```bash
 python tools/vector_db.py
@@ -102,7 +153,8 @@ syllabus ground a firmware answer and be cited as one.
 
 ## Coursework and deadlines
 
-Drop your syllabi into `data/academic/`, then run both build steps:
+Upload your syllabi with the paperclip and say they are coursework. By hand, drop them into
+`data/academic/` and run both build steps:
 
 ```bash
 python tools/vector_db.py           # embeds them into the academic collection

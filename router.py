@@ -78,9 +78,16 @@ Available Agents:
 - ACADEMIC: coursework and class material — what a syllabus says, when something is due,
   grading or late-work policy, what a course covers. Grounded in the user's own uploaded
   syllabi, not general study help.
-- GENERAL: anything that fits nowhere above.
+- GENERAL: anything that fits nowhere above — and the route that FILES a document the user has
+  just uploaded through the chat panel, whether it is a syllabus, a datasheet or a schematic.
 
 Routing notes:
+- **A NEW UPLOAD IS ALWAYS GENERAL.** If the user says he has just uploaded, attached, added or
+  sent a file — "I just uploaded ECE350_syllabus.pdf", "here's the amp board schematic" — route
+  to GENERAL, whatever kind of file it appears to be. GENERAL is the only route that can FILE a
+  document, and it can file all three kinds. A question about what is INSIDE a file he uploaded
+  earlier is not an upload: route that normally, so "what's on the amp board" is still HARDWARE
+  and "when's the midterm" is still ACADEMIC.
 - Prefer UTILITY over MATH for a plain unit conversion or a looked-up constant. MATH is for
   problems that need working out, not for facts.
 - Prefer PERSONA over GENERAL when the user is being social.

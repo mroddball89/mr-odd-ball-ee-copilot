@@ -548,3 +548,135 @@ and still useful if a pywebview window is ever wanted for something else.
       `config/oddball.service`, where it reached the Pi's installed unit. systemd tolerated it;
       shell scripts do not. DEPLOY.md has the check and the fix script. Worth a pre-deploy hook
       rather than remembering.
+
+## Upload pipeline — one paperclip, three destinations (2026-08-23)
+
+LB: *"I want to be able to upload files directly through my existing chat UI"* — syllabi,
+datasheets and KiCad schematics, sorted to the right agent without touching the file system.
+
+**The spec named `engine/server.py` (FastAPI). There is no FastAPI server.** D17 deleted
+`ui/server.py` and dropped `fastapi` / `uvicorn` / `pywebview` from requirements on purpose, so
+the voice loop's import path stays clean. Re-adding an ASGI stack for one endpoint would
+reverse that decision. `POST /upload` is built at the path LB named — `engine/server.py` — on
+stdlib `http.server`, in a daemon thread, and it accepts `multipart/form-data` exactly as asked.
+
+It cannot share port 8765: that port belongs to `websockets`, whose `process_request` hook is
+handed a `Request` with **no body** (checked, websockets 15.0.1), so a POST body is unreadable
+there. So the upload server takes its own port, and the rig learns it as a constant with a
+`?up=` override, mirroring the existing `?ws=`.
+
+- [x] `engine/server.py` — `POST /upload`, multipart, saves to `data/inbox/`, returns the path
+- [x] Origin check: local http origins only, so a page on the internet cannot write to the inbox
+- [x] `tools/file_manager.py` — `process_inbox_file(filename, category, project)`, `list_inbox`,
+      `list_project_files`, `index_status`
+- [x] Rebuilds run on a BACKGROUND thread — `build_vector_database()` loads torch and re-embeds
+      everything; doing that inline would wedge the turn and freeze his face mid-`thinking`
+- [x] `data/projects/` for schematics; zips extracted with zip-slip guards
+- [x] `tools/kicad_parser.py` searches `data/projects/` as well as `ODDBALL_KICAD_ROOT`
+- [x] Bind the file tools to GENERAL/persona (the filer), HARDWARE and FIRMWARE
+- [x] Router: an upload announcement routes to GENERAL, whatever the file is
+- [x] `hud/face-preview.html` — paperclip beside the input, native picker, fetch, and the
+      injected "I just uploaded X." line
+- [x] `tools/verify_upload.py` — parser, sanitiser, live round trip
+- [x] `tools/verify-rig.mjs` must still pass: one `<script>` block, every `$("id")` in the markup
+
+### Review — 2026-08-23
+
+Done and proved. `tools/verify_upload.py` is **134 checks, all green**: the multipart parser
+(including a payload whose own bytes contain the boundary), the filename sanitiser's traversal
+table, the origin table, the picker's `accept` list against the server's allow-list, a live HTTP
+round trip with all five refusals, the three filing destinations, and the agent wiring.
+
+Everything that already existed still passes, unchanged: `verify-rig.mjs` 38, `verify_kicad`
+168, `verify_engine` 106, `verify_split` 93, `verify_typed` 81, `verify_agents` 53, `verify_chat`
+39, `verify_academic` 25.
+
+Run end to end against the real tree, not only against fixtures — curl to the endpoint, then
+`--list`, then `--as schematic`, then `extract_kicad_bom("amp board")` returning the actual BOM
+of the uploaded file by its spoken name. That run is what found `.gitkeep` being offered for
+filing ([[L15]]).
+
+**Measured:** 16 KB in 1.5 ms, 1 MB in 4.0 ms, 60 MB (against the cap) in 181 ms.
+`media/charts/upload-latency.svg`, `media/data/2026-08-23-upload-latency.csv`, regenerable with
+`media/scripts/measure_upload.py`. The curve is flat across anything LB would actually attach,
+which is what says the single-shot in-memory design is right and a streaming upload with a
+progress bar would be complexity bought with nothing.
+
+Three bugs found and fixed during the work, all recorded: `project_file` unreachable through the
+category table ([[L16]]), `relative_to()` raising inside a tool called from a turn ([[L16]]), and
+`.gitkeep` listed as a pending upload ([[L15]]).
+
+### What was NOT built as asked, and why
+
+The specification said FastAPI. **This repo deleted FastAPI on 2026-08-19 (D17)** and
+`requirements.txt` still carries the note. The endpoint is at `engine/server.py`, the path LB
+named, accepting `multipart/form-data` as he asked, on stdlib `http.server` — no new dependency
+and nothing new on the voice loop's import path. D21 and [[L14]] have the argument.
+
+It could not share port 8765 either: `websockets.http11.Request` has fields `path`, `headers`,
+`_exception` and **no body**, checked against the installed 15.0.1. So 8767, with `?up=host:port`
+on the rig mirroring the `?ws=` it already had.
+
+### Deployed 2026-08-23, and the deploy found four things
+
+Steps 1-4 and 6 of the runbook are **done on the Pi** (`familyhub`, 10.0.0.96). `verify_upload`
+138/138 there, both ports bound in ~4 s, `NRestarts=0`, no errors in `oddball.log`. A real
+schematic went through the whole chain — `curl` to the endpoint, `--list`, `--as schematic`,
+then `kicad_parser "amp board"` returning the actual BOM by the dictated name. Refusals checked
+against the live service: 415 bad extension, 403 foreign origin, 415 non-multipart. Test
+artifacts removed; `data/` is back to exactly what it was.
+
+**1. `/healthz` and `list_inbox` disagreed about what "waiting" means.** healthz said 1, the tool
+said 0, both describing an inbox holding only the committed `.gitkeep`. I had taught the tool to
+skip dotfiles and left the endpoint counting them — two definitions of one thing, which is the
+mistake `engine/core.py` already warns about for the conversation log. `pending_uploads()` now
+lives in `engine/server.py` and the tool calls it; `INBOX_DIR` is imported rather than restated.
+[[L15]] again, one layer up.
+
+**2. `python tools/file_manager.py` stopped working.** The fix above added a module-level
+`from engine.server import ...`, and running the file as a SCRIPT puts `tools/` on `sys.path`,
+not the repo root. Every check passed while that was broken, because the harness imports the
+module. The harness now runs both CLIs as subprocesses.
+
+**3. The deploy silently restored two deleted PDFs.** `data/**/*.pdf` is gitignored, so `git
+status` says nothing — and `tar` ships it anyway. `pi_cam3.pdf` and `pi_cam3_noir_wide.pdf`
+came back onto the Pi, where D12 had deliberately removed them for being image-only. Removed
+again, `data/` restored, and DEPLOY.md now has the hazard and `--exclude=data`.
+
+**4. "Minutes" was wrong, and it was written into a prompt.** Measured on the Pi: **11.4 s**
+before a single chunk is embedded (torch 2.1 s, langchain_huggingface 1.3 s, model off the SD
+card 8.0 s), then 14.4 ms/chunk. Three trials, spread under 0.15 s.
+`media/data/2026-08-23-index-rebuild-familyhub.csv`, `media/scripts/measure_index_rebuild.py`.
+
+The design does not change — an 11 s freeze on the turn path is still unacceptable, and the
+per-chunk cost multiplies by the whole corpus rather than the new file. What changed is what he
+SAYS: every "a few minutes" was removed, and the tools now promise **no duration at all**,
+because the honest answer depends on how much has been uploaded.
+
+### Still open
+
+- [ ] **Step 5 — the paperclip itself — still needs a human.** Everything up to it is proved on
+      the Pi; pressing a button in a window on a physical display is not something a deploy can
+      do. `hud/float.py` logs when WebKit asks for a chooser, so the log separates "no click"
+      from "no dialog". `docs/DEPLOY.md` has the six-step runbook
+      ordered so each step narrows where a failure is. Step 5 is the only claim no harness can
+      ordered so each step narrows where a failure is.
+- [ ] Re-run `media/scripts/measure_upload.py` on the Pi. The committed upload numbers are still
+      Windows loopback and the meta file says so. The rebuild fixed cost IS now measured there.
+- [ ] **Still no PDFs on the Pi.** `data/` holds a README and three `.gitkeep`s, and `chroma_db`
+      has never been built — so no upload has yet triggered a real rebuild end to end, and the
+      per-chunk figure has not been checked against an actual datasheet. This is the same open
+      item as "Put real PDFs in", and the first real syllabus upload will close both.
+- [x] ~~`config/oddball.toml` gained `[hud] upload_port` and `settings.py` validates strictly.~~
+      Now **step 1 of the Pi runbook** in `docs/DEPLOY.md`, because the failure mode is "he
+      stopped starting after the deploy" and it should be the first thing ruled out.
+- [ ] The three-way tool split in `agents/firmware_agent.py` answers from the FIRST family that
+      matched — vault, then files, then KiCad — so a model asking for a schematic AND a vault
+      write in one turn silently loses the vault note. Deliberate for now; the case has not been
+      seen. If it ever is, the fix is one prompt holding all three result sets.
+- [x] ~~A file uploaded while the assistant is not running sits in the inbox and nobody is told.~~
+      `engine/run_voice.py` now logs what is waiting at startup. He still does not *say* it —
+      speaking an inbox backlog unprompted would be an alarm, and this is a reminder — so the
+      log is the channel. Revisit if a file ever goes missing in practice.
+- [ ] The upload endpoint has no rate limit. It is loopback-only with an Origin check, so the
+      threat is a script LB ran himself, but a runaway loop would fill the SD card.

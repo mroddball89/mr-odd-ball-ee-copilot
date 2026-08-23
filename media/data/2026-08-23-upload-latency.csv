@@ -1,0 +1,12 @@
+"# Mr Odd Ball - POST /upload round trip, by file size"
+"# measured 2026-08-23 on DESKTOP-3NFU5EK (Windows 11, AMD64)"
+"# python 3.12.10, engine/server.py on http.server, loopback"
+"# timed: FormData sent -> response body read. NOT timed: the OS file dialog, or the background index rebuild."
+"# 3 timed trials per size, one discarded warm-up each"
+bytes,label,note,trials,median_ms,min_ms,max_ms,mb_per_s
+16384,16 KB,a KiCad schematic,3,1.5,1.5,1.5,10.9
+262144,256 KB,a short syllabus,3,1.8,1.7,1.8,148.6
+1048576,1 MB,a typical datasheet,3,4.0,3.8,4.0,265.2
+4194304,4 MB,a long reference manual,3,6.7,6.4,6.8,624.3
+16777216,16 MB,a gerber bundle,3,22.9,22.9,24.1,733.1
+62914560,60 MB,just under the 64 MB cap,3,181.3,173.8,186.9,346.9

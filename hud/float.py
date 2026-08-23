@@ -213,6 +213,34 @@ def build_window(app: Gtk.Application, url: str, fullscreen: bool, decorated: bo
     transparent.red = transparent.green = transparent.blue = transparent.alpha = 0.0
     view.set_background_color(transparent)
 
+    # The file chooser, logged but NOT handled.
+    #
+    # `?chat=1` has a paperclip in it now, and pressing it opens `<input type="file">`. WebKitGTK
+    # shows its own dialog for that when nothing connects this signal — so the handler returns
+    # **False**, meaning "not handled", and the default runs exactly as it would have.
+    #
+    # It is here purely so the journal can answer one question. This is the only part of the
+    # upload pipeline that cannot be tested off the Pi: `tools/verify_upload.py` proves the
+    # endpoint and the filing on any box, but whether a GTK dialog appears over a transparent
+    # undecorated window on labwc is a claim about pixels. If LB presses the paperclip and
+    # nothing happens, this line separates "WebKit never saw the click" from "WebKit saw it and
+    # the dialog did not come up", which are different bugs with different fixes.
+    def on_file_chooser(_view, _request) -> bool:
+        print("float: page asked for a file chooser — letting WebKit show its own",
+              file=sys.stderr, flush=True)
+        return False                      # False = not handled = WebKit's default dialog
+
+    # Guarded, because this whole block is a LOG LINE and a log line must never cost him his
+    # face. PyGObject raises TypeError on an unknown signal name, and this one was written on a
+    # box with no WebKitGTK to check it against — if `run-file-chooser` is spelled differently
+    # in 6.0 than in the docs, the alternative to this try is a window that does not open at
+    # all, which is a far worse trade than losing the diagnostic that was meant to help.
+    try:
+        view.connect("run-file-chooser", on_file_chooser)
+    except TypeError as exc:
+        print(f"float: cannot watch the file chooser ({exc}) — uploads are unaffected",
+              file=sys.stderr, flush=True)
+
     settings = view.get_settings()
     # A rig is not a browser: nothing here should be able to open a window, run a plugin, or
     # keep a back/forward list. Turning these off is also the honest configuration to measure,
