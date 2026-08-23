@@ -529,10 +529,14 @@ def s7_free_intent() -> None:
                   f"{utterance!r} is a launch of {expect!r}",
                   f"got {req.app!r}" if req else "not recognised as a launch")
 
-        # A multi-word Name is reachable by its TAIL. Added 2026-08-23 (D27): "fire up the
-        # schematic editor" and "pull up the pcb editor" both failed here and fell through to
-        # the paid router, even though `resolve()` answers them on its tier 4. The catalogue
-        # knew; `_targets` never asked. On this fixture set the same rule reaches VLC.
+        # A multi-word Name is reachable by any contiguous run of it. Added 2026-08-23 (D27):
+        # "fire up the schematic editor" and "pull up the pcb editor" both failed here and fell
+        # through to the paid router, even though `resolve()` answers them on its tier 4. The
+        # catalogue knew; `_targets` never asked. On this fixture set the rule reaches VLC.
+        #
+        # The MIDDLE of a name has to work, not just its tail — the Pi ships
+        # "KiCad Schematic Editor (Standalone)", where a trailing run gives only "schematic
+        # editor standalone" and the first version of this fix therefore missed on hardware.
         for utterance, expect in [
             ("open the media player", "media player"),
             ("open media player", "media player"),
@@ -584,6 +588,50 @@ def s7_free_intent() -> None:
                       for alias in _cat.ALIASES),
                   "an alias for an app that is NOT installed resolves to nothing",
                   "the alias table must never imply an app exists")
+
+        # The names THIS PI ships, copied exactly. The bracketed qualifier is the whole point:
+        # the distinguishing words are in the middle, so a trailing-run rule yields only
+        # "schematic editor standalone" and misses. Verified on hardware 2026-08-23.
+        with tempfile.TemporaryDirectory() as _t:
+            _d = Path(_t)
+            for _id, _name in [
+                ("org.kicad.kicad", "KiCad"),
+                ("org.kicad.eeschema", "KiCad Schematic Editor (Standalone)"),
+                ("org.kicad.pcbnew", "KiCad PCB Editor (Standalone)"),
+                ("org.kicad.gerbview", "KiCad Gerber Viewer"),
+                ("org.kicad.pcbcalculator", "KiCad PCB Calculator"),
+            ]:
+                (_d / f"{_id}.desktop").write_text(
+                    f"[Desktop Entry]\nType=Application\nName={_name}\n"
+                    f"Exec={_id.split('.')[-1]}\nCategories=Electronics;Science;\n",
+                    encoding="utf-8")
+            kicad_cat = load_catalogue((_d,))
+            _cat.cached_catalogue = lambda: kicad_cat
+
+            for utterance, want in [
+                ("fire up the schematic editor", "KiCad Schematic Editor (Standalone)"),
+                ("pull up the pcb editor", "KiCad PCB Editor (Standalone)"),
+                ("open the gerber viewer", "KiCad Gerber Viewer"),
+                ("open the pcb calculator", "KiCad PCB Calculator"),
+                ("open kicad", "KiCad"),
+            ]:
+                req = ask(utterance)
+                got = _cat.resolve(req.app, kicad_cat) if req else None
+                check(req is not None and got.ok and got.app.name == want,
+                      f"{utterance!r} -> {want!r}",
+                      f"got {req.app!r} -> {got.app.name if got and got.ok else got}"
+                      if req else "not recognised as a launch")
+
+            # "pcb editor" and "pcb calculator" are one word apart and must not be confused.
+            check(_cat.resolve("pcb editor", kicad_cat).app.name.startswith("KiCad PCB Editor")
+                  and _cat.resolve("pcb calculator", kicad_cat).app.name.endswith("Calculator"),
+                  "two names sharing a word still resolve apart")
+
+            # The anchor governs here too, and a bare qualifier names nothing.
+            for utterance in ["how do i open the schematic editor", "what is the pcb editor",
+                              "open the standalone"]:
+                check(ask(utterance) is None, f"{utterance!r} is NOT a launch",
+                      f"claimed {ask(utterance)}")
 
         _cat.cached_catalogue = lambda: CATALOGUE
 

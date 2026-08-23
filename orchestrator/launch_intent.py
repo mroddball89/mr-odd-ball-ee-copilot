@@ -158,25 +158,30 @@ def _targets(catalogue, roles) -> tuple[str, ...]:
     # a nickname missing from here is a nickname the free path cannot recognise.
     phrases |= set(ALIASES)
 
-    # TRAILING sub-phrases of a multi-word Name, so "KiCad Schematic Editor" is also reachable
-    # as "schematic editor" and "KiCad PCB Editor" as "pcb editor". Measured 2026-08-23: both
-    # of those failed here and fell through to the paid router, even though
-    # `app_catalogue.resolve()` resolves them perfectly well on its tier 4 (a whole-word phrase
-    # in the Name). The catalogue knew the answer; this function never asked the question.
+    # CONTIGUOUS sub-phrases of a multi-word Name, so "KiCad Schematic Editor (Standalone)" is
+    # reachable as "schematic editor". Measured 2026-08-23: that utterance and "pcb editor"
+    # both fell through to the paid router, even though `app_catalogue.resolve()` answers them
+    # on its tier 4 (a whole-word phrase in the Name). The catalogue knew; this function, which
+    # decides what counts as naming an app at all, never asked.
     #
-    # **Two words minimum.** A single trailing word is "editor", "manager", "files" — exactly
-    # the words `ROLES` already owns and deliberately maps to a CATEGORY rather than to
-    # whichever app happens to end in them. Adding them here would let "open the editor" pick
-    # KiCad's schematic editor over a text editor, which is the ambiguity ROLES exists to
-    # resolve. Leading words are skipped for the same reason: "kicad schematic" is not a thing
-    # anybody says, and "visual studio" would shadow "visual studio code".
+    # **Trailing runs are not enough, and the Pi is why.** The first fix here took only the
+    # tail of a name, which works for "KiCad Schematic Editor" and fails on the name this Pi
+    # actually ships: the distinguishing words sit in the MIDDLE, and a trailing run yields
+    # "schematic editor standalone" — a phrase nobody says. Every contiguous run is the general
+    # form, and the qualifier in brackets stops mattering.
+    #
+    # **Two words minimum.** A single word is "editor", "manager", "files", "calculator" —
+    # exactly what `ROLES` owns and deliberately maps to a CATEGORY rather than to whichever
+    # app happens to contain it. Adding them here would let "open the editor" pick KiCad's
+    # schematic editor over a text editor, which is the ambiguity ROLES exists to resolve.
     #
     # Ambiguity is still never guessed — `resolve()` returns every hit and `propose_launch`
     # asks. This widens what can be NAMED, not what can be assumed.
     for app in catalogue:
         words = _norm(app.name).split()
-        for i in range(1, max(1, len(words) - 1)):
-            phrases.add(" ".join(words[i:]))
+        for size in range(2, len(words)):
+            for i in range(len(words) - size + 1):
+                phrases.add(" ".join(words[i:i + size]))
 
     return tuple(sorted((p for p in phrases if p), key=len, reverse=True))
 
