@@ -10,9 +10,20 @@ Date:    2026-08-21 (ported to the mediapipe Tasks API 2026-08-22)
     python tools/gesture_control.py --watch          # keep reading, ctrl-C to stop
     python tools/gesture_control.py --backend        # which mediapipe API is in use
 
-Returns exactly one of `THUMBS_UP`, `OPEN_PALM`, `NONE` or `NO_CAMERA`. Wired into the
-terminal security prompts in `agents/os_agent.py` and `agents/web_agent.py`: a thumbs up is a
-yes, and anything else falls through to the keyboard.
+    python tools/live_test_gestures.py               # the camera window, for tuning these
+
+Returns exactly one of `PINCH`, `CLAP`, `CLAW`, `FLICK`, `THUMBS_UP`, `OPEN_PALM`, `NONE` or
+`NO_CAMERA`. Wired into the terminal security prompts in `agents/os_agent.py` and
+`agents/web_agent.py`: **a thumbs up is a yes, and every other token falls through to the
+keyboard** — which is why the six-gesture vocabulary below costs the gate nothing.
+
+`FLICK` needs motion, so it needs consecutive frames. `get_gesture()` reads ONE frame from a
+camera it then closes, in a child process that then exits (see `_ask_sidecar`), so there is no
+previous frame for it to have moved from: **the one-shot path never returns `FLICK`.** It is
+produced by `classify_stream()`, the continuous path, which `tools/live_test_gestures.py` and
+any future always-on loop use. Naming it in `_VALID` anyway is deliberate — the token is part
+of the vocabulary, and a whitelist that omits it would silently turn a future streaming
+sidecar's honest answer into `NO_CAMERA`.
 
 ## Two mediapipe APIs and a sidecar, because the Pi forced all three (D14, D15)
 
@@ -111,6 +122,62 @@ A gesture that fails both is `NONE`, which declines to the keyboard — the safe
 Image coordinates run y-DOWN, so "above" is a smaller y. Every comparison below is in
 normalised landmark space (0..1 of the frame), so it is resolution-independent.
 
+## Four more gestures, and the reason three of them are tested BEFORE the thumbs up
+
+The vocabulary grew on 2026-08-23 to the set in `jaredrhod/barehands` — `PINCH`, `CLAP`,
+`CLAW`, `FLICK` — so the assistant can be driven by hand and not only *approved* by hand.
+Adding them to a module whose output is wired into a security gate has one non-obvious
+consequence, and it is the most important thing on this page.
+
+**A claw and a pinch both pass the old thumbs-up test.** That test is "thumb above the index
+knuckle, above the wrist, and no finger *extended*", where extended means `tip.y < pip.y`. A
+claw holds every fingertip below its PIP — so it is not extended. A pinch curls the index down
+to meet the thumb — so it is not extended either. Both therefore satisfy `not any(extended)`,
+and both put the thumb high. Under the pre-2026-08-23 classifier, **a claw at the camera was a
+`THUMBS_UP`**, and on `agents/os_agent.py`'s path a `THUMBS_UP` runs a shell command.
+
+That was survivable while nobody made claws at the camera on purpose. It stops being
+survivable the moment "the claw" is a gesture LB actually performs, which is what this change
+makes it. So the collision is closed, by ordering:
+
+    CLAP  ->  OPEN_PALM  ->  PINCH  ->  CLAW  ->  THUMBS_UP  ->  NONE
+
+and by picking a discriminator that separates a fist from a claw cleanly rather than by
+threshold luck. **A real fist tucks the fingertips BELOW the knuckles; a claw holds them
+ABOVE.** So:
+
+    thumbs up   tip.y > mcp.y     tips below the MCP line   (curled into the palm)
+    claw        tip.y < mcp.y     tips above the MCP line   (strained, half-open)
+                pip.y < tip.y     ...but still below the PIP  (not extended)
+
+Those two cases cannot both be true, so a claw can never reach the `THUMBS_UP` branch and a
+genuine thumbs up is never eaten by the claw branch. Mutually exclusive **by construction** —
+the same property `OPEN_PALM` has had since 2026-08-19, and for the same reason.
+
+Note what this did NOT do: **the thumbs-up test itself is unchanged.** Not one threshold in it
+moved. LB has reported missed thumbs-ups before (see `WARMUP_FRAMES` above) and tightening the
+approval geometry in the same commit that adds four gestures would have made the next missed
+approval impossible to attribute. The new gestures are *guards placed in front of* the gate,
+not edits to it. The net effect on the gate is strictly fewer false approvals and exactly the
+same true ones.
+
+## Distances are measured in palm-lengths, not in frame-widths
+
+`PINCH` is "landmark 4 touches landmark 8", and the obvious implementation compares their
+Euclidean distance to a constant. That constant is wrong at every camera distance but one:
+landmarks are normalised to the FRAME, so a hand at arm's length is half the size of the same
+hand up close, and a fixed 0.05 that works at 40 cm reads every relaxed hand as a pinch at 80 cm.
+
+So every distance here is divided by `_hand_scale()` — the wrist-to-middle-knuckle span, which
+is the one length on a hand that does not change when the fingers move. A pinch is then
+"the gap is under 0.40 **palm-lengths**", which is true at any distance from the camera and on
+any size of hand. Same trick for the `CLAP` gap.
+
+The thresholds below are starting values, chosen from geometry rather than measured, and they
+are exactly what `tools/live_test_gestures.py` exists to tune: it prints the live ratio next to
+the gesture so a threshold can be moved against something observed instead of guessed. That is
+the same discipline `WARMUP_FRAMES` is still waiting on.
+
 ## What this is not
 
 It is not a second authority. The blocklist in `tools/os_controller.py` runs regardless of how
@@ -123,6 +190,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
+from collections import deque
 from pathlib import Path
 
 LOG = logging.getLogger("oddball.gesture")
@@ -145,6 +214,16 @@ MODEL_URL = ("https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 FRAME_FPS = 15
+
+# 2 since 2026-08-23, because CLAP is a two-hand gesture and a detector capped at one hand can
+# never see it. It is not free — mediapipe runs the landmark model once PER HAND, so a frame
+# with two hands in it costs about twice the 47 ms inference measured in the budget above.
+# That is ~2.26 s instead of ~2.22 s for an approval, which is inside the noise of that table.
+#
+# It does not weaken the gate. Hands are classified INDIVIDUALLY and then resolved by
+# `_PRIORITY`, so a second hand can only ever add a gesture of its own — it cannot combine
+# with the first to manufacture a THUMBS_UP that neither hand is making.
+MAX_HANDS = 2
 
 # The first frame off a freshly opened camera is auto-exposure garbage: on the Pi's module it
 # is usually near-black, and a black frame reliably detects no hand. Pull and discard a few.
@@ -174,6 +253,8 @@ MIN_TRACKING_CONFIDENCE = 0.5
 # and thumbs-up tests come to look identical to a reviewer. Identical in both mediapipe APIs.
 WRIST = 0
 THUMB_TIP = 4
+INDEX_TIP = 8
+MIDDLE_MCP = 9      # the far end of `_hand_scale()`; see the palm-lengths section above
 # (mcp, pip, tip) for each of the four fingers that must curl for a thumbs up.
 FINGERS = (
     (5, 6, 8),      # index
@@ -181,6 +262,40 @@ FINGERS = (
     (13, 14, 16),   # ring
     (17, 18, 20),   # pinky
 )
+# The knuckle row, wrist included: the five points that move together as one rigid palm no
+# matter what the fingers are doing. Their mean is the palm centroid, which is what `FLICK`
+# tracks — a fingertip would add finger motion to hand motion and read a wave as a flick.
+PALM = (WRIST, 5, 9, 13, 17)
+
+# --- thresholds for the four gestures added 2026-08-23 ----------------------------------
+#
+# Every one of these is a RATIO against `_hand_scale()`, not a raw normalised distance, for
+# the reason in the palm-lengths section above. All are geometry-derived starting values,
+# NOT measurements — `tools/live_test_gestures.py` prints the live ratio so they can be moved
+# against something observed. Do not nudge them from memory of one bad frame.
+
+# Thumb tip to index tip, in palm-lengths. Touching is ~0.15; an index pointing away with the
+# thumb out is ~1.3. 0.40 sits in the empty middle with room on both sides.
+PINCH_MAX_RATIO = 0.40
+
+# Two palms, centroid to centroid, in palm-lengths, for a clap. Hands actually touching are
+# ~1.0 apart centroid-wise (a palm-width); 1.8 allows the approach and the rebound without
+# reaching across the frame for an unrelated second hand.
+CLAP_MAX_GAP_RATIO = 1.8
+
+# How far above the wrist a fingertip must sit to count as "pointing up" for a clap, again in
+# palm-lengths. A hand held flat edge-on to the camera collapses toward 0.
+CLAP_MIN_FINGER_RISE = 0.6
+
+# FLICK: an open palm crossing the frame. Speed is in frame-widths per second, measured over
+# a short window of recent frames.
+#
+# The travel floor is what stops jitter being a flick: at 6.6 fps a single noisy landmark can
+# look fast over one 150 ms gap, but it cannot also have MOVED a fifth of the frame.
+FLICK_WINDOW_S = 0.45          # how far back to look
+FLICK_MIN_SPEED = 1.1          # frame-widths per second
+FLICK_MIN_TRAVEL = 0.18        # normalised x, floor on total displacement
+FLICK_HISTORY = 12             # frames kept; ~1.8 s at this webcam's 6.6 fps
 
 # Set ODDBALL_GESTURE=0 to keep the camera shut and go straight to the keyboard. Wanted on the
 # Windows authoring box, where `--text` mode is used for debugging agents and opening a webcam
@@ -205,7 +320,20 @@ _IS_SIDECAR = os.environ.get("ODDBALL_GESTURE_SIDECAR", "") == "1"
 # keyboard.
 SIDECAR_TIMEOUT_S = 20.0
 
-_VALID = ("THUMBS_UP", "OPEN_PALM", "NONE", "NO_CAMERA")
+# The sidecar protocol whitelist. The parent accepts a child's stdout token ONLY if it is in
+# here — anything else becomes NO_CAMERA (see `_ask_sidecar`), so a token added to `_classify`
+# and forgotten here would be silently downgraded to "the camera is broken".
+_VALID = ("PINCH", "CLAP", "CLAW", "FLICK", "THUMBS_UP", "OPEN_PALM", "NONE", "NO_CAMERA")
+
+# Which gesture wins when the two hands in frame disagree. Most deliberate first; the two
+# permissive resting poses last. `CLAP` is absent because it is a property of the PAIR of
+# hands, not of either one, so it is decided before this list is consulted.
+#
+# `THUMBS_UP` outranking `OPEN_PALM` is the one entry worth defending: a hand held open while
+# the other gives a deliberate thumbs up is the approval, and reading it as OPEN_PALM would
+# just send LB to the keyboard. It cannot manufacture an approval — a hand only reaches this
+# list already classified, and no non-thumbs-up pose classifies as THUMBS_UP.
+_PRIORITY = ("PINCH", "CLAW", "THUMBS_UP", "OPEN_PALM", "NONE")
 
 
 def sidecar_python() -> str:
@@ -298,12 +426,115 @@ def _extended(landmarks, pip: int, tip: int) -> bool:
     return landmarks[tip].y < landmarks[pip].y
 
 
+def _dist(a, b) -> float:
+    """Plain 2-D Euclidean distance between two landmarks, in normalised frame units.
+
+    z is deliberately ignored. mediapipe's z is a relative depth estimate with no metric
+    meaning and far more noise than x and y, and every test here is about a shape on the
+    screen — including the pinch, where the fingers touch in the image plane too.
+    """
+    return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
+
+
+def _hand_scale(landmarks) -> float:
+    """The palm length: wrist to middle knuckle, in normalised frame units.
+
+    This is the yardstick every other distance in this module is divided by, so that a
+    threshold means the same thing at 40 cm from the camera and at 80 cm. It is measured
+    across the PALM rather than along a finger because the palm is rigid — it is the same
+    length whether the hand is open, clawed or in a fist, which is precisely what a yardstick
+    has to be.
+
+    Never returns 0: a degenerate hand (every landmark stacked on one point, which happens on
+    a garbage frame) would otherwise divide by zero at a security prompt.
+    """
+    return max(_dist(landmarks[WRIST], landmarks[MIDDLE_MCP]), 1e-6)
+
+
+def _palm_centroid(landmarks) -> tuple[float, float]:
+    """Mean of the wrist and the four knuckles — where the hand *is*, ignoring the fingers."""
+    xs = [landmarks[i].x for i in PALM]
+    ys = [landmarks[i].y for i in PALM]
+    return sum(xs) / len(xs), sum(ys) / len(ys)
+
+
+def _is_pinch(landmarks) -> bool:
+    """Thumb tip touching index tip — landmarks 4 and 8, within 0.40 palm-lengths."""
+    return (_dist(landmarks[THUMB_TIP], landmarks[INDEX_TIP]) / _hand_scale(landmarks)
+            < PINCH_MAX_RATIO)
+
+
+def _is_claw(landmarks) -> bool:
+    """The strained claw: every fingertip below its PIP but still above its MCP.
+
+    The lower bound (below PIP) is what makes it not an open palm. The upper bound (above MCP)
+    is what makes it not a fist, and therefore what keeps a claw from reaching the THUMBS_UP
+    branch — see the header. All four fingers must agree, because three-of-four admits most of
+    the ways a hand can be half-closed, and the point of this gesture is that it is deliberate.
+    """
+    return all(landmarks[pip].y < landmarks[tip].y < landmarks[mcp].y
+               for mcp, pip, tip in FINGERS)
+
+
+def _fingers_point_up(landmarks) -> bool:
+    """All four fingers extended AND the hand held upright — for the clap.
+
+    `_extended` alone only says a tip is above its own middle joint, which stays true for a
+    hand lying on its side. A clap is two upright palms, so the tips must also rise clear of
+    the wrist by a real fraction of a palm length.
+    """
+    if not all(_extended(landmarks, pip, tip) for _mcp, pip, tip in FINGERS):
+        return False
+    rise = min(landmarks[WRIST].y - landmarks[tip].y for _mcp, _pip, tip in FINGERS)
+    return rise / _hand_scale(landmarks) > CLAP_MIN_FINGER_RISE
+
+
+def _is_clap(hands) -> bool:
+    """Two upright open palms, held close together.
+
+    ## What this does not attempt
+
+    The full description is "palms *facing each other*", and this does not test that. Palm
+    orientation from 21 landmarks means recovering the palm normal and comparing two of them,
+    which is doable and is not robust at this camera's resolution and frame rate — the
+    wrist/index/pinky triangle is nearly degenerate exactly when the palms face each other
+    edge-on to the lens, which is the pose it would have to be measured in.
+
+    So the test is the observable part: **two hands, both upright and open, close together.**
+    Stating that plainly is better than a normal-vector calculation that looks rigorous and
+    fires at random, and it is why this returns a clean bool rather than a confidence.
+
+    The cost of the simplification is that two open palms held side by side an inch apart, not
+    facing, also read as CLAP. Nothing in the security gate is reachable from CLAP, so the
+    cost is a wrong app command, not a wrong approval.
+    """
+    if len(hands) != 2:
+        return False
+    first, second = hands[0], hands[1]
+    if not (_fingers_point_up(first) and _fingers_point_up(second)):
+        return False
+
+    ax, ay = _palm_centroid(first)
+    bx, by = _palm_centroid(second)
+    gap = ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+    scale = (_hand_scale(first) + _hand_scale(second)) / 2
+    return gap / scale < CLAP_MAX_GAP_RATIO
+
+
 def _classify(landmarks) -> str:
-    """One hand's 21 landmarks -> 'THUMBS_UP', 'OPEN_PALM' or 'NONE'.
+    """One hand's 21 landmarks -> 'PINCH', 'CLAW', 'THUMBS_UP', 'OPEN_PALM' or 'NONE'.
 
     Pure, so it is testable without a camera, without a model file and without mediapipe
-    installed at all: hand it any sequence of 21 objects with a `.y`. Shared by both backends,
-    which is the reason the fork above costs almost nothing.
+    installed at all: hand it any sequence of 21 objects with `.x` and `.y`. Shared by both
+    backends, which is the reason the fork above costs almost nothing.
+
+    `CLAP` is not here — it is a property of two hands, so it lives in `_classify_frame`.
+    `FLICK` is not here either — it is a property of two *moments*, so it lives in
+    `classify_stream`. What is left is what one hand looks like right now.
+
+    **The order of these branches is a safety property, not a style choice.** See the header:
+    PINCH and CLAW both satisfy the thumbs-up test's "no finger extended" clause, so both must
+    be resolved before it, or a claw at the camera approves a shell command.
     """
     extended = [_extended(landmarks, pip, tip) for _mcp, pip, tip in FINGERS]
 
@@ -312,13 +543,43 @@ def _classify(landmarks) -> str:
     if all(extended):
         return "OPEN_PALM"
 
+    # Then the two gestures that would otherwise fall through into THUMBS_UP.
+    if _is_pinch(landmarks):
+        return "PINCH"
+    if _is_claw(landmarks):
+        return "CLAW"
+
     # Thumbs up: thumb above the index knuckle AND above the wrist, with every other finger
     # curled. The curl requirement is the whole difference between this and a raised hand.
+    #
+    # Unchanged since 2026-08-19. Everything above is a guard in front of it; nothing above
+    # can make it fire, and the two poses that used to reach it wrongly no longer arrive.
     thumb_up = (landmarks[THUMB_TIP].y < landmarks[FINGERS[0][0]].y
                 and landmarks[THUMB_TIP].y < landmarks[WRIST].y)
     if thumb_up and not any(extended):
         return "THUMBS_UP"
 
+    return "NONE"
+
+
+def _classify_frame(hands) -> str:
+    """Every hand mediapipe found in one frame -> a single gesture token.
+
+    Two hands can disagree, so `_PRIORITY` decides. CLAP is tested first because it is the one
+    gesture that is a fact about the pair rather than about either hand.
+
+    Pure, like `_classify`, and for the same reason: `hands` is a sequence of landmark
+    sequences and nothing here touches a camera.
+    """
+    if not hands:
+        return "NONE"
+    if _is_clap(hands):
+        return "CLAP"
+
+    seen = {_classify(h) for h in hands}
+    for gesture in _PRIORITY:
+        if gesture in seen:
+            return gesture
     return "NONE"
 
 
@@ -340,6 +601,14 @@ class GestureRecognizer:
         self._cv2 = None
         self.backend = ""
         self.why = ""
+
+        # FLICK is the only gesture that is not a function of the current frame, so it is the
+        # only one that needs the recogniser to remember anything. Samples are
+        # (monotonic seconds, (x, y) of the open palm or None, pose), and only
+        # `classify_stream` touches them — `get_gesture()`, the one-shot approval path that
+        # the security gate runs on, never appends here and so carries no state at all.
+        self._history: deque = deque(maxlen=FLICK_HISTORY)
+        self.last_flick = ""          # "LEFT" or "RIGHT", for anything that wants a direction
 
         try:
             import cv2
@@ -372,7 +641,7 @@ class GestureRecognizer:
                     vision.HandLandmarkerOptions(
                         base_options=mpp.BaseOptions(model_asset_path=str(MODEL_PATH)),
                         running_mode=vision.RunningMode.IMAGE,
-                        num_hands=1,
+                        num_hands=MAX_HANDS,
                         min_hand_detection_confidence=MIN_DETECTION_CONFIDENCE,
                         min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
                     ))
@@ -393,7 +662,7 @@ class GestureRecognizer:
         if hasattr(mp, "solutions"):
             try:
                 hands = mp.solutions.hands.Hands(
-                    max_num_hands=1,
+                    max_num_hands=MAX_HANDS,
                     min_detection_confidence=MIN_DETECTION_CONFIDENCE,
                     min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
                 )
@@ -419,10 +688,14 @@ class GestureRecognizer:
         return self._detect is not None
 
     def get_gesture(self) -> str:
-        """
-        Captures a single frame from the camera and returns:
-        'THUMBS_UP', 'OPEN_PALM', or 'NONE'.
-        Optimized for Raspberry Pi camera processing.
+        """One frame from the camera -> one gesture token. The approval path.
+
+        Returns 'PINCH', 'CLAP', 'CLAW', 'THUMBS_UP', 'OPEN_PALM' or 'NONE'. Optimised for
+        Raspberry Pi camera processing: the camera is opened, warmed, read once and closed.
+
+        **Never 'FLICK'.** One frame carries no motion, and this method holds no state across
+        calls by design — in the parent process it is a fresh child every time. Use
+        `detect_hands` + `classify_stream` on a live loop for that.
 
         Returns 'NO_CAMERA' when there is no camera, when mediapipe or OpenCV are missing, or
         when the model file has not been fetched — none of which is ever an approval.
@@ -451,11 +724,92 @@ class GestureRecognizer:
             return "NO_CAMERA"
 
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        for landmarks in self._detect(rgb_frame):
-            gesture = _classify(landmarks)
-            if gesture != "NONE":
-                return gesture
-        return "NONE"
+        return _classify_frame(self._detect(rgb_frame))
+
+    def detect_hands(self, rgb):
+        """One RGB frame -> a list of hands, each a sequence of 21 landmarks.
+
+        The raw output, before any gesture decision. Split out from `classify_stream` so a
+        caller that wants to DRAW the skeleton and also name the gesture runs the detector
+        once for both — `tools/live_test_gestures.py` is the caller that needs this, and at
+        88 ms per inference on the Pi, running it twice a frame would halve the frame rate of
+        the tuning window.
+
+        Returns [] when no detector was built, so a caller can treat "no mediapipe" and "no
+        hand" the same way.
+        """
+        if not self.available:
+            return []
+        return self._detect(rgb)
+
+    def classify_stream(self, hands, now: float | None = None) -> str:
+        """Hands from a LIVE loop -> a gesture token, `FLICK` included.
+
+        The difference from `_classify_frame` is memory: this keeps a short history of where
+        the palm was and when, so an open palm that is travelling reads as `FLICK` instead of
+        `OPEN_PALM`. Everything else is passed straight through.
+
+        Call it once per frame, in order. Gaps are handled — a stale history simply fails the
+        window test — but calling it on frames out of order is meaningless.
+
+        Args:
+            hands: what `detect_hands` returned for this frame.
+            now:   monotonic timestamp; defaults to the current time. Injectable so the flick
+                   logic is testable without a camera and without sleeping.
+
+        Returns:
+            One of the tokens in `_VALID`, except `NO_CAMERA`.
+        """
+        if now is None:
+            now = time.monotonic()
+
+        pose = _classify_frame(hands)
+
+        # Track the palm that could be flicking. A flick is an open palm crossing the frame,
+        # so an open hand is the only one worth remembering the position of.
+        centre = None
+        for hand in hands:
+            if _classify(hand) == "OPEN_PALM":
+                centre = _palm_centroid(hand)
+                break
+
+        self._history.append((now, centre, pose))
+
+        if pose != "OPEN_PALM" or centre is None:
+            return pose
+
+        direction = self._flick_direction(now, centre[0])
+        if not direction:
+            return pose
+
+        # Edge-triggered, not level-triggered: clearing the history means one swipe of the
+        # hand produces ONE flick, not a flick on every frame for as long as the hand is
+        # moving. A gesture wired to an action has to fire once per intent.
+        self._history.clear()
+        self.last_flick = direction
+        return "FLICK"
+
+    def _flick_direction(self, now: float, x: float) -> str:
+        """"LEFT", "RIGHT" or "" — has the palm crossed the frame fast enough, and which way?
+
+        Both a speed floor and a distance floor have to be cleared, and the distance floor is
+        the one doing the real work. This webcam gives ~6.6 fps, so a single jittery landmark
+        between two frames 150 ms apart can look like it is moving quickly; it cannot also
+        have moved a fifth of the frame width.
+        """
+        for when, centre, pose in self._history:
+            if centre is None or pose != "OPEN_PALM":
+                continue                       # the hand was not open then; not this flick
+            dt = now - when
+            if dt <= 0 or dt > FLICK_WINDOW_S:
+                continue                       # too old, or the same sample
+            dx = x - centre[0]
+            if abs(dx) < FLICK_MIN_TRAVEL or abs(dx) / dt < FLICK_MIN_SPEED:
+                continue
+            # x grows to the right in image space. The live window mirrors the frame so it
+            # reads like a mirror, and it names the direction LB sees, not this one.
+            return "RIGHT" if dx > 0 else "LEFT"
+        return ""
 
     def close(self) -> None:
         """Release the detector. Safe to call twice."""
@@ -609,8 +963,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {get_gesture()}")
         return 0
 
-    print(f"  watching via {worker or 'this interpreter'} — thumbs up, open palm, "
-          f"ctrl-C to stop")
+    print(f"  watching via {worker or 'this interpreter'} — pinch, clap, claw, thumbs up, "
+          f"open palm; ctrl-C to stop")
+    print("  (no FLICK here: each read is one frame from a camera that is then closed — "
+          "run tools/live_test_gestures.py for that)")
     try:
         while True:
             print(f"  {time.strftime('%H:%M:%S')}  {get_gesture()}")

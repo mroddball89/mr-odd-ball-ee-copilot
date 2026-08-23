@@ -873,3 +873,75 @@ engine 106, chat 39, typed 81, split 93, kicad 168, os_guard 75, speakable 59, r
       Against a 20-a-day tier that is worth watching. Pre-loading the notes into the prompt would
       make it one, at the cost of carrying every course's note on every academic turn; not done,
       because one course is 2.5 KB and five would start to look like the calendar problem D22 hit.
+
+---
+
+## Advanced gestures — the barehands vocabulary, and a window to tune it in (2026-08-23)
+
+- [x] `tools/live_test_gestures.py` — live camera window, skeleton drawn, gesture named large
+- [x] `GestureRecognizer` upgraded: `PINCH`, `CLAP`, `CLAW`, `FLICK` added to `THUMBS_UP`/`OPEN_PALM`
+- [x] `max_num_hands` / `num_hands` 1 → 2, or `CLAP` can never fire
+- [x] `get_gesture()` returns the active gesture as a string, via `_classify_frame`
+- [x] `tools/verify_gestures.py` — 31 checks, no camera, `--probe` proves it bites
+
+### Review
+
+**Verified, on the Windows authoring box** (mediapipe 1.0.1 / Tasks, opencv 5.0.0, no webcam):
+
+| check | result |
+|---|---|
+| `verify_gestures.py` — six gestures, pure geometry | 31/31 |
+| `verify_gestures.py --probe` — old order re-approves | CLAW **and** PINCH bite |
+| `verify_gate_state.py` — the security gate, unchanged | 20/20 |
+| all three files byte-compile | 3/3 |
+| headless: recogniser builds, `detect_hands` on a real ndarray | pass, backend `tasks` |
+| headless: skeleton drawn for extended / fist / claw hands | 3/3, pixels on the frame |
+| headless: numbers panel, 1 hand / 2 hands / 0 hands | 5 / 11 / 0 lines |
+| `gesture_control.py --backend`, full sidecar round trip | worker answers, protocol intact |
+
+**Not verified, and it needs LB and a camera:** the window itself. No webcam on this box, so
+`cv2.imshow`, the frame rate, and every threshold's behaviour against a real hand are untested.
+That is the point of shipping the window — the thresholds are geometry-derived starting values,
+not measurements, and the panel exists to replace them with numbers.
+
+### What didn't work
+
+- **A claw was already an approved shell command, and so was a pinch.** `THUMBS_UP` requires
+  the four fingers *not extended* (`tip.y < pip.y` false). A claw satisfies that — it holds the
+  tips below the PIPs — and so does a pinch, which curls the index down onto the thumb. Both
+  put the thumb above the index knuckle. So both classified as `THUMBS_UP` on `os_agent`'s
+  path. Latent since 2026-08-19; the request to make the claw a deliberate gesture is what
+  would have made it routine. Fixed by testing both **before** `THUMBS_UP` and discriminating
+  on tip-vs-MCP, which separates a fist from a claw by geometry rather than by threshold.
+  `verify_gestures.py --probe` is the before-state, preserved and runnable. See D26.
+- **The classifier test this repo has cited since 2026-08-19 did not exist.** `docs/DECISIONS.md`
+  described "six cases, all green"; nothing in the repo ran them. Four days of reviewers reading
+  a sentence instead of a suite, which is plausibly how the claw collision survived.
+- **A fixed pinch distance is wrong at every camera distance but one.** Landmarks are normalised
+  to the frame, so `dist(4, 8) < 0.05` tuned at 40 cm reads a relaxed hand as a pinch at 80 cm.
+  Every threshold is now a ratio against `_hand_scale()`, the rigid wrist-to-knuckle span.
+- **`FLICK` cannot work on the approval path at all.** One frame, from a camera that is then
+  closed, in a child process that then exits — there is no previous frame and nothing that could
+  remember one. Not a bug to fix; a consequence of D15's crash isolation. `classify_stream()` is
+  the continuous path and the live window is its only caller today.
+- **"Palms facing each other" is not what `CLAP` tests.** Two palm normals from 21 landmarks
+  each, compared, at 640×480 and 6.6 fps, from a triangle that is degenerate in exactly the pose
+  being measured. The docstring says what it actually tests — two upright open hands, close
+  together — rather than implying precision that is not there.
+
+### Still open
+
+- [ ] **The thresholds are guesses and are labelled as such.** `PINCH_MAX_RATIO` 0.40,
+      `CLAP_MAX_GAP_RATIO` 1.8, `CLAP_MIN_FINGER_RISE` 0.6, `FLICK_MIN_SPEED` 1.1 — all derived
+      from geometry, none measured. `live_test_gestures.py --pinch R` changes one for a run
+      without editing code, and the panel prints the live value beside the threshold. Move the
+      constant, re-run `verify_gestures.py`, and write the measurement down.
+- [ ] The same measurement `WARMUP_FRAMES` has been waiting on since 2026-08-22 — detection rate
+      against warmup count and confidence — is now cheap to take, because the window reports
+      frames and hands live. Sibling problem, same fix.
+- [ ] **Nothing consumes the four new gestures yet.** They are detected, named and tested; no
+      route acts on one. Wiring `FLICK` to anything needs the persistent worker in the note
+      above, since the one-shot path cannot produce it.
+- [ ] `media/` has no chart for this. A detection-rate-vs-threshold sweep, run from the saved
+      frames the window's `s` key collects, is the figure — and per the house rule a chart is not
+      finished without the CSV beside it.
