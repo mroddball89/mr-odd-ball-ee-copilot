@@ -2037,3 +2037,79 @@ of them per question, forever. The same questions are answered by one extraction
 that `grep` finds — because a syllabus is a handful of static facts, not a corpus. The RAG was
 the right tool for datasheets and the wrong one here, and that only became visible after it was
 removed for an unrelated reason.
+
+## D25 — The notes existed for four hours before the route that needed them could read them
+
+**2026-08-23.** D24 put LB's syllabi into `vault/courses/` as plain Markdown. It flagged, as an
+open item, that the ACADEMIC route could not reach them — and this closes it. LB: *"the Markdown
+Vault isn't a bloated vector DB — it's just clean text files."*
+
+`read_from_vault` is now bound to ACADEMIC alongside `sync_canvas_calendar`.
+
+### The gap was invisible from every direction except use
+
+Every check was green. The notes were correct. The vault search worked. HARDWARE, FIRMWARE and
+GENERAL could all read them. And a policy question still failed, because **routing decides which
+agent answers, and coursework questions route to ACADEMIC** — the one agent D23 had deliberately
+left with no vault tool.
+
+    "what's the late policy"          -> GENERAL  -> reads the vault -> correct
+    "what's the POSC 201 late policy" -> ACADEMIC -> no vault tool   -> "I don't know"
+
+Same question, same note on disk, opposite answers, decided by whether the sentence sounded like
+coursework. That is the shape of a bug no unit-level check finds: every part worked.
+
+### Two tools, and the division between them is absolute
+
+    sync_canvas_calendar   WRITES. Deadlines, from the live feed.
+    read_from_vault        READS.  Everything else, from vault/courses/*.md.
+
+**Canvas owns every date; the notes own everything else.** The prompt says so twice and forbids
+the crossing explicitly — *"Never take a date out of a note"* — because a note is made from a
+syllabus PDF, and a date in one is a snapshot the feed may already have moved past. That is D22's
+whole argument, and this is the door it could have come back through.
+
+### The failure mode moved, and the prompt had to move with it
+
+Under D23 the danger was **inventing** a policy: the agent had no source, and a model with no
+source answers from what universities usually do. The prompt was written against that, and said
+plainly that he could not answer such questions at all.
+
+That sentence is now false, and leaving it would have been worse than useless — it would have
+taught him to refuse while holding the answer. But the naive replacement has its own failure: the
+notes are **behind a tool call**, not in the prompt, so a model that is still told "answer only
+from what you have" will refuse *without searching*. To LB those are identical.
+
+So the contract grew a third rule, and it is the one this route did not need until today:
+
+    3. LOOK before saying you do not know. ... An agent that skips the search and refuses is
+       indistinguishable, to LB, from one that has no notes at all.
+
+Refusing is cheap and looks like obedience to rule 1, which is exactly why it needed saying.
+
+### Verified live on the Pi, both directions
+
+    "what is the late policy for POSC 201?"
+      -> searched the vault, found POSC201.md, and returned all five clauses of the real policy,
+         including "will not accept emailed assignments"
+
+    "what is the late policy for ECE 350?"          (no note exists)
+      -> "I have no notes on that course yet. You can upload the syllabus with the paperclip."
+
+The second is the one that matters. It looked, found nothing, and said so — rather than
+describing what a course usually does, which is the failure every version of this prompt since
+D11 has been written to prevent.
+
+### And one harness lesson, again
+
+A check read `"Do NOT describe what such a policy usually says" in prompt` and failed, because
+the prompt is wrapped at 100 columns and the phrase straddles a line break. The property being
+tested has nothing to do with where the author wrapped, so the check flattens whitespace first.
+Sibling of [[L11]]: a string check against prose is testing the prose's formatting.
+
+### The rule
+
+**A capability is not delivered until the path a user actually takes reaches it.** The note was
+written, correct, findable and reachable by three agents — and the question LB would really ask
+went to the fourth. Ask "who answers this when he phrases it the normal way?", and check that
+one, before calling the feature done.

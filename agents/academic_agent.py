@@ -1,44 +1,50 @@
 #!/usr/bin/env python3
 """
 Module:  academic_agent.py
-Purpose: Answer coursework questions from LB's live Canvas calendar, and from nothing else.
+Purpose: Answer coursework questions from LB's Canvas calendar and his own course notes.
 Author:  LB
-Date:    2026-08-21 (Canvas-only from 2026-08-23 — the syllabus RAG was removed, D23)
+Date:    2026-08-21 (Canvas-only 2026-08-23 per D23; notes added back the same day, D25)
 
-The ACADEMIC route. It reads **one** source and is forbidden to answer without it:
+The ACADEMIC route. It reads **two** local sources and is forbidden to answer without them:
 
     the calendar    `data/academic/academic_calendar.json`, synced from LB's Canvas `.ics`
                     feed by `tools/canvas_sync.py`. Structured dates. "What's due Friday."
+    the notes       `vault/courses/*.md`, written once from an uploaded syllabus by
+                    `tools/syllabus_to_vault.py`. Policies. "What's the late penalty."
 
-## What this used to do, and why it stopped
+**The division is absolute: Canvas owns every date, the notes own everything else.** A date in
+a note is a snapshot the feed may already have moved past, so the prompt forbids taking one from
+there; a late policy is not in a calendar feed at all.
 
-Until 2026-08-23 this agent also retrieved syllabus prose out of a Chroma collection and cited
-it — the late policy, the grading split, what a course covers. That is gone. LB: *"I want to
-completely excise the Syllabus PDF / Academic RAG feature, transitioning the Academic Agent to
-rely 100% on the Canvas calendar."*
+## How it got here, in three steps on one day
 
-**What that costs is worth naming, because nothing else in the system covers it.** A calendar
-feed carries titles and dates. It does not carry "late work loses 10% per day", and there is now
-no path in this repo that can answer that question. The right answer to a policy question is
-that he does not know and LB should look at the syllabus — which is what the prompt below tells
-him to say, rather than letting him improvise one.
+**D23 removed a Chroma collection of syllabus chunks**, at LB's request, and with it every answer
+about a course policy. That was the right call for the wrong stated reason, and the cost was
+named at the time: nothing left in the repo could say what the late penalty was.
 
-D23 has the full argument, including the part where the stated reason for the removal —
-conflicting dates — had already been solved by D22 and no longer applied.
+**D24 put the syllabi back as plain Markdown** — one extraction into `vault/courses/`, no
+embeddings, no retrieval machinery. Cheaper than the RAG by an order of magnitude and greppable
+forever after.
 
-## Why this one is stricter than the firmware agent
+**D25 gave this route the key to it.** For a few hours the notes existed and the one route that
+gets every coursework question could not reach them: asked plainly, GENERAL or HARDWARE answered
+from the vault; asked as coursework, ACADEMIC said it did not know. LB: *"the Markdown Vault
+isn't a bloated vector DB — it's just clean text files."*
+
+## Why this is stricter than the firmware agent
 
 `agents/firmware_agent.py` may fall back on its own knowledge when the datasheets do not cover a
 question, as long as it says so. That is right for firmware: an ESP32's GPIO registers are a
 matter of public record, and a general answer is usually correct and always checkable.
 
-**A course schedule is not public record.** There is no general knowledge about when LB's midterm
-is, so a fluent answer is a *fabricated* one with nothing to check it against — and it is the
-most costly kind of fabrication in this repo, because "your project is due the 24th" is exactly
-the shape of a sentence nobody questions. Getting it wrong means missing it.
+**A course is not public record.** There is no general knowledge about when LB's midterm is or
+what his professor's late penalty is, so a fluent answer is a *fabricated* one with nothing to
+check it against — and it is the most costly kind of fabrication here, because "your project is
+due the 24th" is exactly the shape of a sentence nobody questions.
 
-So the agent gets LB's directive unhedged: answer from the calendar ONLY, and say you do not
-know when it is not there. There is no "but generally". There is no generally.
+So: answer from the calendar and the notes ONLY. A search that comes back empty means he has no
+notes on that course, and saying so sends him to the syllabus. Inventing a plausible policy stops
+him going.
 
 ## What it does not do
 
@@ -61,68 +67,104 @@ from engine.response import Response
 from engine.split import SPOKEN_INSTRUCTION, split
 from tools.academic_calendar import format_calendar_for_llm
 from tools.canvas_sync import sync_canvas_calendar
+from tools.knowledge_vault import read_from_vault
 
 LOG = logging.getLogger("oddball.academic")
 
-# The one tool this agent gets, and it is deliberately the only one.
+# Two tools, and the split between them is the whole architecture of this route:
 #
-# Everything else here is a READ of a local JSON file under strict grounding.
-# `sync_canvas_calendar` is the opposite shape: it is an action, it touches the network, and it
-# REPLACES the calendar the grounding rules depend on. The bar for a second tool is high.
+#   sync_canvas_calendar   WRITES. Refreshes the deadline calendar from the live feed.
+#   read_from_vault        READS. Course policies, out of `vault/courses/*.md`.
 #
-# It is not behind a permission gate, and that is considered rather than overlooked. The WEB
-# route gates because a model composes the query and it leaves the machine; this fetches one
-# fixed URL out of LB's own `.env`, sends nothing, and overwrites a file that is rebuilt by
-# running it again. The blast radius is "his calendar is refreshed", which is what he asked for.
-ACADEMIC_TOOLS = [sync_canvas_calendar]
+# **Canvas owns dates; the vault owns everything else.** Neither can answer the other's
+# question, and that is deliberate rather than a limitation — a date in a note goes stale the
+# moment it moves in Canvas, and a late policy is not in a calendar feed at all.
+#
+# `read_from_vault` was added 2026-08-23 (D25). D23 had left this route calendar-only, which was
+# right while there was nothing else to read; D24 put the syllabi into the vault as plain
+# Markdown, and at that point the route that gets every coursework question was the one route
+# that could not reach them. LB: *"the Markdown Vault isn't a bloated vector DB — it's just
+# clean text files."* It is a substring scan over a folder of notes: no embeddings, no torch, no
+# retrieval machinery, and nothing on the answer path until the model actually asks for it.
+#
+# The same two objects the other agents bind, imported from one place, so a note written by
+# HARDWARE is read identically here.
+#
+# Neither is behind a permission gate. The WEB route gates because a model composes the query
+# and it leaves the machine; `sync_canvas_calendar` fetches one fixed URL out of LB's own `.env`
+# and sends nothing, and `read_from_vault` only reads local files it is already allowed to read.
+ACADEMIC_TOOLS = [sync_canvas_calendar, read_from_vault]
 _BY_NAME = {t.name: t for t in ACADEMIC_TOOLS}
 
-# The strict-grounding contract. Two rules do the work:
+# The strict-grounding contract. Three rules do the work:
 #
-#   1. ONLY the calendar. Not "prefer" it — only it. See the module docstring: there is no
-#      general knowledge about LB's course to fall back on, so a fallback is a fabrication.
+#   1. ONLY these two sources. Not "prefer" them — only them. See the module docstring: there is
+#      no general knowledge about LB's course to fall back on, so a fallback is a fabrication.
 #   2. Say you do not know. A model asked about a policy it cannot see will otherwise produce
 #      something plausible, and a plausible late policy is worse than silence because it stops
-#      him from going to look it up.
+#      him going to look it up.
+#   3. LOOK before saying you do not know. The notes are not in this prompt — they are behind a
+#      tool call — so "I do not have that" is only true after `read_from_vault` came back empty.
+#      An agent that skips the search and refuses is indistinguishable, to LB, from one that has
+#      no notes at all.
 #
-# The policy paragraph is the new half, and it is load-bearing. This agent used to be able to
-# answer those from retrieved syllabus text; it cannot any more, and a model that is not told
-# so will answer them from what universities usually do.
+# Rule 3 is the one this route did not need until D25, and it is the one a model is most likely
+# to get wrong: refusing is cheap, and it looks like obedience to rule 1.
 ACADEMIC_PROMPT_TEMPLATE = """
-You are the schedule manager for an electrical engineering student. You answer questions about
-his coursework using his deadline calendar, which is synced live from his Canvas account.
+You are the coursework assistant for an electrical engineering student. You have two sources: a
+deadline calendar synced live from his Canvas account, and a folder of notes made from the
+syllabi he has uploaded.
 
-You must answer using ONLY the calendar below. If the answer is not in it, say you do not know.
+You must answer using ONLY the calendar below and what `read_from_vault` returns. If the answer
+is in neither, say you do not know.
 
 Do NOT use your general knowledge about how university courses usually work. Do not estimate a
-date, infer a schedule from convention, or describe what a course "typically" involves. If the
-calendar does not contain the answer, the correct response is that you do not know.
+date, infer a schedule from convention, or describe what a course "typically" involves. If
+neither source contains the answer, the correct response is that you do not know.
 
 DEADLINE CALENDAR (synced from his Canvas feed):
 {calendar_context}
 
 Rules about that calendar:
-- It is the ONLY source you have. It is structured and exact — use it verbatim.
+- It is the only source of DATES, and it is structured and exact — use it verbatim.
 - Never name a date, an assignment or a course that does not appear in it.
 - If it says items exist beyond the listed range, and he asks about a date in that range, say
   you would need to check rather than saying nothing is due.
 
-WHAT YOU CANNOT ANSWER:
-You do not have his syllabi. You cannot answer questions about course POLICIES — late penalties,
-grading breakdowns, attendance rules, exam formats, office hours, what a course covers. You have
-titles and dates and nothing else.
-When he asks one of those, say plainly that you only have his schedule and that he will need to
-check the syllabus himself. Do NOT describe what such a policy usually says. A plausible late
-penalty is worse than admitting you do not have it, because it stops him checking the real one.
+COURSE POLICIES — YOU MUST LOOK THEM UP:
+The calendar above holds titles and dates and nothing else. Everything ELSE about a course —
+the late penalty, the grading breakdown, attendance rules, exam formats, office hours, who the
+instructor is, required textbooks — lives in your saved notes, one file per course, written when
+he uploaded the syllabus.
+
+`read_from_vault` searches those notes. When he asks about any of the above, CALL IT FIRST with
+a short search term: the course code ("POSC201"), or the thing he asked about ("late policy",
+"office hours", "grading breakdown"). Do not answer a policy question without looking.
+
+Then:
+- If the notes answer it, answer from them and say which course the note was for.
+- If the search comes back with nothing, say plainly that you have no notes on that course yet
+  and that he can upload the syllabus with the paperclip. Do NOT describe what such a policy
+  usually says. A plausible late penalty is worse than admitting you do not have it, because it
+  stops him checking the real one.
+- A note may say a field was *not stated in the syllabus*. That is a real answer — tell him the
+  syllabus does not say, rather than filling the gap yourself.
 
 REFRESHING THE CALENDAR:
-You have one tool, `sync_canvas_calendar`. Call it when he asks you to sync, refresh or update
-his schedule, calendar, assignments or deadlines — "sync Canvas", "update my schedule", "refresh
-my deadlines" — and also when he tells you a date you just gave him is wrong or out of date,
-because that is what a stale calendar sounds like.
+`sync_canvas_calendar` pulls his deadlines fresh from Canvas. Call it when he asks you to sync,
+refresh or update his schedule, calendar, assignments or deadlines — "sync Canvas", "update my
+schedule", "refresh my deadlines" — and also when he tells you a date you just gave him is wrong
+or out of date, because that is what a stale calendar sounds like.
 - Do NOT call it to answer an ordinary question about what is due. The calendar above is already
   loaded; syncing on every question would put a network round trip on every turn.
 - Never claim you have refreshed anything unless the tool actually ran and said so.
+
+WHICH SOURCE ANSWERS WHICH QUESTION — this division is absolute:
+- WHEN something is due, or what is due: the CALENDAR above. Canvas owns every date.
+- Anything else about a course: the NOTES, via `read_from_vault`.
+- Never take a date out of a note. Notes are made from syllabus PDFs, and a date in one is a
+  snapshot that Canvas may already have moved. If a note and the calendar disagree about a date,
+  the calendar is right.
 
 {chat_history}
 
@@ -171,35 +213,48 @@ def _answer(query: str) -> str:
     bind = getattr(llm, "bind_tools", None)
     response = (bind(ACADEMIC_TOOLS).invoke(prompt) if callable(bind) else llm.invoke(prompt))
 
-    # If it reached for the sync, run it and answer again with the result. Bounded at one round
-    # by using the UNBOUND `llm` on the second pass — a model that can still see the tool can
-    # call it again, and "refresh my calendar" has no natural stopping point.
+    # Run whatever it asked for, then answer once more with the results. Bounded at one round by
+    # using the UNBOUND `llm` on the second pass — a model that can still see the tools can call
+    # them again, and neither "refresh my calendar" nor "search my notes" has a natural stopping
+    # point.
+    #
+    # ALL calls are run before the second pass, not the first one only. A single turn can
+    # legitimately want both — "sync Canvas and remind me of the late policy" — and answering
+    # off whichever the model happened to list first would silently drop the other.
+    results: list[tuple[str, str]] = []
     for call in getattr(response, "tool_calls", None) or []:
         chosen = _BY_NAME.get(call.get("name", ""))
         if chosen is None:
             continue
         try:
-            result = str(chosen.invoke(call.get("args", {})))
+            results.append((chosen.name, str(chosen.invoke(call.get("args", {})))))
         except Exception as exc:                                          # noqa: BLE001
-            # The tool never raises; binding its arguments can, when a model invents a field.
+            # The tools never raise; binding their arguments can, when a model invents a field.
             LOG.exception("%s failed with args=%r", chosen.name, call.get("args", {}))
-            result = f"The sync could not be run: {type(exc).__name__}: {exc}"
+            results.append((chosen.name,
+                            f"That tool could not be run: {type(exc).__name__}: {exc}"))
 
-        LOG.info("canvas sync ran from the academic agent")
-        # The calendar on disk has just changed, so the one in the prompt above is stale. It is
-        # re-read rather than reused — saying "synced" while answering from the calendar loaded
-        # before the sync is the exact failure this route exists to avoid.
-        refreshed = ChatPromptTemplate.from_template(ACADEMIC_PROMPT_TEMPLATE).format(
-            calendar_context=format_calendar_for_llm(),
-            chat_history=format_memory_for_llm(),
-            question=query,
-        )
-        second = llm.invoke(
-            f"{refreshed}\n\nTHE CALENDAR HAS JUST BEEN REFRESHED FROM CANVAS. The tool has "
-            f"ALREADY RUN — do not call it again. It reported:\n{result}\n\n"
-            f"Tell him what happened in one or two short sentences, and answer his question "
-            f"from the refreshed deadlines above. If the tool reported a failure, say plainly "
-            f"that the calendar was not updated and why.")
-        return extract_text_content(second.content)
+    if not results:
+        return extract_text_content(response.content)
 
-    return extract_text_content(response.content)
+    LOG.info("academic tools ran: %s", ", ".join(name for name, _ in results))
+
+    # The calendar is re-read rather than reused. If `sync_canvas_calendar` ran, the copy in the
+    # prompt above is stale by definition — and saying "synced" while answering from the
+    # calendar loaded *before* the sync is the exact failure this route exists to avoid. It is a
+    # local JSON read, so doing it unconditionally costs nothing and removes a branch that would
+    # otherwise have to know which tool changed what.
+    refreshed = ChatPromptTemplate.from_template(ACADEMIC_PROMPT_TEMPLATE).format(
+        calendar_context=format_calendar_for_llm(),
+        chat_history=format_memory_for_llm(),
+        question=query,
+    )
+    block = "\n\n".join(f"`{name}` returned:\n{text}" for name, text in results)
+    second = llm.invoke(
+        f"{refreshed}\n\nTOOL RESULTS — these have ALREADY RUN. Do not call any tool again.\n"
+        f"The calendar above was re-read after they ran, so it is current.\n\n{block}\n\n"
+        f"Answer him now, using only the calendar above and the results here. If a sync ran, "
+        f"say so in one short clause. If a note search came back empty, say you have no notes "
+        f"on that course rather than describing what a course usually does. If a note says a "
+        f"field was not stated in the syllabus, tell him the syllabus does not say it.")
+    return extract_text_content(second.content)

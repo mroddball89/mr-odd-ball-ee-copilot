@@ -775,8 +775,8 @@ for argv, why in [
 import agents.academic_agent as AC                                   # noqa: E402
 import tools.canvas_sync as CS                                       # noqa: E402
 
-check([t.name for t in AC.ACADEMIC_TOOLS] == ["sync_canvas_calendar"],
-      "the ACADEMIC agent binds the Canvas sync, and only that",
+check([t.name for t in AC.ACADEMIC_TOOLS] == ["sync_canvas_calendar", "read_from_vault"],
+      "the ACADEMIC agent binds the Canvas sync AND the vault reader",
       ", ".join(t.name for t in AC.ACADEMIC_TOOLS))
 check("sync_canvas_calendar" in AC.ACADEMIC_PROMPT_TEMPLATE
       and "Do NOT call it to answer an ordinary question" in AC.ACADEMIC_PROMPT_TEMPLATE,
@@ -785,9 +785,11 @@ check("sync_canvas_calendar" in AC.ACADEMIC_PROMPT_TEMPLATE
 check("using ONLY the calendar below" in AC.ACADEMIC_PROMPT_TEMPLATE
       and "say you do not know" in AC.ACADEMIC_PROMPT_TEMPLATE,
       "and the strict-grounding directive SURVIVED the RAG removal, both halves")
-check("You do not have his syllabi" in AC.ACADEMIC_PROMPT_TEMPLATE,
-      "and he is told he can no longer answer policy questions at all",
-      "the removal cost that capability; a model not told so will invent one")
+check("Do not answer a policy question without looking" in AC.ACADEMIC_PROMPT_TEMPLATE,
+      "and he is told to search his notes before answering a policy question",
+      "the notes are behind a tool call, so refusing without looking is the failure now")
+check("Never take a date out of a note" in AC.ACADEMIC_PROMPT_TEMPLATE,
+      "and that Canvas owns every date even when a note carries one")
 
 # The feed URL is a credential. There must be no default in the source, or committing the file
 # publishes the token — this repo has a GitHub remote.
