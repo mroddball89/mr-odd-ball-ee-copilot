@@ -2227,3 +2227,198 @@ Sibling of the harness lessons in D25 and [[L11]].
 not "does the new value equal the old one" — it is "can the new value REACH the old one".**
 The claw was never going to be confused with a thumbs up by a human. It was confused with one
 by a boolean that had been correct for two gestures and was never re-read for six.
+
+---
+
+## D27 — The router call was worth removing; the keyword list that would have removed it was not
+
+**2026-08-23.** The ask was a zero-token local router: an extensive keyword dictionary in
+`router.py`, checked before the Gemini Flash structured call, returning a route instantly when
+anything matched. Two dictionaries were specified — one for ACADEMIC / FIRMWARE / HARDWARE /
+VAULT, and a second for launching desktop applications.
+
+The cost being attacked is real and this repo has measured it twice. `router_agent()` is a
+network round trip on every paid turn — **750 ms on Windows, 9.8 s on the Pi** — and against
+D3's free tier of 20 requests per model per day it is the call every turn pays before it pays
+for anything else. D1 named that price when it chose semantic routing, and said Stage 8 would
+measure it. It did.
+
+So the goal was right. Most of the specified implementation was already built, and the rest of
+it would have broken things.
+
+### Half of it shipped two days ago
+
+The second dictionary — `open`, `launch`, `start`, `run application`, plus KiCad, Firefox,
+Chromium, gedit, mousepad, VS Code and the terminal — is **D10**, landed 2026-08-21.
+`orchestrator/launch_intent.py` already recognises every one of those verbs and resolves the
+target against the Pi's XDG desktop database rather than a hardcoded app list, which is why
+`nautilus` works and why a hand-written table was refused there too. "Open KiCad" has cost zero
+tokens since that day, and `tools/verify_launch.py` mutation-tests the rule that keeps it safe.
+
+Rebuilding it inside `router.py` would have been strictly worse than not rebuilding it. The
+free tier runs *before* the router, so a second copy would either be dead code that never sees
+a launch, or — reached first — a launch path that skips `Engine._gate` and starts programs
+without asking. The bare-keyword form was the dangerous one: `open` as a keyword claims *"how
+do I open a file in Python"*, which is check number one in `verify_launch.py`'s negative set.
+
+### The other half collided with routes it did not know about
+
+Checked against the actual enum — ten routes, `FIRMWARE HARDWARE MATH OS QUIZ WEB PERSONA
+UTILITY ACADEMIC GENERAL`:
+
+| the rule | what it also matches |
+|---|---|
+| `[a-z]{3,4}` + digits → ACADEMIC | **`esp32`**, `stm32`, `msp430`, `pic16` — the FIRMWARE keywords in the same proposal |
+| `test`, `quiz`, `exam` → ACADEMIC | `AgentRoute.QUIZ`, which ROUTER_PROMPT separates by name: *"test me on this" is QUIZ even in an academic context* |
+| `current` → HARDWARE | "what's the **current** time" |
+| `ohms law`, `voltage` → HARDWARE | both are `formula` triggers — **free today**, and a keyword rule would make them paid |
+| `raspberry pi` → FIRMWARE | "reboot the pi", "what's the Pi's CPU temp" are OS |
+| `vault`, `remember`, `save` → VAULT | **there is no VAULT route.** The vault is a *tool*, bound into HARDWARE, FIRMWARE, ACADEMIC and PERSONA |
+
+That last row is the one worth keeping. "Remember I used a 10k resistor on the amp board" has
+no destination a route table can name, because the thing that should happen is `save_to_vault`
+*inside* the agent that can also read the KiCad file. Routing it anywhere strips the tools off
+it. A keyword pointing at a route that does not exist is not a near miss — it is a category
+error about what the vault is.
+
+And the `esp32` row is the shape of the whole problem: two rules in one document, each
+individually reasonable, that claim the same string and disagree.
+
+### What was built instead
+
+The band between "needs no agent" and "needs judgement": turns that DO need an agent, where
+naming it is not a judgement call. `orchestrator/route_hint.py`, a pure function of a string,
+called from `_routed_turn` between `_free_turn` and the quota latch.
+
+- **ACADEMIC** — Canvas sync phrases, course-paperwork phrases (`syllabus`, `late policy`,
+  `office hours`, `grading policy`), deadline phrases, and course codes.
+- **OS** — machine stats as phrases: `cpu temp`, `how much ram`, `disk space`, `uptime`.
+- **Everything ambiguous stays on Gemini.** `voltage`, `current`, `led`, `resistor`, `i2c`,
+  `pinout`, `datasheet`, `test`, `quiz`, `save`, `remember` are absent on purpose.
+
+Three things carry the safety, and all three are borrowed from rules this repo already had:
+
+**Every trigger is a phrase, never a bare keyword.** The same rule `instant.py` arrived at
+three separate times — after "time constant" announced the clock, after a bare "today" hijacked
+a baseball question, and after "goodbye sale" ended a conversation.
+
+**The course codes are read from `vault/courses/*.md`,** the ACADEMIC agent's own notes, the
+way `app_catalogue` reads apps from XDG instead of a curated table. This is what kills the
+`esp32` collision *structurally* rather than by adding an exception: `esp32` is not a file in
+that directory. On Windows the directory does not exist, the rule switches itself off, and the
+turn falls through to the paid router exactly as before.
+
+**An upload is refused outright, before anything else is checked.** ROUTER_PROMPT is
+unambiguous that a new upload is always GENERAL, because GENERAL is the only route that can
+file a document. *"I just uploaded ECE350_syllabus.pdf"* names a syllabus **and** a course code
+and would otherwise be the single strongest ACADEMIC match in the file — and filing it is the
+one thing ACADEMIC cannot do.
+
+### The greetings were the cheaper win, and they needed the same rule
+
+`instant.py` has always held canned answers for `hello`, `thanks` and `identity` — "Hey LB.",
+"Any time." — and every one of them still bought a router call to reach a PERSONA agent that
+would improvise a different answer. D3's first listed remedy is *widen UTILITY; every question
+it absorbs is a free question*, and a greeting is the purest case there is.
+
+They could not be promoted as written. `hello` fired on a bare "hey", so *"hey what's the trace
+width for 5 amps"* was answered **"Hey LB."**. Behind the router that wasted a classification.
+In front of it, it deletes HARDWARE from the answer path. `identity` was `_has(text, "who",
+"you")` — both words anywhere — which claims *"who would you recommend for a resistor
+supplier"*.
+
+So they took the end-anchor rule: the greeting has to BE the utterance. That algorithm already
+existed in this file **three times over** — `_is_dismissal`, `is_wake`, and now these — so it
+was extracted to `instant._is_bare` and the other two now call it. Three copies of the one rule
+that holds D38 back is three places for it to drift.
+
+### What it costs and what it saves
+
+| turn | before | after |
+|---|---|---|
+| "hello" / "thanks" / "who are you" | 1 router + 1 persona | **0** |
+| "sync canvas" | 1 router + academic | academic only |
+| "what's the CPU temp" | 1 router + 2 OS calls | 2 OS calls |
+| "what's the trace width for 5 amps" | 1 router + agent | unchanged, deliberately |
+
+**The ACADEMIC and OS hints save one call of two or three, not the whole turn.** The agent
+still runs. Saying otherwise would overstate it — only the social three are actually free, and
+they are free because the answer was already sitting in a table.
+
+### The harness
+
+`tools/verify_router.py` — 164 checks, keyless, no network. It closes the Stage 8 item that had
+been open since the merge, and the half of that item's sentence that mattered turned out to be
+*"PERSONA/UTILITY don't swallow EE questions"*.
+
+The negative corpus is longer than the positive one, because the failure modes are not
+symmetric: a hint that misses costs one router call, which is what every turn cost yesterday,
+while a hint that matches too much removes an agent from the answer path and looks exactly like
+a correct answer from the outside.
+
+Two of its four mutations are not bugs that shipped — they are **the designs specified in this
+entry, reinstated**:
+
+```
+M1  upload guard removed       -> 6 red   (an uploaded syllabus is never filed)
+M2  social end-anchor removed  -> 7 red   ("hey whats the trace width" answers Hey LB.)
+M3  bare-keyword dictionary    -> 21 red  ("the current time" is HARDWARE, "quiz me" is ACADEMIC)
+M4  naive course-code regex    -> 9 red   (esp32 and stm32 route to ACADEMIC)
+```
+
+M3 is the one that matters. Without it this entry is an opinion about a keyword list; with it,
+the keyword list is a thing that turns twenty-one checks red on demand.
+
+### Three of the named apps did not actually work, and finding that took a fixture
+
+"The launcher already does this" was true in outline and wrong in three places. Handing
+`launch_intent` a Pi-shaped `.desktop` tree on Windows — six entries, built in a
+`TemporaryDirectory` — showed **`schematic editor`**, **`pcb editor`** and **`vscode`** all
+falling through to the paid router, while `kicad`, `firefox`, `terminal` and `fire fox` worked.
+The claim had never been tested against a catalogue that contained multi-word app names.
+
+Two different bugs, and neither was in the end-anchor rule:
+
+**`_targets` only ever offered whole names.** `app_catalogue.resolve()` has had a fourth tier
+since D10 — *a whole-word phrase in the Name* — which answers "schematic editor" against
+"KiCad Schematic Editor" perfectly well. But `launch_intent._targets` builds the candidate
+phrases, and it built them from full names, entry ids and `ROLES` only. **The catalogue knew
+the answer; the function that decides what counts as naming an app never asked the question.**
+Trailing sub-phrases of a multi-word Name are now targets, two words minimum — a single
+trailing word is "editor", "manager", "player", which is exactly what `ROLES` owns and
+deliberately maps to a *category* rather than to whichever app happens to end in it.
+
+**`vscode` is a nickname, and nothing in four tiers can reach one.** It is not the Name, not
+the entry id, not a role, not a phrase inside the Name. `tools/app_catalogue.ALIASES` now maps
+it (and "vs code") to "visual studio code" before the tiers run.
+
+That last one is a curated table, in a module whose docstring refuses curated tables, so the
+distinction has to be exact: **the refused table listed which apps exist** and went stale the
+moment one was installed — it shipped without `nautilus`. This one maps what a person *says* to
+a phrase the catalogue resolves on its own. With VS Code uninstalled, "vscode" resolves to
+nothing, precisely as "visual studio code" does, and `verify_launch.py` asserts that. `ROLES`
+has been the same shape since D10. It is also not edit-distance matching, which stays refused
+for the reason both files state: a threshold loose enough to catch "tawny" → "thonny" is loose
+enough to catch "shut up" → "shut down". These are exact keys and nothing is guessed.
+
+`tools/verify_launch.py` is 208 checks now, up from 194, and its five mutations still bite.
+
+### The rule
+
+**A local fast path is worth building exactly as wide as the set of inputs with one right
+answer — and not one keyword wider.** The router was bought to resolve ambiguity, so every
+ambiguous string handed back to a phrase list spends its whole value to save its cost. D38 for
+the seventh time, in its most expensive form yet: the danger is never the rule that fails to
+match, it is the one that matches too much.
+
+Second, smaller: **before optimising a path, read it.** Half of what was asked for here had
+shipped two days earlier, and the two dictionaries in one request contradicted each other on
+`esp32` before either reached the code.
+
+Third, and it is the one that nearly got away: **"that already works" is a claim, and a claim
+needs a fixture.** The launcher did already handle the verbs. It did not handle three of the
+apps that were named, and no amount of reading the code was going to show that — the failure
+lived in the gap between two functions that each looked right. It took eleven lines of
+`.desktop` files in a temp directory. Same lesson as D26's missing gesture test, arriving from
+the opposite direction: there the test was claimed and absent, here the behaviour was claimed
+and untested.

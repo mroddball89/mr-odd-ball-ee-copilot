@@ -89,6 +89,26 @@ ROLES: dict[str, str] = {
     "calculator": "Calculator",
 }
 
+# Spoken nicknames for apps whose `Name=` nobody says out loud. Applied to the QUERY before
+# the tiers, so the catalogue stays the only source of truth about what is installed.
+#
+# **This is not the hardcoded app table this module refuses**, and the difference is worth
+# being precise about. That table listed WHICH APPS EXIST and went stale the moment one was
+# installed (it shipped without `nautilus`). This maps what a person SAYS to a phrase the
+# catalogue already resolves on its own: if Visual Studio Code is not installed, "vscode"
+# resolves to nothing, exactly as "visual studio code" does. `ROLES` above is the same shape.
+#
+# It is also not edit-distance matching, which is refused here and in `launch_intent` for the
+# reason stated there: a threshold loose enough to catch "tawny" -> "thonny" is loose enough to
+# catch "shut up" -> "shut down". These are exact keys. Nothing is guessed.
+#
+# Keep it to nicknames that are genuinely unreachable otherwise. "code" and "visual studio
+# code" both already resolve through the entry-id and Name tiers and are deliberately absent.
+ALIASES: dict[str, str] = {
+    "vscode": "visual studio code",
+    "vs code": "visual studio code",
+}
+
 _ARTICLES = ("the ", "a ", "an ")
 
 # Dropped from the catalogue by resolved binary. Opening any of these ends the session or the
@@ -398,6 +418,8 @@ def resolve(query: str, catalogue: tuple[DesktopApp, ...]) -> Match:
     if not q:
         return Match()
     bare = _drop_article(q)
+    # A nickname stands in for the name it abbreviates, before any tier runs. See ALIASES.
+    q = bare = ALIASES.get(bare, bare)
 
     tiers: list[list[DesktopApp]] = [
         [a for a in catalogue if _norm(a.entry_id) in (q, bare)],
