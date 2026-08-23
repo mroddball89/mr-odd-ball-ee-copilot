@@ -15,9 +15,14 @@ decision Mr Odd Ball makes out loud, and LB can disagree with it in the same sen
 
 ## Three destinations, and what each one costs
 
-    academic     -> data/academic/           rebuild the vector store AND the deadline calendar
+    academic     -> data/academic/           rebuild the vector store (policies, not dates)
     datasheet    -> data/<folder>/           rebuild the vector store
     schematic    -> data/projects/<project>/ nothing, unless it brought a PDF with it
+
+Deadlines are NOT extracted from an uploaded syllabus. `tools/canvas_sync.py` pulls them from
+LB's live Canvas feed instead, because a PDF is a snapshot and a moved date is wrong in it. A
+syllabus is still ingested for its PROSE — the late policy, the grading split, what the course
+covers — which is what it is actually good for.
 
 `tools/kicad_parser.py` reads `.kicad_sch` and `.kicad_pcb` live off the disk, so a schematic is
 usable the instant it is moved. A PDF is not: nothing in this repo can read a PDF except through
@@ -55,7 +60,13 @@ hands the rebuild to a background thread. **What it returns says which of the tw
 and it deliberately does not say how long, because the honest answer depends on how much LB has
 uploaded so far. `index_status` is how he answers "is it ready yet".
 
-## Why the calendar extraction is now incremental
+## The calendar extraction is no longer called from here
+
+`extract_deadlines_from_syllabi()` is still in `tools/academic_calendar.py` and still works, as
+a manual fallback for a course that is not in Canvas. Nothing on this path invokes it. It was
+made incremental first, for the reason below, and that reason still applies to a hand-run:
+
+## Why the calendar extraction is incremental
 
 `extract_deadlines_from_syllabi()` re-reads every syllabus and spends one API call per file. D3
 measured the free tier at 20 requests per model per day, so uploading one syllabus to a folder
@@ -191,7 +202,7 @@ class _IndexState:
 
 
 class _Indexer:
-    """Runs `vector_db` and `academic_calendar` off the turn path, one at a time.
+    """Runs `vector_db` off the turn path, one rebuild at a time.
 
     Two properties matter and neither is obvious:
 
@@ -212,7 +223,13 @@ class _Indexer:
         self.state = _IndexState()
 
     def request(self, jobs: set[str], sources: set[str] | None = None) -> None:
-        """Ask for `jobs` ("vectors", "calendar"), starting the worker if it is not running."""
+        """Ask for `jobs` — only "vectors" today — starting the worker if it is idle.
+
+        Still a SET rather than a boolean. The second job was the deadline extraction, retired
+        when Canvas became the source of dates; keeping the shape means the next background
+        build is an entry here rather than a rewrite of the coalescing and the status reporting,
+        which are the parts that were hard to get right.
+        """
         with self._lock:
             self._pending |= jobs
             self._sources |= (sources or set())
@@ -242,10 +259,6 @@ class _Indexer:
                     self.state.jobs |= jobs
                 if "vectors" in jobs:
                     good, note = self._rebuild_vectors()
-                    ok &= good
-                    notes.append(note)
-                if "calendar" in jobs:
-                    good, note = self._rebuild_calendar(sources)
                     ok &= good
                     notes.append(note)
         except BaseException as exc:                                   # noqa: BLE001
@@ -292,18 +305,6 @@ class _Indexer:
         except Exception as exc:                                      # noqa: BLE001
             LOG.exception("rebuilding the vector store failed")
             return False, f"The vector store rebuild failed: {type(exc).__name__}: {exc}"
-
-    def _rebuild_calendar(self, sources: set[str]) -> tuple[bool, str]:
-        try:
-            from tools.academic_calendar import extract_deadlines_from_syllabi  # noqa: PLC0415
-
-            t0 = time.monotonic()
-            self._capture(extract_deadlines_from_syllabi, sources=sources or None)
-            which = ", ".join(sorted(sources)) if sources else "every syllabus"
-            return True, f"Deadlines extracted from {which} in {time.monotonic() - t0:.0f}s."
-        except Exception as exc:                                      # noqa: BLE001
-            LOG.exception("extracting deadlines failed")
-            return False, f"The deadline extraction failed: {type(exc).__name__}: {exc}"
 
     def status(self) -> _IndexState:
         with self._lock:
@@ -545,8 +546,9 @@ def process_inbox_file(filename: str, category: str, project: str = "",
 
     `filename`: the file's name as shown by `list_inbox`, e.g. 'ECE350_syllabus.pdf'.
     `category`: one of
-        'academic'  — a course syllabus, schedule or policy document. Goes to data/academic/,
-                      and its deadlines are extracted into the calendar.
+        'academic'  — a course syllabus, schedule or policy document. Goes to data/academic/
+                      and becomes searchable for its policies. Its DATES are not read from it —
+                      those come from Canvas.
         'datasheet' — a component datasheet, reference manual or application note. Goes to a
                       folder under data/ and becomes searchable by the firmware agent.
         'schematic' — a KiCad file (.kicad_sch, .kicad_pcb, .kicad_pro), a gerber or project
@@ -590,10 +592,16 @@ def _file_academic(source: Path, suffix: str) -> str:
                 f"make it invisible. It is still in the inbox.")
 
     target = _move(source, ACADEMIC_DIR)
-    _INDEXER.request({"vectors", "calendar"}, sources={target.name})
-    return (f"Filed {target.name} to data/academic/. I am now rebuilding the syllabus index and "
-            f"reading its dates into the deadline calendar, in the background. It is NOT "
-            f"searchable until that finishes. Use index_status to check.")
+    # Vectors only. Dates come from `tools/canvas_sync.py` now — the live feed is authoritative
+    # and a syllabus PDF is a snapshot whose dates may already have moved, so extracting them
+    # here would spend an API call to add rows that are wrong. It also takes the academic upload
+    # path from two model calls to zero. The syllabus RAG is exactly what a PDF IS good for and
+    # is untouched.
+    _INDEXER.request({"vectors"}, sources={target.name})
+    return (f"Filed {target.name} to data/academic/. I am rebuilding the syllabus index in the "
+            f"background, so its policies are NOT searchable until that finishes — use "
+            f"index_status to check. Its dates are not read from it: ask me to sync Canvas for "
+            f"those.")
 
 
 def _file_datasheet(source: Path, suffix: str, folder: str) -> str:

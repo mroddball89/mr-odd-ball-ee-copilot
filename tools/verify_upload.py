@@ -477,11 +477,17 @@ def _academic_case(tmp: Path, fake: _FakeIndexer) -> None:
     check((tmp / "academic" / "ECE350_syllabus.pdf").is_file(),
           "an academic PDF lands in data/academic/", out[:70])
     check(not (F.INBOX_DIR / "ECE350_syllabus.pdf").exists(), "and leaves the inbox")
-    check(fake.calls and fake.calls[0][0] == {"vectors", "calendar"},
-          "it asks for BOTH the vector store and the calendar", str(fake.calls))
+    # Vectors ONLY, and the absence of the calendar job is the assertion — not an oversight.
+    # Deadlines come from tools/canvas_sync.py now, because a syllabus PDF is a snapshot whose
+    # dates may already have moved. Extracting them here would spend an API call to write rows
+    # that are wrong, and would then be overwritten by the next sync.
+    check(fake.calls and fake.calls[0][0] == {"vectors"},
+          "it asks for the vector store and NOT the calendar — Canvas owns the dates now",
+          str(fake.calls))
     check(fake.calls[0][1] == {"ECE350_syllabus.pdf"},
-          "and names the one file, so extraction costs ONE api call, not one per syllabus",
-          str(fake.calls[0][1]))
+          "and still names the one file it filed", str(fake.calls[0][1]))
+    check("sync Canvas" in out or "sync" in out.lower(),
+          "and the answer points him at Canvas for the dates", out[-70:])
     check("not searchable" in out.lower() or "background" in out.lower(),
           "and says the index is not ready yet", out[-60:])
 
@@ -727,9 +733,85 @@ for argv, why in [
     check(done.returncode == 0, why,
           (done.stderr.strip().splitlines() or ["exit 0"])[-1][:100])
 
+# The Canvas sync, which replaced PDF date extraction on 2026-08-23.
+import agents.academic_agent as AC                                   # noqa: E402
+import tools.canvas_sync as CS                                       # noqa: E402
+
+check([t.name for t in AC.ACADEMIC_TOOLS] == ["sync_canvas_calendar"],
+      "the ACADEMIC agent binds the Canvas sync, and only that",
+      ", ".join(t.name for t in AC.ACADEMIC_TOOLS))
+check("sync_canvas_calendar" in AC.ACADEMIC_PROMPT_TEMPLATE
+      and "Do NOT call it to answer an ordinary question" in AC.ACADEMIC_PROMPT_TEMPLATE,
+      "and is told when to call it and when not to — a sync per question is a network "
+      "round trip per turn")
+check("using ONLY the provided local document context" in AC.ACADEMIC_PROMPT_TEMPLATE,
+      "and the strict-grounding directive SURVIVED the change")
+
+# The feed URL is a credential. There must be no default in the source, or committing the file
+# publishes the token — this repo has a GitHub remote.
+source = (REPO_ROOT / "tools" / "canvas_sync.py").read_text(encoding="utf-8")
+check(not re.search(r"user_[A-Za-z0-9]{20,}", source),
+      "no Canvas feed token is hardcoded in canvas_sync.py")
+check(CS.CANVAS_ICS_ENV == "ODDBALL_CANVAS_ICS" and "instructure.com" not in source.replace(
+      "<school>.instructure.com", ""),
+      "the URL comes from .env, which is gitignored and not deployed")
+# The env var has to be CLEARED for this one. The preamble above loads `.env`, so on the Pi —
+# where the URL is genuinely configured — `canvas_url("")` returns it and the check cannot fire.
+# It passed on Windows and failed on the Pi, which is the wrong way round for a check about a
+# missing configuration: it was testing the authoring box's emptiness, not the code.
+_saved_ics = os.environ.pop(CS.CANVAS_ICS_ENV, None)
+try:
+    CS.canvas_url("")
+    check(False, "a missing feed URL raises with instructions")
+except ValueError as exc:
+    check("Calendar Feed" in str(exc), "a missing feed URL raises with instructions",
+          str(exc).splitlines()[0][:70])
+finally:
+    if _saved_ics is not None:
+        os.environ[CS.CANVAS_ICS_ENV] = _saved_ics
+
+check(CS.canvas_url("https://example.test/x.ics") == "https://example.test/x.ics",
+      "an explicit URL wins over the environment")
+try:
+    CS.canvas_url("not-a-url")
+    check(False, "a URL that is not a URL is refused")
+except ValueError as exc:
+    check("does not look like a URL" in str(exc), "a URL that is not a URL is refused")
+
+for title, want in [("Midterm Exam 2", "exam"), ("Final Exam", "exam"),
+                    ("Knowledge Check VM.1", "quiz"), ("Quiz 3", "quiz"),
+                    ("Group Project Milestone 1", "project"),
+                    ("Homework 4", "assignment"), ("Data Activity VM.1", "assignment")]:
+    check(CS._classify(title) == want, f"_classify({title!r}) -> {want}", CS._classify(title))
+
+title, course, section = CS._split_summary(
+    "Sample AI Policy&#8212;Responsible Use  [POSC201.W02_Fall 2026]")
+check(course == "POSC201", "the course code is cleaned of section and term", course)
+check(section == "POSC201.W02_Fall 2026", "and the full string is kept as `section`", section)
+check("—" in title and "&#" not in title,
+      "and HTML entities are unescaped — that text is read aloud by Piper", title[-30:])
+
+check(CS._split_summary("No brackets here")[0] == "No brackets here",
+      "a summary with no bracket keeps its text rather than raising")
+
+import datetime as _dt                                               # noqa: E402
+
+# THE date bug. Canvas stores an 11:59 PM due time as 03:59Z the NEXT day, so `.date()` on the
+# raw UTC value is off by one — silently, always, in the direction that suggests an extra day.
+utc_late = _dt.datetime(2026, 9, 2, 3, 59, tzinfo=_dt.timezone.utc)
+local_day = utc_late.astimezone().date()
+check(CS._due_date(utc_late) == local_day,
+      "a UTC due time is converted to the LOCAL date, not truncated",
+      f"{utc_late.isoformat()} -> {CS._due_date(utc_late)}")
+check(CS._due_date(_dt.date(2026, 9, 1)) == _dt.date(2026, 9, 1),
+      "an all-day date is used as-is")
+check(CS._due_date(None) is None, "a missing date is None rather than a crash")
+
 import router
 
 prompt = router.ROUTER_PROMPT
+check("sync Canvas" in prompt and "ACADEMIC, not OS" in prompt,
+      "the router sends 'update my schedule' to ACADEMIC rather than OS")
 check("UPLOAD IS ALWAYS GENERAL" in prompt,
       "the router has an unambiguous rule for an upload announcement")
 check("is not an upload: route that normally" in prompt,

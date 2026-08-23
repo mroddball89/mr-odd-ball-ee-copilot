@@ -680,3 +680,57 @@ because the honest answer depends on how much has been uploaded.
       log is the channel. Revisit if a file ever goes missing in practice.
 - [ ] The upload endpoint has no rate limit. It is loopback-only with an Origin check, so the
       threat is a script LB ran himself, but a runaway loop would fill the SD card.
+
+## Canvas replaces the syllabus PDFs as the source of dates (2026-08-23)
+
+LB: *"The static syllabus PDFs contain outdated dates. Instead, we are switching to a live
+Canvas LMS `.ics` calendar feed."* Full reasoning in D22.
+
+- [x] `tools/canvas_sync.py` — fetch, parse with `icalendar`, write `academic_calendar.json`
+- [x] `sync_canvas_calendar` bound to the ACADEMIC agent, with prompt rules for when NOT to call
+      it (a sync per question is a network round trip per turn)
+- [x] `router.py` — "sync Canvas" / "update my schedule" routes to ACADEMIC, **not OS**, which is
+      what an imperative about "my schedule" otherwise looks like
+- [x] Syllabus RAG untouched — `data/academic/` still embeds into the `academic` collection and
+      the agent still retrieves policy prose. Only date extraction retired.
+- [x] `tools/file_manager.py` — an academic upload no longer extracts dates. Two model calls to
+      zero, and the sentence he says points at Canvas instead.
+- [x] `extract_deadlines_from_syllabi()` preserves Canvas rows on every run, so the old script
+      cannot revert the calendar to stale dates
+- [x] `icalendar` in `requirements.txt` **and** in `stage_install.sh` — `verify_agents.py` caught
+      that the second one was missing, which would have failed every fresh Pi install
+- [x] The feed URL is in `.env` as `ODDBALL_CANVAS_ICS`, never in source. `verify_upload.py`
+      greps for a token and fails if one reappears.
+- [x] `format_calendar_for_llm` bounded — one course produced 139 deadlines against a syllabus
+      extraction's ten or twenty
+
+### Verified on the Pi
+
+`venv/bin/python tools/canvas_sync.py` against the live feed: **139 events, 1 course, 0 skipped,
+0 duplicates**, written to `academic_calendar.json`. Read back through the real readers:
+139 entries load, 0 due within 3 days (nearest is 2026-08-30, correct), 23 within 10.
+No token in the written file. `verify_upload.py` 160/160 and every other harness green.
+
+**Measured, and it changed the design:** the calendar in the prompt went from ~2,400 tokens
+(139 lines) to ~1,583 (89 lines) once bounded, and it states what it left out. Five courses
+would have been ~12,000 tokens on every academic turn.
+
+The UTC-to-local conversion is pinned: `2026-09-02T03:59Z -> 2026-09-01`. All 139 of LB's
+current events are all-day dates so it does not bite today, but Canvas emits a datetime for
+anything with a time and an 11:59 PM due time is stored as 03:59Z the next day.
+
+### Still open
+
+- [ ] **Only one course is in the feed** (`POSC201`). The course-code cleaning, the type
+      inference and the prompt bound are all validated against one course's shape. When his
+      other courses appear, re-run `--dry-run` and look at the `courses` count and the type
+      split before trusting the banner.
+- [ ] **Type inference is keyword-based and untested against real exams.** LB's feed has
+      57 assignments and 82 quizzes and **no exams at all** — so the `exam` branch, which is the
+      one that matters most, has never matched a real event. `_TYPE_RULES` puts exam first
+      deliberately; confirm it fires when a midterm actually appears.
+- [ ] `--keep-syllabus` exists but has never been exercised against a calendar that holds both
+      kinds of row, because the PDF extractor has never run on the Pi (no syllabi are ingested).
+- [ ] The sync is not on a schedule. It runs when LB asks. A daily `systemd --user` timer is the
+      obvious next step and is deliberately not built — a background job that rewrites his
+      deadlines without being asked is a thing to decide on, not to assume.
