@@ -488,3 +488,16 @@ and still useful if a pywebview window is ever wanted for something else.
 - [ ] Grammar nit in `expand_symbols`: "a 10 kilohms resistor" should be "kilohm" when the unit
       is attributive. Correct when it stands alone ("that is 5 ohms"), which is the common case.
       Needs part-of-speech awareness to fix properly; not worth it yet.
+
+## From D19 — KiCad 9.0.2 is now on the Pi (2026-08-22)
+
+- [ ] **Wire the demo corpus into `verify_kicad.py` as an OPTIONAL section.** 85 schematics and
+      16 boards at `/usr/share/kicad/demos`, written by KiCad rather than by us — the existing
+      fixtures are all hand-written and cannot surprise us about the real format. Must skip
+      cleanly when the directory is absent, so Windows and a fresh clone stay green (the same
+      shape as `verify_academic.py --store`). Script to start from:
+      `media/scripts/run_kicad_demos.py`.
+- [ ] Re-run that corpus after any kiutils bump. It is the cheapest possible regression signal
+      for a format-version change, and it costs no API calls and no fixtures to maintain.
+- [ ] `vme-wren.kicad_pcb` (70 MB) is refused by the 50 MB guard. Correct for now. If LB ever
+      has a board that big, the answer is streaming or a summary pass, not a bigger constant.
