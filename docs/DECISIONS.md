@@ -770,6 +770,13 @@ PIP joint), and `OPEN_PALM` is tested first so the two are mutually exclusive by
 The classifier is a pure function of 21 landmarks, so it is tested with no camera at all — six
 cases, including the one above, all green.
 
+> **2026-08-23, D26.** Two things about that paragraph aged badly. The test it describes was
+> never committed, so for four days this page asserted a green suite that did not exist — see
+> D26; `tools/verify_gestures.py` is now real. And "each tip below its own PIP joint" turns out
+> to be satisfied by a **claw** and by a **pinch**, both of which therefore classified as
+> `THUMBS_UP` and approved shell commands. The curl clause was necessary and it was not
+> sufficient. Fixed in D26 by ordering, without changing the test above.
+
 Failure directions are asymmetric and every one falls safe: no camera, no hand, an open palm,
 an exception → the keyboard is still asked. Only a clear thumbs up short-circuits it, and the
 gesture never *declines* on LB's behalf either. The blocklist in `tools/os_controller.py` runs
@@ -2113,3 +2120,110 @@ Sibling of [[L11]]: a string check against prose is testing the prose's formatti
 written, correct, findable and reachable by three agents — and the question LB would really ask
 went to the fourth. Ask "who answers this when he phrases it the normal way?", and check that
 one, before calling the feature done.
+
+---
+
+## D26 — Four new gestures, and two of them were already approving shell commands
+
+**2026-08-23.** LB asked for the `jaredrhod/barehands` vocabulary — `PINCH`, `CLAP`, `CLAW`,
+`FLICK` — on top of the `THUMBS_UP` and `OPEN_PALM` that `tools/gesture_control.py` already
+had, plus a live camera window to tune them in, because recognition was unreliable and there
+was no way to see what MediaPipe was actually looking at.
+
+Both were built. The interesting part is what adding the gestures uncovered in the old ones.
+
+### The claw was already a thumbs up
+
+`THUMBS_UP` is what `agents/os_agent.py` runs a shell command on, so its test is deliberately
+stricter than the obvious one — D-era note above: it requires the thumb high **and all four
+fingers not extended**, where extended means `tip.y < pip.y`. That extra clause is what stops
+an open palm being an approval.
+
+It does not stop a claw. A claw holds every fingertip below its PIP joint, so **no finger is
+extended, so the curl clause is satisfied** — and a claw's thumb sits above the index knuckle
+like everyone else's. A pinch does the same thing: the index curls down to meet the thumb, so
+it is not extended either.
+
+```
+$ python tools/verify_gestures.py --probe
+   CLAW      old order -> THUMBS_UP    new order -> CLAW
+   PINCH     old order -> THUMBS_UP    new order -> PINCH
+```
+
+That was latent from 2026-08-19 and harmless while nobody made claws at the camera on purpose.
+The request to add the claw as a gesture LB performs deliberately is what turned it into a
+routine false approval, in the same commit that would have added it.
+
+### Fixed by ordering, not by tightening
+
+`PINCH` and `CLAW` are now tested **before** `THUMBS_UP`, and the discriminator is tip-vs-**MCP**
+rather than a new threshold:
+
+    thumbs up   tip.y > mcp.y    fingertips BELOW the knuckles — folded into the palm
+    claw        tip.y < mcp.y    fingertips ABOVE the knuckles — strained, half-open
+
+Those cannot both hold, so the two are mutually exclusive **by construction** — the same
+property `OPEN_PALM` has had since D-era, and for the same reason. A threshold would have been
+a number to argue about; this is a geometric fact about a fist.
+
+**The thumbs-up test itself was not touched.** Not one constant in it moved. LB has reported
+missed thumbs-ups before, and `WARMUP_FRAMES` above is still carrying an unmeasured guess from
+that; tightening approval geometry in the same commit as four new gestures would have made the
+next missed approval impossible to attribute to either. The new gestures are guards placed in
+front of the gate, not edits to it. Net effect: strictly fewer false approvals, identical true
+ones, and `verify_gate_state.py` still 20/20.
+
+### Ratios, not distances
+
+The obvious pinch test is "distance between landmarks 4 and 8 below a constant". That constant
+is correct at exactly one camera distance — landmarks are normalised to the frame, so the same
+hand at 80 cm is half the size it is at 40 cm, and a threshold tuned close up reads every
+relaxed hand as a pinch across the room.
+
+Every distance is now divided by `_hand_scale()`, the wrist-to-middle-knuckle span — the one
+length on a hand that does not change when the fingers move. Thresholds are in palm-lengths and
+hold at any distance and on any size of hand.
+
+### FLICK cannot exist on the approval path, and that is structural
+
+`get_gesture()` reads one frame from a camera it then closes, inside a child process that then
+exits (D15's crash isolation). Motion needs two frames and something that remembers the first;
+that architecture has neither. So `FLICK` is produced only by `classify_stream()`, the
+continuous path, and `tools/live_test_gestures.py` is currently its only caller. Said out loud
+in the module header rather than left as a gesture that mysteriously never fires.
+
+It is edge-triggered: firing clears the history, so one swipe of the hand is one flick rather
+than a flick on every frame for as long as the hand is moving.
+
+### `CLAP` does not test what its name says
+
+"Palms facing each other" means recovering two palm normals from 21 landmarks each and
+comparing them — and the wrist/index/pinky triangle those normals come from is nearly
+degenerate exactly when the palms face each other edge-on to the lens, which is the only pose
+it would ever be measured in. At 640×480 and ~6.6 fps that is a calculation that looks rigorous
+and fires at random.
+
+So the test is the observable part: **two hands, both upright and open, close together**, with
+the gap measured in palm-lengths. The docstring states the gap plainly instead of implying
+precision that is not there. Two open palms held side by side also read as `CLAP`; nothing in
+the security gate is reachable from `CLAP`, so the cost is a wrong app command, not a wrong
+approval.
+
+### The test this file claimed already existed
+
+The 2026-08-19 entry above says the classifier "is tested with no camera at all — six cases,
+including the one above, all green". **There was no such test in the repo.** It was true when
+written and never committed, which is the worst case: a reviewer reads the sentence and stops
+looking, which is plausibly why the claw collision survived four days.
+
+`tools/verify_gestures.py` now exists — 31 checks, pure geometry, no camera and no mediapipe
+import. Its `--probe` restores the old branch order and expects section 3 to go red, because a
+regression test for an ordering bug that still passes when the ordering is wrong is not a test.
+Sibling of the harness lessons in D25 and [[L11]].
+
+### The rule
+
+**When a new value is added to an enum that a security check compares against, the check is
+not "does the new value equal the old one" — it is "can the new value REACH the old one".**
+The claw was never going to be confused with a thumbs up by a human. It was confused with one
+by a boolean that had been correct for two gestures and was never re-read for six.
