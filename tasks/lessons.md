@@ -597,3 +597,53 @@ bytes from codes (`bytes([92, 48])`), or use the Edit tool, which does not go th
 And sweep for NUL alongside CRLF before committing:
 
     python -c "import pathlib;print([n for n in ... if b'\x00' in pathlib.Path(n).read_bytes()])"
+
+## L19 — A model given an empty document does not report an empty document
+
+**2026-08-23 (D24).** `tools/syllabus_to_vault.py` sends a syllabus PDF to Gemini and writes the
+result into the vault as fact. An image-only scan extracts to **zero characters** — the normal
+state of a photographed syllabus, and exactly what LB's two Pi camera PDFs were (D12).
+
+Hand a model an empty document and ask for a grading breakdown and it does not say "this is
+empty". It writes a complete, plausible, entirely invented one, which then sits in long-term
+memory and is read back by three agents as though LB had written it himself.
+
+**Why:** the guard people write is `try/except` around the *call*, and the call succeeds. There
+is no error. The output is well-formed, correctly structured, and fictional. Nothing downstream
+can tell the difference, because the difference is not in the shape of the answer.
+
+Same family as [[L6]] and [[L7]]: a confident, fluent, wrong result that no exception marks.
+
+**How to apply:** when a model's output becomes durable state, put a check on the **input** and
+put it **upstream of the API call**. `MIN_USABLE_CHARS` runs before any network request, so a
+folder of scans costs nothing and the refusal names the cause. And say `no API call was made` in
+the message — a silent skip is indistinguishable from success, which is the second half of the
+same bug.
+
+The corollary: give every field a way to say *absent*, and render absence rather than dropping
+it. A schema with no empty option is a schema that instructs the model to invent.
+
+## L20 — A substring search finds only the words the document literally contains
+
+**2026-08-23 (D24).** `read_from_vault` is a substring scan — no tokenising, no stemming — which
+is the right trade for dozens of Markdown notes and no index. The first generated course note had
+a heading called "Late and missed work". So:
+
+    read_from_vault("office hours")  -> found
+    read_from_vault("late policy")   -> NOT FOUND
+
+The single likeliest question, missing, from a feature built specifically to answer it. Every
+check passed; the note was correct; the search was correct; and the two did not meet.
+
+**Why:** the search and the document were written by different people at different times, and
+nothing connects a heading's wording to a query's wording. Retrieval systems paper over this with
+embeddings, which is precisely the machinery that was removed for being too heavy — so the
+vocabulary gap came back, and it came back invisible.
+
+**How to apply:** when the retrieval is exact-match, the **writer** owns findability. Put the
+phrasings a person would type into the document itself — the generated notes carry a
+`*Search terms:*` line. Do not fix it by loosening the matcher: tokenising a tool three agents
+depend on makes every two-word query match too much, to solve a problem one line of text solves.
+
+And test findability against the real searcher, not against the string. `"late policy" in note`
+and `read_from_vault("late policy")` are different assertions, and only the second is the feature.

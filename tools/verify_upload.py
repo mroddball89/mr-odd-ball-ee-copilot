@@ -471,11 +471,12 @@ with_temp_data(_find_cases)
 
 
 def _academic_case(tmp: Path, fake: _FakeIndexer) -> None:
-    """A syllabus is STORED and not read. The absence of a rebuild is the assertion.
+    """A syllabus is filed and converted into a vault NOTE — never indexed.
 
-    Both halves of this used to be true and are not: dates were extracted with a model (D22
-    retired that) and prose was embedded for retrieval (D23 removed the academic RAG). What is
-    left is a filing cabinet, and the danger is that he describes it as more than that.
+    Three shapes in three days, which is why this is pinned rather than assumed: dates were
+    extracted with a model (D22 retired that), prose was embedded for retrieval (D23 removed
+    that), and now one extraction writes a Markdown note (D24). The assertion is the JOB it
+    asks for, because each of those looked the same from the outside.
     """
     (F.INBOX_DIR / "ECE350_syllabus.pdf").write_bytes(b"%PDF")
     out = F.process_inbox_file.invoke(
@@ -484,36 +485,40 @@ def _academic_case(tmp: Path, fake: _FakeIndexer) -> None:
           "an academic PDF lands in data/academic/", out[:70])
     check(not (F.INBOX_DIR / "ECE350_syllabus.pdf").exists(), "and leaves the inbox")
 
-    # NO rebuild. data/academic/ is excluded from the datasheet walk, so a rebuild would spend
-    # the 11.4s fixed cost re-embedding the datasheets and do nothing at all for this file.
-    check(fake.calls == [],
-          "and starts NO index rebuild — nothing reads a syllabus any more",
+    # The `syllabus` job, and NOT `vectors`. data/academic/ is excluded from the datasheet walk,
+    # so an embedding rebuild would spend the 11.4s fixed cost and do nothing for this file.
+    check(fake.calls and fake.calls[0][0] == {"syllabus"},
+          "it asks for the syllabus conversion, and NOT an embedding rebuild",
           str(fake.calls))
+    check(fake.calls[0][1] == {"ECE350_syllabus.pdf"},
+          "and names the one file, so it costs ONE api call and not one per syllabus on disk",
+          str(fake.calls[0][1]))
 
     lowered = out.lower()
-    check("cannot read it" in lowered or "not read" in lowered,
-          "the answer says plainly that he cannot read it", out[-80:])
+    check("background" in lowered and "not finished" in lowered,
+          "the answer says it is running in the background and is not done", out[-90:])
     check("canvas" in lowered,
-          "and points him at Canvas for the schedule", out[-70:])
-    check("searchable" not in lowered and "indexing" not in lowered,
-          "and does NOT imply it will become searchable", out)
+          "and still points him at Canvas for the dates", out[-70:])
+    check("index_status" in out,
+          "and names how to check whether it finished")
 
 
 with_temp_data(_academic_case)
 
 
 def _academic_takes_any_suffix(tmp: Path, fake: _FakeIndexer) -> None:
-    """A non-PDF syllabus is filed too, now that nothing parses it.
+    """A non-PDF course document is filed, but not sent to the converter.
 
-    It used to be refused, and that was right while the file had to be READ — a .txt filed
-    somewhere only a PDF loader looks is a file that has silently vanished. Nothing reads any of
-    them now, so the PDF-only rule would refuse a file for a reason that no longer exists.
+    Filed rather than refused, because it has nowhere better to go: refusing it means it gets
+    categorised as a `datasheet` instead and lands in the pool the FIRMWARE agent retrieves
+    from. Not converted, because `pypdf` is the only reader there is.
     """
     (F.INBOX_DIR / "notes.txt").write_bytes(b"hi")
     out = F.process_inbox_file.invoke({"filename": "notes.txt", "category": "academic"})
     check((tmp / "academic" / "notes.txt").is_file(),
           "a non-PDF course document is filed rather than refused", out[:70])
-    check(not fake.calls, "and no rebuild is started for it either")
+    check(not fake.calls, "and no conversion is started for it — only a PDF can be read")
+    check("stored and not read" in out.lower(), "and the answer says so", out[-60:])
 
 
 with_temp_data(_academic_takes_any_suffix)

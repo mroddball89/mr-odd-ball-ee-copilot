@@ -259,6 +259,10 @@ class _Indexer:
                     good, note = self._rebuild_vectors()
                     ok &= good
                     notes.append(note)
+                if "syllabus" in jobs:
+                    good, note = self._convert_syllabi(sources)
+                    ok &= good
+                    notes.append(note)
         except BaseException as exc:                                   # noqa: BLE001
             # BaseException, not Exception: this thread is the only place these run, and a
             # MemoryError from embedding a 400-page datasheet on a Pi must still clear
@@ -303,6 +307,38 @@ class _Indexer:
         except Exception as exc:                                      # noqa: BLE001
             LOG.exception("rebuilding the vector store failed")
             return False, f"The vector store rebuild failed: {type(exc).__name__}: {exc}"
+
+    def _convert_syllabi(self, sources: set[str]) -> tuple[bool, str]:
+        """Turn newly filed syllabi into vault notes. One API call per document.
+
+        On the background thread for the same reason the embedding is: it costs a network round
+        trip and several seconds, and this is reached from inside an agent turn.
+
+        Named files only — never `convert_all()`. That would re-read every syllabus already on
+        disk at one request each against a 20-a-day tier (D3), to learn nothing new.
+        """
+        try:
+            from tools.syllabus_to_vault import SYLLABUS_DIR, convert  # noqa: PLC0415
+
+            t0 = time.monotonic()
+            done, failed = [], []
+            for name in sorted(sources):
+                ok, message = convert(SYLLABUS_DIR / Path(name).name)
+                LOG.info("  syllabus: %s", message)
+                (done if ok else failed).append(message)
+
+            took = f" in {time.monotonic() - t0:.0f}s"
+            if failed and not done:
+                # Reported as a FAILURE, not a quiet skip. The most likely cause is an
+                # image-only scan, and "nothing happened" is indistinguishable from "it worked"
+                # unless somebody says which.
+                return False, "Syllabus conversion failed: " + " ".join(failed)
+            if failed:
+                return True, f"Converted {len(done)} syllabus note(s){took}. " + " ".join(failed)
+            return True, f"Converted {len(done)} syllabus note(s) into the vault{took}."
+        except Exception as exc:                                      # noqa: BLE001
+            LOG.exception("syllabus conversion failed")
+            return False, f"The syllabus conversion failed: {type(exc).__name__}: {exc}"
 
     def status(self) -> _IndexState:
         with self._lock:
@@ -597,10 +633,23 @@ def _file_academic(source: Path, suffix: str) -> str:
     anything warmer would be the failure this module's whole prompt block is written against.
     """
     target = _move(source, ACADEMIC_DIR)
-    return (f"Filed {target.name} to data/academic/, where LB can open it — but I cannot read "
-            f"it. I do not index syllabi any more: dates come from his Canvas feed, and course "
-            f"policies are not something I can look up at all now. Ask me to sync Canvas for "
-            f"the schedule.")
+
+    if suffix != ".pdf":
+        # Only a PDF can be read. Filed anyway rather than refused — it has nowhere better to
+        # go, and the alternative is that it gets categorised as a `datasheet` and lands in the
+        # firmware agent's pool.
+        return (f"Filed {target.name} to data/academic/ for LB to open. I can only pull course "
+                f"policies out of a PDF, so this one is stored and not read.")
+
+    # ONE API call, on the background thread, once per document. Not the RAG that was removed
+    # (D23): no collection, no embeddings, no retrieval at question time — the model reads the
+    # PDF once and leaves a plain Markdown note in `vault/courses/`, which `read_from_vault`
+    # already greps for free. D24.
+    _INDEXER.request({"syllabus"}, sources={target.name})
+    return (f"Filed {target.name} to data/academic/, and I am reading it now to pull out the "
+            f"grading breakdown, the late policy and the office hours into my notes. That is "
+            f"running in the background and is not finished yet — use index_status to check. "
+            f"Its DUE DATES are not read from it: ask me to sync Canvas for those.")
 
 
 def _file_datasheet(source: Path, suffix: str, folder: str) -> str:

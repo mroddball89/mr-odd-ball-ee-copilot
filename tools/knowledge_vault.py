@@ -106,14 +106,33 @@ def _resolve(folder: str, filename: str) -> Path:
     return path
 
 
-@tool
-def save_to_vault(filename: str, content: str, folder: str = "notes") -> str:
-    """
-    Saves persistent long-term memory notes, project specs, or component inventories
-    to the local Markdown Vault (`vault/`).
-    `filename`: name of the file (e.g., 'robot_arm.md')
-    `content`: markdown text to store
-    `folder`: subdirectory inside vault (e.g., 'projects', 'components', 'lab_notes')
+def write_note(filename: str, content: str, folder: str = "notes",
+               replace: bool = False) -> str:
+    """Write one vault note. The shared implementation behind `save_to_vault`.
+
+    Args:
+        filename: the note's name, with or without `.md`.
+        content:  markdown to store.
+        folder:   subdirectory inside the vault.
+        replace:  overwrite instead of appending. **Not reachable from a model** — see below.
+
+    Returns a sentence, never raises. Same contract as the tool.
+
+    ## Why `replace` exists and why the tool does not expose it
+
+    Appending is right for `save_to_vault`, and the comment below says why: the model does not
+    know what is already in a note, so "save the pinout" arriving twice must not lose the first
+    one.
+
+    It is exactly wrong for a **derived** note. `tools/syllabus_to_vault.py` regenerates a course
+    note from a PDF, and re-uploading a corrected syllabus would otherwise stack the old late
+    policy and the new one in the same file, separated by a rule — so a later `read_from_vault`
+    returns both and cannot tell which is current. That is the conflicting-data failure D22 and
+    D23 exist to prevent, reintroduced inside the vault.
+
+    So the flag is a Python argument on a module function, and the `@tool` wrapper below never
+    passes it. A build step can rebuild its own artifact; a model cannot silently erase a note
+    LB dictated.
     """
     try:
         filepath = _resolve(folder, filename)
@@ -122,14 +141,15 @@ def save_to_vault(filename: str, content: str, folder: str = "notes") -> str:
         # Append, never overwrite. A note is a record, and the model does not know what is
         # already in it — "save the pinout" arriving twice must not lose the first one. The
         # rule separates the entries so a later read can tell where one stops.
-        existing = filepath.exists()
+        existing = filepath.exists() and not replace
         with open(filepath, "a" if existing else "w", encoding="utf-8") as handle:
             if existing:
                 handle.write("\n\n---\n\n")
             handle.write(content.rstrip() + "\n")
 
         rel = filepath.relative_to(VAULT_DIR.resolve()).as_posix()
-        return f"Successfully saved memory to Vault: {rel}"
+        verb = "Rewrote" if replace else "Successfully saved memory to"
+        return f"{verb} Vault: {rel}"
     except Exception as exc:                                              # noqa: BLE001
         # Tools in this repo report failure as text rather than raising: an exception here
         # becomes a crash in whichever agent called it, and "I could not write that down" is
@@ -149,6 +169,20 @@ def save_to_vault(filename: str, content: str, folder: str = "notes") -> str:
             return (f"Failed to write to Vault: permission denied on {VAULT_DIR}. "
                     f"The directory is not writable by the user running me.")
         return f"Failed to write to Vault: {exc}"
+
+
+@tool
+def save_to_vault(filename: str, content: str, folder: str = "notes") -> str:
+    """
+    Saves persistent long-term memory notes, project specs, or component inventories
+    to the local Markdown Vault (`vault/`).
+    `filename`: name of the file (e.g., 'robot_arm.md')
+    `content`: markdown text to store
+    `folder`: subdirectory inside vault (e.g., 'projects', 'components', 'lab_notes')
+    """
+    # `replace` is deliberately not passed and not in this signature. A model must be able to
+    # ADD to a note and never to silently erase one LB dictated. See `write_note`.
+    return write_note(filename, content, folder)
 
 
 @tool

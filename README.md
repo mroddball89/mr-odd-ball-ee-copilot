@@ -178,21 +178,38 @@ ODDBALL_CANVAS_ICS=https://<school>.instructure.com/feeds/calendars/user_....ics
 Canvas gives you the link under **Calendar → Calendar Feed**, bottom right. Reset it there if it
 ever leaks.
 
-### What he cannot do
+### Course policies live in the vault, not in a vector store
 
-**He has no access to your syllabi at all.** The academic RAG was removed on 2026-08-23 — he
-does not index, read or search them. Ask about a late penalty, a grading breakdown or an exam
-format and he will say he only has your schedule and that you should check the syllabus
-yourself. He is told explicitly not to describe what such a policy "usually" says, because a
-plausible late penalty is worse than admitting he does not have it: it stops you checking the
-real one.
+Upload a syllabus with the paperclip and it is read **once**, into a plain Markdown note in
+`vault/courses/`:
 
-A syllabus uploaded with the paperclip is still filed to `data/academic/` for you to open, and
-he says plainly that he cannot read it.
+```bash
+python tools/syllabus_to_vault.py              # every syllabus without a note yet
+python tools/syllabus_to_vault.py --file x.pdf --dry-run   # extract and print, write nothing
+```
+
+One API call per document, then it is a file. `read_from_vault` — which the HARDWARE, FIRMWARE
+and GENERAL agents already carry — greps it for free after that, so "what's the late policy"
+works with no retrieval, no embeddings and no torch on the answer path. The note keeps the
+instructor, office hours, the grading breakdown, the late policy and any standing rules.
+
+**A scanned syllabus is refused before the model is called.** An image-only PDF has no
+extractable text, and a model handed an empty document does not report an empty document — it
+invents a complete, plausible course policy, which then sits in your notes as fact. If you see
+`only 0 characters of text`, OCR it or find a text-bearing copy.
+
+**Anything the syllabus does not say is written as *not stated*, not guessed.** The note is
+stamped with its source file and the date so you can always tell a machine wrote it, and due
+dates are deliberately excluded — those come from Canvas and would go stale here.
 
 ```bash
 python tools/academic_calendar.py   # print the calendar, and what the agent is shown
+python tools/knowledge_vault.py --search "late policy"
 ```
+
+The ACADEMIC route itself still answers **only** from the calendar. It has no access to the
+syllabi; the vault note is reached by the other agents, which is why a policy question is best
+asked plainly rather than as a coursework question.
 
 The ACADEMIC agent answers from those documents and **only** those documents — asked something
 the syllabi do not cover, it says it does not know rather than describing what a course
