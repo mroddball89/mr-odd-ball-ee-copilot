@@ -1073,3 +1073,76 @@ M3 puts the bare-keyword dictionary back (**21 checks red**) and M4 the naive co
       construction. "is the sd card full" missed on the first harness run because the phrase was
       written as "how full is the sd card". Every future miss costs one router call and should be
       added as a phrase, never widened into a keyword.
+
+---
+
+## The barehands port — measuring against the hand, not the image (2026-08-23)
+
+LB: *"flick left and right often get confused with open palm. there is no thumbs down. besides
+the addition of thumbs up and thumb down i want the same gestures and results as barehands."*
+Plus screenshots, which is what actually cracked it.
+
+- [x] Rotation-invariant geometry: `_curl` (segment dot product) and `_reach`, ported from
+      `jaredrhod/barehands` along with its fitted constants
+- [x] `THUMBS_DOWN` added; it declines at the security prompt, the first gesture allowed to
+- [x] `FLICK` redefined as a pinch released at speed — plus `TAP` and `DRAG` from the same
+      state machine. `CLAP` removed
+- [x] `POINT` and `FIST` added; `media/captures/` had examples of both reading `NONE`
+- [x] `s` now saves clean frames and a JSON of landmarks + metrics; `--label` records intent
+- [x] `verify_gestures.py` rewritten — 48 checks, with a **rotation sweep**
+
+### Review
+
+| check | result |
+|---|---|
+| `verify_gestures.py`, Windows | 48/48 |
+| `verify_gestures.py`, on the Pi in `.venv-gesture` | 48/48 |
+| `--probe` — the old test, swept over rotation | opens a closed fist at **6 of 12 angles** |
+| `verify_gate_state.py` — the security gate | 20/20 |
+| the window, on the Pi | opens, labels, clean SIGINT, camera released |
+| the new classifier over LB's own photographs | POINT no longer approves |
+
+### What didn't work
+
+- **The old classifier measured fingers against the IMAGE.** `tip.y < pip.y` is only correct
+  while the hand is upright, and a thumbs up is made palm-side-on. LB's 17:11 photo is a clean
+  thumbs up, every landmark right, classified `NONE`. Four days of "unreliable" was this, and
+  it was never a threshold.
+- **My own test suite could not see it.** Every synthetic hand written that morning was
+  upright — the same assumption the code made — so 31/31 passed while the thing did not work.
+  The rotation sweep exists because a photograph varied something the fixtures held constant.
+- **FLICK was the wrong gesture.** Defined as a moving open palm, it was separated from a still
+  open palm only by a speed bar between two frames 100 ms apart. barehands: *"Every gesture is
+  a movement, not a pose"* — a flick is a **pinch released at speed**, which cannot overlap an
+  open palm because it starts from a pinch.
+- **A pointing hand approved a shell command.** Caught by running the new build over LB's
+  photos before shipping. Index `reach 1.37` fell under the 1.45 bar, "not extended" was read
+  as "closed", and a POINT came out `THUMBS_UP`. Fixed by making open and shut two predicates
+  with a gap between them instead of one threshold with two sides.
+- **The first capture session's data was unusable.** The saved PNGs have the skeleton drawn on
+  them, so re-detecting to recover landmarks reads the overlay — three of seven returned "no
+  hand". The tool now saves a clean frame and the raw numbers beside the picture.
+
+### Still open — and this is the blocking one
+
+- [ ] **No threshold here has been checked against a real hand.** The constants are barehands',
+      fitted against barehands' pipeline, and the 48 synthetic checks prove internal
+      consistency only. What is needed is a labelled capture session, one pose at a time:
+
+      ```
+      venv/bin/python tools/live_test_gestures.py --label thumbs_up    # hold it, press s a few times
+      venv/bin/python tools/live_test_gestures.py --label thumbs_down
+      venv/bin/python tools/live_test_gestures.py --label claw
+      venv/bin/python tools/live_test_gestures.py --label pinch
+      venv/bin/python tools/live_test_gestures.py --label point
+      venv/bin/python tools/live_test_gestures.py --label open_palm
+      venv/bin/python tools/live_test_gestures.py --label fist
+      ```
+
+      Each `s` writes `media/captures/data/*.json` with the landmarks, the metrics, the
+      thresholds in force and the pose intended. Ten of each is a corpus; the thresholds can
+      then be fitted to LB's hands the way barehands fitted them to Jared's, and the result
+      written down as a measurement instead of a port.
+- [ ] Nothing consumes any gesture but `THUMBS_UP` and now `THUMBS_DOWN`. TAP/DRAG/FLICK need
+      the persistent worker before they can drive anything, since the one-shot path has no
+      frame-to-frame state.

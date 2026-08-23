@@ -90,15 +90,23 @@ HAND_CONNECTIONS = (
 # BGR, because OpenCV. The approval gesture gets its own colour: on a screen recording it must
 # be obvious at a glance which of the six was the one wired to a shell command.
 COLOUR = {
-    "THUMBS_UP": (80, 220, 80),
-    "OPEN_PALM": (230, 200, 90),
-    "PINCH":     (200, 140, 255),
-    "CLAW":      (90, 170, 255),
-    "CLAP":      (255, 190, 120),
-    "FLICK":     (120, 255, 255),
-    "NONE":      (150, 150, 150),
-    "NO_CAMERA": (80, 80, 240),
+    "THUMBS_UP":   (80, 220, 80),      # the approval. Its own colour, deliberately.
+    "THUMBS_DOWN": (80, 80, 240),      # the decline
+    "OPEN_PALM":   (230, 200, 90),
+    "FIST":        (170, 170, 170),
+    "PINCH":       (200, 140, 255),
+    "CLAW":        (90, 170, 255),
+    "POINT":       (255, 190, 120),
+    "TAP":         (255, 255, 140),
+    "DRAG":        (220, 160, 255),
+    "FLICK":       (120, 255, 255),
+    "NONE":        (150, 150, 150),
+    "NO_CAMERA":   (80, 80, 240),
 }
+
+# The events. They last one frame by construction — a tap is a pinch that already ended — so
+# they are HELD on screen for a beat or they cannot be read at ~9.7 fps.
+EVENTS = ("TAP", "FLICK")
 
 
 def reexec_into_sidecar() -> None:
@@ -250,34 +258,105 @@ def hand_numbers(gc, hands) -> list[str]:
     lines: list[str] = []
     for n, h in enumerate(hands):
         scale = gc._hand_scale(h)
-        pinch = gc._dist(h[gc.THUMB_TIP], h[gc.INDEX_TIP]) / scale
-        lines.append(f"hand {n}   pose {gc._classify(h)}")
-        lines.append(f"  palm scale   {scale:.3f}   (the yardstick; all ratios divide by it)")
-        lines.append(f"  pinch 4-8    {pinch:.2f}   < {gc.PINCH_MAX_RATIO}  "
-                     f"{'YES' if pinch < gc.PINCH_MAX_RATIO else 'no'}")
+        gap = gc._pinch_ratio(h)
+        aspect = gc._aspect(h)
+        frontal = aspect < gc.ASPECT_FRONTAL
+        ceiling = gc.PINCH_MAX_RATIO if frontal else gc.PINCH_MAX_RATIO_PROFILE
 
-        # The claw wants pip.y < tip.y < mcp.y on ALL FOUR. Show which finger is refusing.
-        bits = []
-        for name, (mcp, pip, tip) in zip("IMRP", gc.FINGERS):
-            below_pip = h[pip].y < h[tip].y
-            above_mcp = h[tip].y < h[mcp].y
-            bits.append(f"{name}{'v' if below_pip else '-'}{'^' if above_mcp else '-'}")
-        lines.append(f"  claw IMRP    {' '.join(bits)}   "
-                     f"{'YES' if gc._is_claw(h) else 'no'}   (v=below PIP, ^=above MCP)")
+        lines.append(f"hand {n}   pose {gc._classify(h)}"
+                     f"{'   GARBAGE (aspect)' if aspect > gc.ASPECT_GARBAGE else ''}")
+        lines.append(f"  span {scale:.3f}   aspect {aspect:.2f} "
+                     f"({'frontal' if frontal else 'profile'})")
 
-        ext = "".join(c if gc._extended(h, pip, tip) else "."
-                      for c, (_m, pip, tip) in zip("IMRP", gc.FINGERS))
-        lines.append(f"  extended     {ext or '....'}")
+        # curl: the rotation-invariant fold. +1 straight, negative hooked.
+        curls = " ".join(f"{c:+.2f}" for c in gc._curls(h))
+        lines.append(f"  curl IMRP    {curls}"
+                     f"   (folded < {gc.CURL_FOLDED}, straight > {gc.CURL_STRAIGHT})")
 
-    if len(hands) == 2:
-        ax, ay = gc._palm_centroid(hands[0])
-        bx, by = gc._palm_centroid(hands[1])
-        gap = ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
-        scale = (gc._hand_scale(hands[0]) + gc._hand_scale(hands[1])) / 2
-        up = all(gc._fingers_point_up(h) for h in hands)
-        lines.append(f"clap gap     {gap / scale:.2f}   < {gc.CLAP_MAX_GAP_RATIO}   "
-                     f"both upright {'YES' if up else 'no'}")
+        # reach: the rotation-invariant extension. This is what says a finger is OUT.
+        reaches = [gc._reach(h, tip, mcp) for mcp, _p, _d, tip in gc.CHAINS]
+        out = "".join(c if r > gc.EXTEND_REACH else "."
+                      for c, r in zip("IMRP", reaches))
+        lines.append(f"  reach IMRP   " + " ".join(f"{r:.2f}" for r in reaches)
+                     + f"   out:{out or '....'}  (> {gc.EXTEND_REACH})")
+
+        back = (reaches[1] + reaches[2] + reaches[3]) / 3
+        lines.append(f"  pinch gap    {gap:.2f} < {ceiling}   "
+                     f"contrast {back - reaches[0]:+.2f} > {gc.PINCH_CONTRAST}   "
+                     f"{'YES' if gc._is_pinch(h) else 'no'}")
+        lines.append(f"  claw mouth   {gap:.2f} in "
+                     f"{gc.CLAW_MOUTH_MIN}-{gc.CLAW_MOUTH_MAX}   "
+                     f"{'YES' if gc._is_claw(h) else 'no'}")
+
+        rise = (h[gc.WRIST].y - h[gc.THUMB_TIP].y) / scale
+        lines.append(f"  thumb rise   {rise:+.2f}   "
+                     f"(up > {gc.THUMB_RISE}, down < -{gc.THUMB_DROP})   "
+                     f"{gc._thumb_direction(h) or '-'}")
     return lines
+
+
+def save_sample(cv2, gc, root: Path, label: str | None, verdict: str,
+                shown, raw, hands) -> int:
+    """Write one tuning sample: the annotated frame, the clean frame, and the NUMBERS.
+
+    ## The numbers are the point; the pictures are for the vlog
+
+    A threshold cannot be fitted from a screenshot. The JSON beside it carries the 21 raw
+    landmarks and every derived metric the classifier read, so a pose can be re-judged offline
+    against a changed constant without going back to the camera — and so a disagreement
+    between what LB meant and what the classifier said is a row of numbers rather than a
+    recollection.
+
+    `intended` is what LB was actually doing, from `--label`. It is the whole value of the
+    file: fitting a threshold needs the truth, and the classifier's own verdict is precisely
+    the thing under suspicion. Without it the sample is only evidence of what already happens.
+
+    Returns 1 so the caller can count.
+    """
+    import json
+
+    out = root / "media" / "captures"
+    (out / "data").mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    name = f"gesture-{(label or verdict).lower()}-{stamp}"
+
+    cv2.imwrite(str(out / f"{name}.png"), shown)
+    cv2.imwrite(str(out / f"{name}-raw.png"), raw)
+
+    sample = {
+        "when": stamp,
+        "intended": label,                 # None when the session was not labelled
+        "classified": verdict,
+        "agrees": None if label is None else label.upper() == verdict,
+        "backend": getattr(gc, "_LAST_BACKEND", None),
+        "thresholds": {k: getattr(gc, k) for k in (
+            "EXTEND_REACH", "CURL_FOLDED", "CURL_STRAIGHT", "PINCH_MAX_RATIO",
+            "PINCH_MAX_RATIO_PROFILE", "PINCH_CONTRAST", "PINCH_BACK_ARCH",
+            "CLAW_MOUTH_MIN", "CLAW_MOUTH_MAX", "CLAW_INDEX_CURL", "CLAW_MIDDLE_CURL",
+            "CLAW_MIN_REACH", "THUMB_RISE", "THUMB_DROP", "ASPECT_FRONTAL")},
+        "hands": [],
+    }
+    for h in hands:
+        sample["hands"].append({
+            "pose": gc._classify(h),
+            "span": gc._hand_scale(h),
+            "aspect": gc._aspect(h),
+            "pinch_gap": gc._pinch_ratio(h),
+            "thumb_rise": (h[gc.WRIST].y - h[gc.THUMB_TIP].y) / gc._hand_scale(h),
+            "curl": gc._curls(h),
+            "reach": [gc._reach(h, tip, mcp) for mcp, _p, _d, tip in gc.CHAINS],
+            # The raw landmarks, so any future metric can be computed from these files
+            # without needing the hand back in front of the camera.
+            "landmarks": [[h[i].x, h[i].y, getattr(h[i], "z", 0.0)] for i in range(21)],
+        })
+
+    with open(out / "data" / f"{name}.json", "w", encoding="utf-8") as fh:
+        json.dump(sample, fh, indent=2)
+
+    verdict_note = "" if label is None else (
+        "  OK" if label.upper() == verdict else f"  <-- said {verdict}, you meant {label.upper()}")
+    print(f"  saved {name}  ({len(hands)} hand){verdict_note}")
+    return 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -290,10 +369,17 @@ def main(argv: list[str] | None = None) -> int:
                     help="flip left-right so the window reads like a mirror (default on)")
     ap.add_argument("--pinch", type=float, metavar="R",
                     help="override PINCH_MAX_RATIO for this run")
-    ap.add_argument("--clap-gap", type=float, metavar="R",
-                    help="override CLAP_MAX_GAP_RATIO for this run")
+    ap.add_argument("--claw-mouth", type=float, metavar="R",
+                    help="override CLAW_MOUTH_MIN for this run")
+    ap.add_argument("--extend", type=float, metavar="R",
+                    help="override EXTEND_REACH (what counts as a finger being out)")
     ap.add_argument("--flick-speed", type=float, metavar="V",
-                    help="override FLICK_MIN_SPEED for this run")
+                    help="override FLICK_MIN_SPEED, in palm spans per second")
+    ap.add_argument("--label", metavar="POSE",
+                    help="tag saved samples with the pose you INTENDED (e.g. --label claw). "
+                         "Run one session per pose; press s several times. Without this, "
+                         "samples are tagged with whatever the classifier said, which is "
+                         "useless for fitting a threshold that is currently wrong.")
     ap.add_argument("--no-reexec", action="store_true",
                     help="do not jump into .venv-gesture even if it exists")
     args = ap.parse_args(argv)
@@ -305,8 +391,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Overrides land on the module the classifier reads, so the REAL decision changes — the
     # numbers panel and the gesture name can never disagree about which threshold was used.
-    for flag, const in (("pinch", "PINCH_MAX_RATIO"), ("clap_gap", "CLAP_MAX_GAP_RATIO"),
-                        ("flick_speed", "FLICK_MIN_SPEED")):
+    for flag, const in (("pinch", "PINCH_MAX_RATIO"), ("claw_mouth", "CLAW_MOUTH_MIN"),
+                        ("extend", "EXTEND_REACH"), ("flick_speed", "FLICK_MIN_SPEED")):
         value = getattr(args, flag)
         if value is not None:
             print(f"  {const} = {value}  (was {getattr(gc, const)}, for this run only)")
@@ -355,10 +441,16 @@ def main(argv: list[str] | None = None) -> int:
     assert window.isascii(), "the cv2 window title must be ASCII; see the note above"
     show_numbers = True
     fps, last = 0.0, time.monotonic()
-    held, held_until = "NONE", 0.0
+    held, held_until, held_note = "NONE", 0.0, ""
+    held_colour = (200, 200, 200)
     saved = frames = 0
 
-    print("\n  q or ESC to quit, s to save a frame, h for the numbers panel\n")
+    if args.label:
+        print(f"  labelling samples as {args.label.upper()} — hold that pose and press s")
+    else:
+        print("  (no --label: samples are tagged with the classifier's own verdict, which is "
+              "no use for fitting)")
+    print("\n  q or ESC to quit, s to save a sample, h for the numbers panel\n")
     try:
         while True:
             frames += 1
@@ -377,6 +469,13 @@ def main(argv: list[str] | None = None) -> int:
             hands = rec.detect_hands(rgb)
             gesture = rec.classify_stream(hands)
 
+            # Kept BEFORE the skeleton goes on. Saving only the annotated frame was a mistake
+            # the first capture session paid for: re-running the detector over those PNGs to
+            # recover the landmarks fails, because it re-detects its own bright overlay and
+            # either misses the hand entirely or returns distorted joints. Three of LB's seven
+            # 2026-08-23 captures came back "no hand" for exactly that reason.
+            raw = frame.copy()
+
             for landmarks in hands:
                 draw(frame, landmarks)
 
@@ -388,15 +487,17 @@ def main(argv: list[str] | None = None) -> int:
             # fires once). One frame at 6.6 fps is 150 ms — too short to read. So it is HELD
             # on screen for a beat. The held banner is the only thing here that is not the
             # instantaneous truth, which is why it says so.
-            if gesture == "FLICK":
-                held, held_until = f"FLICK {rec.last_flick}", now + 0.8
+            if gesture in EVENTS:
+                held, held_colour = gesture, COLOUR.get(gesture, (200, 200, 200))
+                held_until, held_note = now + 0.8, rec.last_release
             banner = held if now < held_until else gesture
-            key_colour = COLOUR.get(gesture if now >= held_until else "FLICK", (200, 200, 200))
+            key_colour = (held_colour if now < held_until
+                          else COLOUR.get(gesture, (200, 200, 200)))
 
             h, w = frame.shape[:2]
             label(cv2, frame, banner, (16, 58), scale=1.6, colour=key_colour, thick=4)
             if now < held_until:
-                label(cv2, frame, "(held 0.8 s so it can be read)", (18, 84),
+                label(cv2, frame, f"{held_note}   (held 0.8 s so it can be read)", (18, 84),
                       scale=0.45, colour=(150, 150, 150))
 
             label(cv2, frame, f"{len(hands)} hand{'s' if len(hands) != 1 else ''}   "
@@ -417,13 +518,7 @@ def main(argv: list[str] | None = None) -> int:
             if key == ord("h"):
                 show_numbers = not show_numbers
             if key == ord("s"):
-                out = REPO_ROOT / "media" / "captures"
-                out.mkdir(parents=True, exist_ok=True)
-                stamp = time.strftime("%Y%m%d-%H%M%S")
-                path = out / f"gesture-{gesture.lower()}-{stamp}.png"
-                cv2.imwrite(str(path), frame)
-                saved += 1
-                print(f"  saved {path.relative_to(REPO_ROOT)}")
+                saved += save_sample(cv2, gc, REPO_ROOT, args.label, gesture, frame, raw, hands)
 
             # `getWindowProperty` returns < 1 for BOTH "the user closed it" and "it was never
             # created", and those need opposite responses. On frame 1 it can only be the
@@ -456,7 +551,8 @@ def main(argv: list[str] | None = None) -> int:
         rec.close()
 
     if saved:
-        print(f"  {saved} frame{'s' if saved != 1 else ''} in media/captures/")
+        print(f"  {saved} sample{'s' if saved != 1 else ''} in media/captures/ "
+              f"(numbers in media/captures/data/)")
     print("  camera released\n")
     return 0
 

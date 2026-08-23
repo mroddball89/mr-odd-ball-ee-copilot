@@ -2484,3 +2484,108 @@ is to say so and fail.
 without a camera was green on the authoring machine and every one of those checks was still
 green while the window did not exist. Neither bug was reachable from Windows: one needs a
 Wayland session, the other needs OpenCV's Qt backend rather than the Win32 one.
+
+---
+
+## D27 — The gestures were measured against the image instead of against the hand
+
+**2026-08-23.** LB, after the first real session with the tuning window: *"flick left and right
+often get confused with open palm. there is no thumbs down. besides the addition of thumbs up
+and thumb down i want it to have the same hand gestures and results as `jaredrhod/barehands`."*
+And, crucially, he sent the screenshots.
+
+Three separate problems, and the photographs settled all three.
+
+### The photograph that explains four days of unreliability
+
+`media/captures/gesture-none-20260823-171120.png` is a clean thumbs up — every landmark on the
+right joint, the skeleton drawn perfectly — classified **`NONE`**.
+
+Nothing was wrong with the detection. The question being asked of it was wrong. Every finger
+test in this module was an image-coordinate comparison, `tip.y < pip.y`, which measures a
+finger against **the frame** rather than against the hand. It is correct only while the hand is
+held vertically, and **a thumbs up is naturally made with the palm turned side-on** — at which
+point the fingers curl sideways, their tips land near their PIPs' height, and "curled" starts
+reading as "extended".
+
+Swept over twelve rotations of one closed fist, the old test calls it an **open palm at six of
+them** (`verify_gestures.py --probe`). `OPEN_PALM` is a gesture the system acts on.
+
+This is what "my gesture recognition is unreliable" was, from the very first message. It was
+never a threshold.
+
+### Ported, not reinvented — including the constants
+
+`barehands` solved this and says how, in its own source:
+
+> monocular z is too weak for distances ... a hooked finger's distal segment points back
+> AGAINST its proximal segment (dot < 0-ish); an extended finger's segments stay aligned
+> (dot ~ +0.9) **in ANY camera orientation** — angles survive the foreshortening that lies
+> about lengths.
+
+So `_curl()` is the dot product of a finger's proximal segment with its distal one, and
+`_reach()` measures tip and knuckle from the same wrist. Neither can notice the hand turning.
+
+Its thresholds came too, with their fitting history attached — `v3.9.32`, "fitted from his
+pinch corpus, 3 correct / 3 fists", the CONTRAST LAW that separates a pinch from a fist by
+index-versus-the-rest rather than by gap. The constants in this file before today were derived
+from geometry and honestly labelled as guesses. **Taking someone's measured numbers over your
+own invented ones is the entire reason to port rather than reinvent.**
+
+### FLICK was the wrong gesture, not a mistuned one
+
+LB's report was that flick reads as open palm. It was not a threshold problem. The old FLICK
+was *an open palm moving quickly*, so a moving open palm and a still one were the same hand
+separated only by a speed bar between two frames 100 ms apart — below it, `OPEN_PALM`, which is
+exactly the complaint.
+
+`barehands` opens its gesture guide with **"Every gesture is a movement, not a pose"**, and a
+flick there is *a pinch released at speed* — you let go while your hand is still travelling.
+That has no overlap with an open palm at all, because it starts from a pinch. `TAP` (a quick
+pinch that went nowhere) and `DRAG` (a pinch that has travelled) come from the same state
+machine. The clap is gone; LB does not want it.
+
+### A pointing hand approved a shell command
+
+Caught by running the new classifier over LB's own photographs before shipping it. His POINT
+sample measured index `curl +0.60, reach 1.37` — and 1.37 is below the 1.45 extension bar, so
+"not extended" made the hand all-fingers-closed, which fell into the thumb branch and came out
+**`THUMBS_UP`**. An approval, from a hand that is not remotely a fist.
+
+The single-threshold split was the bug: it divides hand-space in two, so "not proven out" means
+"in". `_finger_shut()` now requires a finger to be folded by **both** curl and reach, while
+`_finger_open()` accepts **either**, leaving a deliberate band between them. A hand that is
+neither clearly open nor clearly folded satisfies neither and falls to `NONE` — the keyboard.
+That gap is the safety margin, and it is why the two predicates are not each other's negation.
+
+### THUMBS_DOWN is the first gesture allowed to end a question
+
+Every gesture before it could only ever approve; the design note said the camera never declines
+on LB's behalf. `THUMBS_DOWN` does, and it is safe for a reason that does not generalise: **it
+returns False.** A declined action does not run, so a misread thumbs down costs one retry,
+while a misread thumbs up runs a shell command. The asymmetry is the whole argument.
+
+### What is NOT verified, and it is the part that matters
+
+**The thresholds have not been checked against a real hand.** The port carries `barehands`'
+numbers, but its landmark pipeline is not this one, and the synthetic hands in
+`verify_gestures.py` are a model of a hand, not a hand — all 48 checks pass and prove only
+internal consistency.
+
+The one real-data run available was **confounded**: re-running the detector over the saved
+PNGs fails, because those frames have the skeleton drawn on top and the detector re-detects its
+own overlay. Three of seven came back "no hand".
+
+That is now fixed at the source rather than worked around. Pressing `s` saves three files: the
+annotated frame for the vlog, **a clean un-annotated frame**, and **a JSON carrying all 21 raw
+landmarks, every derived metric, the thresholds in force, and — from `--label` — the pose LB
+was actually making.** Fitting a threshold needs the truth, and the classifier's own verdict is
+the thing under suspicion.
+
+### The rule
+
+**A test suite built on the same assumption as the code cannot see that assumption.** The
+synthetic hands written this morning were all upright, because the classifier only worked
+upright; they passed, and agreed with it all the way to the camera. The rotation sweep exists
+now because the photograph did what the tests could not — it varied something the author had
+not thought to vary. Ask what your fixtures hold constant.
