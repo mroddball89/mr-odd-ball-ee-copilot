@@ -1,57 +1,45 @@
 #!/usr/bin/env python3
 """
 Module:  academic_calendar.py
-Purpose: Hold LB's coursework deadlines, and read them back for free on every turn.
+Purpose: Read LB's coursework deadlines back, for free, on every turn.
 Author:  LB
-Date:    2026-08-21 (Canvas became the source of dates 2026-08-23)
+Date:    2026-08-21 (a writer until 2026-08-23; a reader only since — D22, D23)
 
-    python tools/canvas_sync.py              # THE source of dates now — his live Canvas feed
-    python tools/academic_calendar.py        # the old PDF extractor, kept as a fallback
+    python tools/canvas_sync.py              # WRITES the calendar, from his live Canvas feed
+    python tools/academic_calendar.py        # prints what is in it, and what the agent is shown
 
-## Dates come from Canvas now, not from the PDFs
+## This module writes nothing
 
-**`tools/canvas_sync.py` is the live source and this module's extractor is a fallback.** A
-syllabus is a snapshot; a date moved in week four is right in Canvas and wrong in the PDF, and
-the PDF's version is the one that got extracted. LB: *"the static syllabus PDFs contain outdated
-dates."* The feed also costs **no API call**, where extraction costs one per document against a
-20-a-day quota (D3).
+It used to. `extract_deadlines_from_syllabi()` read every PDF under `data/academic/`, sent each
+to Gemini with a structured-output schema, and wrote the dates it got back. **It is deleted.**
 
-Everything below `load_calendar()` is unchanged and is what both writers feed: the file format,
-the day-granularity comparison, the banner, and the prompt rendering. Only *where the rows come
-from* moved.
+Dates come from `tools/canvas_sync.py` — LB's live Canvas `.ics` feed — because a syllabus is a
+snapshot and a schedule is not. A date moved in week four is right in Canvas and wrong in the
+PDF, and the PDF's version was the one that got extracted. The feed also costs no API call at
+all, against a tier D3 measured at 20 requests per model per day.
 
-The two writers coexist through the `source` field, and neither can erase the other's work:
-`canvas_sync` owns rows marked `canvas`, this module owns rows marked with a PDF's filename, and
-`extract_deadlines_from_syllabi` explicitly preserves Canvas rows on every run including a full
-rebuild. The syllabus **RAG is untouched** — `tools/vector_db.py` still embeds `data/academic/`
-and the agent still retrieves policy prose from it. Only date extraction was retired.
+So there is exactly **one writer** and this file is not it. What lives here is everything that
+reads `academic_calendar.json`:
 
-## Why extraction is a build step and not part of the answer
+    load_calendar()            the file, or [] — never raises
+    get_upcoming_deadlines()   what is due soon, for the global banner
+    format_deadlines()         rendered for a card, never spoken
+    format_calendar_for_llm()  rendered for the ACADEMIC agent's prompt, and bounded
 
-`agents/academic_agent.py` retrieves syllabus text semantically, which is the right tool for
-"what does the syllabus say about late work" and the wrong one for "what's due this week".
-A due date is a *structured* fact, and semantic search over prose returns the chunk that reads
-most like the question — not the one with the nearest date in it. Asked what is due soonest, a
-retriever will happily hand back the paragraph containing the word "soon".
+## Why reading is separate from writing at all
 
-So dates are extracted **once**, into `academic_calendar.json`, and every question after that
-reads a local JSON file. That split matters for two reasons beyond correctness:
+The deadline check runs on **every single turn** — `engine/core.py` appends it to any answer,
+on any subject, which is D11's whole argument: a reminder you see only when you were already
+thinking about coursework is a reminder that fires at the wrong time.
 
-1. **Quota.** D3 measured the free tier at 20 requests per model per day. Extraction costs one
-   API call per syllabus document, paid on the day LB adds a syllabus. Reading the file costs
-   nothing, which is what lets `engine/core.py` check deadlines on **every single turn** —
-   a check that cost an API call could not go there at any price.
-2. **Time.** The deadline banner is on the turn path. A JSON read is microseconds; an
-   extraction is seconds.
+That is only affordable because reading is a JSON parse and costs microseconds and no quota.
+Anything that put a network call or a model call on this path would take the banner off it.
 
-This is the same shape `tools/vector_db.py` already uses — a `python tools/...` build step, run
-after adding PDFs, producing an artifact the answer path only reads.
-
-## What happens before it is built
+## What happens before anything is synced
 
 `load_calendar()` returns `[]` when the file does not exist. That is **not an error** — it is
 the normal state of a fresh clone, exactly as `get_retriever()` returning None is. Nothing
-warns, nothing crashes, and no deadline banner appears because there are no deadlines known.
+warns, nothing crashes, and no banner appears, because no deadlines are known.
 """
 
 from __future__ import annotations
@@ -60,9 +48,6 @@ import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Literal
-
-from pydantic import BaseModel, Field
 
 LOG = logging.getLogger("oddball.academic_calendar")
 
@@ -72,48 +57,6 @@ CALENDAR_FILE = ACADEMIC_PATH / "academic_calendar.json"
 
 # How far ahead counts as "coming up". LB's number.
 DEFAULT_WARNING_DAYS = 3
-
-
-class Deadline(BaseModel):
-    """One dated obligation from a syllabus."""
-
-    course: str = Field(description="The course this belongs to, e.g. 'ECE 350' or "
-                                    "'Signals and Systems'.")
-    title: str = Field(description="What is due, e.g. 'Homework 4' or 'Midterm Exam 1'.")
-    type: Literal["exam", "assignment", "quiz", "project", "other"] = Field(
-        description="What kind of obligation this is.")
-    due_date: str = Field(description="The due date as an ISO 8601 date, YYYY-MM-DD. If the "
-                                      "syllabus gives a time as well, still return only the "
-                                      "date.")
-
-
-class SyllabusExtraction(BaseModel):
-    """Everything dated that one syllabus document contains."""
-
-    deadlines: list[Deadline] = Field(
-        default_factory=list,
-        description="Every dated assignment, exam, quiz or project in this document. Empty if "
-                    "the document contains no dates.")
-
-
-EXTRACTION_PROMPT = """
-You are reading a university course syllabus for an electrical engineering student.
-
-Extract EVERY dated obligation: assignments, homework, labs, quizzes, exams, midterms, finals
-and project milestones.
-
-Rules:
-- Return an ISO 8601 date (YYYY-MM-DD) for each one. The current academic year is {year}; if
-  the syllabus gives a date with no year, use the year that makes the date fall inside the
-  academic term the document describes.
-- If a date is genuinely absent or unreadable, LEAVE THAT ITEM OUT. Do not guess a date, and do
-  not invent an item to fill a gap in a schedule. A missing deadline is recoverable; a wrong
-  one sends the student to an exam on the wrong day.
-- Office hours, lecture topics and reading assignments with no due date are NOT deadlines.
-
-SYLLABUS TEXT:
-{document}
-"""
 
 
 # ---------------------------------------------------------------------------------------
@@ -280,132 +223,47 @@ def format_calendar_for_llm(entries: list[dict] | None = None,
 
 
 # ---------------------------------------------------------------------------------------
-# Building — the once-per-syllabus step. Spends quota; never on the answer path.
+# There is no build step here any more.
+#
+# `extract_deadlines_from_syllabi()` lived below this line: it read every PDF under
+# `data/academic/`, sent each one to Gemini with a structured-output schema, and wrote the
+# dates it got back. It is **deleted** (D23). Dates come from `tools/canvas_sync.py`, which
+# reads LB's live Canvas feed — a snapshot of a schedule cannot compete with the schedule.
+#
+# What went with it: `Deadline` and `SyllabusExtraction` (the pydantic schemas), the extraction
+# prompt, `_documents_by_source()`, and this module's only use of `pypdf` via
+# `tools/vector_db.load_pdfs`. Nothing here imports a model or touches the network now.
+#
+# `git log -- tools/academic_calendar.py` has it if the argument is ever revisited.
 # ---------------------------------------------------------------------------------------
 
-def _documents_by_source() -> dict[str, str]:
-    """Every syllabus under `data/academic/`, as one text blob per file.
 
-    Per FILE rather than per page: a course schedule is a table that runs across a page break,
-    and an extraction shown only page 3 will read a date off a row whose header was on page 2.
-    """
-    from tools.vector_db import load_pdfs                             # noqa: PLC0415
+def main(argv: list[str] | None = None) -> int:
+    """Print the calendar. A reader's debug CLI, where a builder's used to be."""
+    import sys
 
-    by_source: dict[str, list[str]] = {}
-    for doc in load_pdfs(ACADEMIC_PATH):
-        meta = getattr(doc, "metadata", {}) or {}
-        by_source.setdefault(str(meta.get("source", "unknown")), []).append(doc.page_content)
-    return {src: "\n".join(pages) for src, pages in by_source.items()}
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
 
-
-def extract_deadlines_from_syllabi(sources: set[str] | None = None) -> int:
-    """Read the syllabi, extract their dates, write `academic_calendar.json`.
-
-    Args:
-        sources: filenames (not paths) to re-extract, or None for all of them. When given,
-                 deadlines already recorded from OTHER files are carried over untouched.
-
-    Returns:
-        How many deadlines are in the calendar afterwards.
-
-    **Costs one API call per syllabus file processed**, which is why `sources` exists.
-
-    D3 measured the free tier at 20 requests per model per day. `tools/file_manager.py` calls
-    this every time LB uploads a syllabus through the paperclip, and re-reading all five of his
-    syllabi to learn the dates in the one that just arrived would spend a quarter of the day's
-    quota on four files that have not changed. Passing the one filename makes an upload cost one
-    request instead of five.
-
-    The merge is by `source`, and that is why the extraction writes that field at all: every
-    deadline in the file knows which document it came from, so replacing one document's dates is
-    a filter rather than a diff. A file that is re-extracted and now yields nothing correctly
-    ends up with no deadlines — its old ones go, because they came from the version that has
-    been replaced.
-    """
-    from langchain_google_genai import ChatGoogleGenerativeAI        # noqa: PLC0415
-
-    from engine.models import AGENT_MODEL, LLM_MAX_RETRIES          # noqa: PLC0415
-
-    documents = _documents_by_source()
-    if not documents:
-        print(f"No PDFs found under {ACADEMIC_PATH}. Put your syllabi in there and run again.")
+    entries = load_calendar()
+    if not entries:
+        print(f"No deadlines on file. {CALENDAR_FILE} does not exist or is empty.")
+        print("Sync them with:  python tools/canvas_sync.py")
         return 0
 
-    # Canvas rows ALWAYS survive, whether this is a full run or an incremental one. The feed is
-    # the live source of dates now (tools/canvas_sync.py); this path only ever owned the rows it
-    # extracted from PDFs, and a full rebuild wiping the feed's work would be a calendar that
-    # silently reverts to stale dates the next time somebody runs this script.
-    from tools.canvas_sync import CANVAS_SOURCE                      # noqa: PLC0415
-
-    kept: list[dict] = [d for d in load_calendar()
-                        if str(d.get("source", "")) == CANVAS_SOURCE]
-    if kept:
-        print(f"   keeping {len(kept)} Canvas deadline(s) — this script only owns PDF rows")
-    if sources:
-        wanted = {Path(s).name for s in sources}
-        documents = {src: text for src, text in documents.items() if Path(src).name in wanted}
-        if not documents:
-            print(f"None of {', '.join(sorted(wanted))} is under {ACADEMIC_PATH}. "
-                  f"The calendar is unchanged.")
-            return len(load_calendar())
-        # Everything from a document we are NOT re-reading survives this run, on top of the
-        # Canvas rows already held above.
-        kept = kept + [d for d in load_calendar()
-                       if str(d.get("source", "")) not in wanted
-                       and str(d.get("source", "")) != CANVAS_SOURCE]
-        print(f"1. Re-reading {len(documents)} syllabus file(s), and keeping {len(kept)} "
-              f"deadline(s) already extracted from the others")
-    else:
-        print(f"1. Read {len(documents)} syllabus file(s) from {ACADEMIC_PATH}")
-
-    # AGENT_MODEL, not ROUTER_MODEL. Reading a date out of a schedule table is exactly the kind
-    # of accuracy D3 says is worth paying `flash` for — and this runs once, not per turn.
-    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.0, max_retries=LLM_MAX_RETRIES)
-    structured = llm.with_structured_output(SyllabusExtraction)
-
-    print("2. Extracting deadlines...")
-    deadlines: list[dict] = list(kept)
-    for source, text in documents.items():
-        name = Path(source).name
-        try:
-            result = structured.invoke(
-                EXTRACTION_PROMPT.format(year=datetime.now().year, document=text))
-        except Exception as exc:                                     # noqa: BLE001
-            # One unreadable syllabus must not cost the other four. Named, so LB knows which.
-            print(f"   FAILED  {name}: {type(exc).__name__}: {exc}")
-            # On an incremental run this file's OLD deadlines were dropped from `kept` on the
-            # assumption it was about to be re-read. It was not, so they come back — otherwise
-            # a rate-limited API call would silently delete a course's whole schedule, and the
-            # only symptom would be a deadline banner that stopped appearing.
-            if sources:
-                previous = [d for d in load_calendar() if str(d.get("source", "")) == name]
-                deadlines.extend(previous)
-                print(f"        kept the {len(previous)} deadline(s) already on file for it")
-            continue
-
-        found = [{**d.model_dump(), "source": name} for d in result.deadlines]
-        deadlines.extend(found)
-        print(f"   {len(found):3} from {name}")
-
-    # `.get`, not `[...]`: `kept` comes off disk, and a hand-edited entry missing its date must
-    # not take the whole rebuild down with a KeyError.
-    deadlines.sort(key=lambda d: str(d.get("due_date", "")))
-
-    ACADEMIC_PATH.mkdir(parents=True, exist_ok=True)
-    with CALENDAR_FILE.open("w", encoding="utf-8") as fh:
-        json.dump({"generated": datetime.now().isoformat(), "deadlines": deadlines},
-                  fh, indent=2)
-
-    print(f"3. Wrote {len(deadlines)} deadline(s) to {CALENDAR_FILE}")
-
+    print(f"{len(entries)} deadline(s) in {CALENDAR_FILE}")
+    print()
     soon = get_upcoming_deadlines()
-    if soon:
-        print(f"\n   Coming up within {DEFAULT_WARNING_DAYS} days:\n{format_deadlines(soon)}")
-    return len(deadlines)
+    print(f"Within {DEFAULT_WARNING_DAYS} days:")
+    print(format_deadlines(soon) if soon else "  (nothing)")
+    print()
+    print("--- what the ACADEMIC agent is shown ---")
+    print(format_calendar_for_llm())
+    return 0
 
 
 if __name__ == "__main__":
-    import sys
-
-    sys.path.insert(0, str(REPO_ROOT))
-    extract_deadlines_from_syllabi()
+    raise SystemExit(main())

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 Module:  verify_academic.py
-Purpose: Prove the ACADEMIC route retrieves before it generates, and that the deadline banner
-         is global, free, and silent.
+Purpose: Prove the ACADEMIC route answers from the calendar ALONE, and that the deadline
+         banner is global, free, and silent.
 Author:  LB
-Date:    2026-08-21
+Date:    2026-08-21 (rewritten 2026-08-23 when the syllabus RAG was removed — D23)
 
     python tools/verify_academic.py            # no API calls, no key, no cost
     python tools/verify_academic.py --store    # also builds a throwaway Chroma store (slow)
@@ -13,11 +13,15 @@ Date:    2026-08-21
 
 D11 rests on three claims that are invisible from the outside. Each one fails silently:
 
-1. **Retrieval happens BEFORE generation, against the ACADEMIC collection.** An agent that
-   generates first and retrieves after still returns a plausible answer — that is exactly the
-   bug D11 exists to prevent, and it looks identical to the fixed version from the outside.
-   `tools/verify_agents.py` proves the route is *reachable*; only call ordering proves it is
-   *grounded*.
+1. **The agent reads the calendar and retrieves NOTHING.** This check used to prove that
+   retrieval ran *before* generation; the property now is that retrieval does not run at all.
+   A stray `get_retriever` reintroduced on this path would pull torch onto the answer path and
+   ground a schedule answer in whatever prose happened to be nearest.
+
+   It also checks the thing the removal COST: he can no longer answer a policy question, and a
+   model that is not told so answers it from what universities usually do. That is D11's
+   fabrication arriving through a different door, so the prompt has to forbid it explicitly and
+   this section has to pin that it still does.
 
 2. **The deadline banner is global and costs nothing.** It sits on the turn path, so if it ever
    started spending an API call it would blow D3's 20-per-day ceiling on the free lookups that
@@ -29,8 +33,10 @@ D11 rests on three claims that are invisible from the outside. Each one fails si
    separately.
 
 Section 4 is opt-in (`--store`) because it builds real embeddings, which is slow and pulls
-torch. It is the only check that proves the two collections cannot see each other, which is the
-property that stops a syllabus grounding a firmware answer.
+torch. It proves a syllabus under `data/academic/` cannot be retrieved by the FIRMWARE agent —
+and that matters MORE than it used to. The academic collection was the backstop; with it gone,
+the path exclusion in `vector_db.load_pdfs` is the only thing left, and a firmware answer citing
+a course outline as a datasheet is D30's failure with a citation attached.
 """
 
 from __future__ import annotations
@@ -131,88 +137,100 @@ finally:
 
 
 # =========================================================================================
-section("2. the agent retrieves BEFORE it generates, from the academic collection")
+section("2. the agent reads the calendar, generates ONCE, and retrieves nothing")
 # =========================================================================================
 
 import agents.academic_agent as aa                                   # noqa: E402
 
-
-class _Doc:
-    def __init__(self, text, source, page):
-        self.page_content, self.metadata = text, {"source": source, "page": page}
-
-
 events: list[str] = []
 captured: dict = {}
-asked: dict = {}
-
-
-class _Retriever:
-    def invoke(self, q):
-        events.append("retrieve")
-        return [_Doc("Late homework loses 10% per day, up to three days.",
-                     "/data/academic/ece350.pdf", 2)]
 
 
 class _LLM:
     def __init__(self, **kw):
         captured["model"] = kw.get("model")
 
+    def bind_tools(self, tools):
+        captured["bound"] = [t.name for t in tools]
+        return self
+
     def invoke(self, prompt):
         events.append("generate")
         captured["prompt"] = prompt
 
         class R:
-            content = ("Late work loses 10% per day for up to three days [1].\n"
-                       "SPOKEN: Ten percent a day, up to three days.")
+            content = ("Lab 4 is due Friday.\n"
+                       "SPOKEN: Lab four is due Friday.")
+            tool_calls: list = []
         return R()
 
 
-_real_get, _real_llm = aa.get_retriever, aa.ChatGoogleGenerativeAI
+_real_llm = aa.ChatGoogleGenerativeAI
+_real_fmt = aa.format_calendar_for_llm
 
-
-def _fake_get(k=4, collection="datasheets"):
-    asked["k"], asked["collection"] = k, collection
-    return _Retriever()
-
-
-aa.get_retriever, aa.ChatGoogleGenerativeAI = _fake_get, _LLM
+aa.ChatGoogleGenerativeAI = _LLM
+aa.format_calendar_for_llm = lambda *a, **k: (events.append("read calendar"),
+                                              "Today's date is 2026-08-23.\n\n"
+                                              "KNOWN DEADLINES:\n"
+                                              "- 2026-08-30  POSC201  Lab 4 (assignment)")[1]
 try:
-    resp = aa.run_academic_agent_response("what happens if I hand homework in late")
+    resp = aa.run_academic_agent_response("when is lab 4 due")
     prompt = captured["prompt"]
 
-    # THE check. Generation first would still produce an answer — a fluent, ungrounded one.
-    check(events == ["retrieve", "generate"],
-          "local retrieval runs BEFORE the API call", f"call order was {events}")
-    check(asked.get("collection") == "academic",
-          "it searches the academic collection, not the datasheets",
-          f"asked for {asked.get('collection')!r}")
+    # THE check, inverted from what it used to be. It used to prove retrieval ran BEFORE
+    # generation; the property now is that retrieval does not run AT ALL. A stray
+    # `get_retriever` reintroduced here would cost a torch import on the answer path and
+    # ground a schedule answer in whatever prose happened to be nearest.
+    check(events == ["read calendar", "generate"],
+          "the calendar is read, then the model is called — once, and in that order",
+          f"call order was {events}")
+    check(not hasattr(aa, "get_retriever"),
+          "the module does not import get_retriever at all",
+          "a retriever on this path is a torch import on the answer path")
+    check("ACADEMIC_COLLECTION" not in open(aa.__file__, encoding="utf-8").read(),
+          "and does not name the retired academic collection")
+
     check(captured["model"] == "gemini-3.5-flash",
           "it runs on the agent model, not the router's lite model",
           f"got {captured['model']!r}")
-    check("Late homework loses 10% per day" in prompt,
-          "the retrieved chunk is injected into the prompt")
-    check("using ONLY the provided local document context" in prompt
-          and "state that you do not know" in prompt,
-          "the strict-grounding directive is present, both halves")
-    check(any(c.title == "Sources" for c in resp.cards)
-          and "ece350.pdf" in next(c.body for c in resp.cards if c.title == "Sources"),
-          "a Sources card names the syllabus and page")
+    check(captured.get("bound") == ["sync_canvas_calendar"],
+          "the Canvas sync is bound, and it is the only tool",
+          str(captured.get("bound")))
+
+    check("KNOWN DEADLINES" in prompt and "Lab 4" in prompt,
+          "the calendar is injected into the prompt")
+    check("using ONLY the calendar below" in prompt and "say you do not know" in prompt,
+          "the strict-grounding directive survived the rewrite, both halves")
+
+    # The new failure mode. He can no longer answer a policy question, and a model that is not
+    # told so will answer it from what universities usually do — which is D11's fabrication
+    # arriving through a different door.
+    check("You do not have his syllabi" in prompt
+          and "check the syllabus himself" in prompt,
+          "he is told he CANNOT answer policy questions, and what to say instead")
+    check("Do NOT describe what such a policy usually says" in prompt,
+          "...and told not to improvise one from convention")
+
     # D11: the deadline check is global, so a second copy here would double it on exactly the
     # turns where LB is already talking about coursework.
     check(not any(c.title.startswith("Due") for c in resp.cards),
           "the agent does NOT append its own deadline card — that check is global")
+    check(not any(c.title == "Sources" for c in resp.cards),
+          "and no Sources card, since there is nothing to cite any more",
+          f"cards were {[c.title for c in resp.cards]}")
 
-    # With no store at all, the gap must be STATED and the directive must still stand.
+    # An empty calendar must still produce the refusal, not a blank slot the model fills in.
     events.clear()
-    aa.get_retriever = lambda k=4, collection="datasheets": None
+    aa.format_calendar_for_llm = lambda *a, **k: (events.append("read calendar"),
+                                                  "No coursework deadlines are on file yet.")[1]
     aa.run_academic_agent("when is the midterm")
-    check("No syllabus excerpts were retrieved" in captured["prompt"],
-          "with no vector store, the prompt says so instead of leaving the slot blank")
-    check("using ONLY the provided local document context" in captured["prompt"],
+    check("No coursework deadlines are on file yet" in captured["prompt"],
+          "with an empty calendar the prompt says so rather than leaving the slot blank")
+    check("using ONLY the calendar below" in captured["prompt"],
           "...and the strict directive still stands, so he refuses rather than inventing")
 finally:
-    aa.get_retriever, aa.ChatGoogleGenerativeAI = _real_get, _real_llm
+    aa.ChatGoogleGenerativeAI = _real_llm
+    aa.format_calendar_for_llm = _real_fmt
 
 
 # =========================================================================================
@@ -331,7 +349,7 @@ def store_checks() -> int:
     with (data / "sensors" / "scanned_no_text.pdf").open("wb") as fh:
         _blank.write(fh)
 
-    vdb.DATA_PATH, vdb.ACADEMIC_PATH = data, academic
+    vdb.DATA_PATH, vdb.EXCLUDED_FROM_DATASHEETS = data, academic
     vdb.CHROMA_PATH, vdb._stores = tmp / "chroma_db", {}
 
     try:
@@ -344,23 +362,30 @@ def store_checks() -> int:
         # A textless PDF must not take the build down, and must not silently vanish either.
         vdb.build_vector_database()
         sheet_r = vdb.get_retriever(k=3, collection=vdb.DATASHEET_COLLECTION)
-        acad_r = vdb.get_retriever(k=3, collection=vdb.ACADEMIC_COLLECTION)
 
+        # THE check, and it matters MORE now than when there were two collections. The academic
+        # collection used to be the backstop: a syllabus that leaked into the datasheet walk
+        # still had a separate pool it belonged to. That pool is gone (D23), so the path
+        # exclusion is the only thing standing between a course outline and a register-level
+        # answer — and a firmware reply citing a syllabus as a datasheet is D30's failure with a
+        # citation attached.
         q = "what is the late homework policy"
         from_sheets = [Path(d.metadata["source"]).name for d in sheet_r.invoke(q)]
-        from_acad = [Path(d.metadata["source"]).name for d in acad_r.invoke(q)]
         check("ece350.pdf" not in from_sheets,
-              "a syllabus is NOT retrievable from the datasheets collection", f"got {from_sheets}")
-        check("ece350.pdf" in from_acad,
-              "...and IS retrievable from the academic one", f"got {from_acad}")
+              "a syllabus in data/academic/ is NOT retrievable by the firmware agent",
+              f"got {from_sheets}")
 
         q2 = "how many bits is the load cell ADC"
         from_sheets2 = [Path(d.metadata["source"]).name for d in sheet_r.invoke(q2)]
-        from_acad2 = [Path(d.metadata["source"]).name for d in acad_r.invoke(q2)]
         check("hx711.pdf" in from_sheets2, "a datasheet is retrievable from datasheets",
               f"got {from_sheets2}")
-        check("hx711.pdf" not in from_acad2,
-              "...and NOT from the academic collection", f"got {from_acad2}")
+
+        # The retired collection must not come back by accident. Opening a name Chroma has
+        # never seen creates it EMPTY rather than raising, so a stray reference would look like
+        # a working retriever returning nothing — silent, and indistinguishable from an
+        # un-ingested store.
+        check(not hasattr(vdb, "ACADEMIC_COLLECTION"),
+              "the academic collection constant is gone, not merely unused")
 
         # The textless file contributed nothing, and the text-bearing ones beside it still
         # indexed. Reaching this line at all is the regression check: before the fix,
