@@ -995,3 +995,54 @@ it trades false accepts back in — do not do it silently.
 Three options, none chosen: move the C270 closer; record fixtures in LB's voice at real desk
 distance and re-derive the threshold from those; or switch STT to `base.en`, which tolerates
 poor audio better at roughly 1 s more latency.
+
+## The gesture tuning window
+
+`tools/live_test_gestures.py` draws the MediaPipe skeleton live and names the gesture, so the
+thresholds in `tools/gesture_control.py` can be tuned against numbers instead of guesses.
+
+**It must run from the Pi's own desktop session, not over plain `ssh`** — it needs somewhere to
+put a window. From a terminal on the Pi:
+
+```bash
+cd ~/mr-odd-ball
+venv/bin/python tools/live_test_gestures.py
+```
+
+It re-executes itself into `.venv-gesture` on its own (mediapipe cannot run in the 3.13 venv,
+D15) and sets `QT_QPA_PLATFORM=xcb` on its own (this Pi is Wayland and the opencv wheel ships
+only the xcb plugin, D26 bring-up). Neither needs doing by hand.
+
+    q or ESC   quit, releasing the camera
+    s          save the current frame to media/captures/
+    h          hide/show the numbers panel
+
+The numbers panel is the point: it prints each live ratio beside the threshold it was compared
+against, so a gesture that will not fire says *by how much* it is missing.
+
+```bash
+venv/bin/python tools/live_test_gestures.py --pinch 0.35     # try a threshold, no edit
+venv/bin/python tools/live_test_gestures.py --camera 1       # a second webcam
+```
+
+If it says **"The window never opened"** it will print the platform, display and session type,
+and exit 2. Over SSH that is expected; from the desktop it means the Qt plugin needs forcing:
+
+```bash
+QT_QPA_PLATFORM=xcb DISPLAY=:0 venv/bin/python tools/live_test_gestures.py
+```
+
+**`~/mr-odd-ball` is not a git checkout** — it is a tar deploy target, so `git pull` there fails
+with "not a git repository". Code arrives by the deploy at the top of this file. For iterating on
+a single file, `scp` it:
+
+```bash
+scp tools/live_test_gestures.py oddball-pi:~/mr-odd-ball/tools/
+```
+
+No camera needed to check the classifier itself — that is pure geometry:
+
+```bash
+venv/bin/python tools/verify_gestures.py            # 31 checks
+venv/bin/python tools/verify_gestures.py --probe    # proves the suite bites
+```

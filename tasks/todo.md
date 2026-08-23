@@ -931,6 +931,29 @@ not measurements, and the panel exists to replace them with numbers.
   being measured. The docstring says what it actually tests — two upright open hands, close
   together — rather than implying precision that is not there.
 
+### Bring-up on the Pi — the window would not open, twice over
+
+First run on the box it was written for: banner, "camera released", exit 0. No window, no error.
+**Two independent bugs both presenting as "no window", so fixing either alone showed nothing.**
+
+- **OpenCV's Qt ships no Wayland plugin.** labwc means `XDG_SESSION_TYPE=wayland`, so Qt asks for
+  a `wayland` platform plugin; the wheel contains only `libqxcb.so`. Xwayland is already up and
+  owns `:0`, so xcb works — `ensure_qt_platform()` now detects this and sets it, plus `DISPLAY`.
+- **The window title had an em dash in it.** With the platform fixed it *still* would not appear:
+  `'ascii-name'` -> `visible=1.0`, `'MR ODD BALL — gesture tuning'` -> `visible=0.0`. OpenCV's Qt
+  will not show a window with a non-ASCII title. This repo writes em dashes everywhere in prose
+  and the habit walked into a string that is an identifier. Now ASCII, with an assert and an AST
+  check that no non-ASCII literal reaches `imshow`/`putText`/`imwrite`.
+- **The clean exit was the real problem.** `getWindowProperty(...) < 1` cannot distinguish "user
+  closed it" from "never created", so a window that never opened read as one LB had closed. On
+  frame 1 it can only be the latter; that now prints the platform, display and session type and
+  returns 2. A diagnostic that exits 0 is worse than one that crashes.
+- **Every no-camera check was green the whole time.** Neither bug is reachable from Windows — one
+  needs a Wayland session, the other needs OpenCV's Qt backend rather than Win32. Verified fixed
+  on the Pi: window held open 12 s, clean SIGINT, camera released.
+- **`git pull` on the Pi does not work and never did.** `~/mr-odd-ball` is a tar deploy target
+  with no `.git`. Runbook and the `scp` single-file path are now in `docs/DEPLOY.md`.
+
 ### Still open
 
 - [ ] **The thresholds are guesses and are labelled as such.** `PINCH_MAX_RATIO` 0.40,
