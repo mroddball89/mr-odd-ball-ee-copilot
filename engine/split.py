@@ -98,6 +98,69 @@ _TRACEBACK = re.compile(r"(?i)\btraceback \(most recent call last\)|^\s*File \""
 _CODE_IDENT = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b|\b[A-Z]{2,}[0-9]*\(")
 
 
+# ---------------------------------------------------------------------------------------
+# Symbol expansion, applied to a CANDIDATE before it is judged.
+#
+# `is_speakable()` REJECTS text containing τ Ω μ π ° × ÷ and friends, and rejection is not a
+# small penalty — the sentence is thrown away and replaced by "I've put it on the screen."
+# So the most common way to lose the actual answer was to be correct in engineering notation:
+# "The trace needs to be 0.9 mm wide for a 20°C rise" was never spoken, because of the degree
+# sign. That is the "TTS skips words" symptom in its worst form, and it is a *policy* failure
+# rather than a synthesiser one.
+#
+# Expanding first means the sentence passes the same filter and is SAID. Note what this does
+# not do: it does not weaken `is_speakable()`. The gate is unchanged and still runs on every
+# candidate; this only normalises the input, so a sentence is rejected for being unsayable
+# rather than for spelling "ohms" with a Greek letter.
+#
+# Ordered longest-first, and that ordering is load-bearing: "kΩ" must be seen before "Ω", or
+# it becomes "k ohms", and "°C" before "°" or it becomes "degrees C".
+#
+# The prompts still ask models to write symbols as words (the persona agent says so in as many
+# words). This is the backstop for when they do not — which, per the emoji note in
+# `audio/say.py`, is routinely.
+_EXPANSIONS: tuple[tuple[str, str], ...] = (
+    # Resistance, prefix first.
+    ("kΩ", " kilohms "), ("MΩ", " megohms "), ("mΩ", " milliohms "), ("Ω", " ohms "),
+    # Micro-anything. Both the micro sign (U+00B5) and Greek mu (U+03BC) turn up in the wild.
+    ("μF", " microfarads "), ("µF", " microfarads "),
+    ("μA", " microamps "),   ("µA", " microamps "),
+    ("μV", " microvolts "),  ("µV", " microvolts "),
+    ("μs", " microseconds "), ("µs", " microseconds "),
+    ("μ", " micro "), ("µ", " micro "),
+    # Temperature, unit first.
+    ("°C", " degrees Celsius "), ("°F", " degrees Fahrenheit "), ("°", " degrees "),
+    # Maths.
+    ("²", " squared "), ("³", " cubed "), ("√", " square root of "),
+    ("×", " times "), ("÷", " divided by "), ("≈", " about "),
+    ("±", " plus or minus "), ("≤", " at most "), ("≥", " at least "),
+    ("∞", " infinity "),
+    # Greek that survives a prompt telling the model not to use it.
+    ("τ", " tau "), ("π", " pi "), ("Δ", " delta "), ("ω", " omega "),
+    # ASCII that Piper renders as a stumble or as nothing.
+    ("&", " and "), ("%", " percent "),
+)
+
+
+def expand_symbols(text: str) -> str:
+    """Rewrite symbols as the words for them, so a correct sentence is not thrown away.
+
+    Applied to candidates INSIDE `split()`, never to card bodies — a card is read, not heard,
+    and "0.9 mm at 20°C" is the right thing to show on screen.
+
+    Returns the text unchanged when it contains none of them, which is the common case.
+    """
+    if not text:
+        return text
+    for symbol, word in _EXPANSIONS:
+        if symbol in text:
+            text = text.replace(symbol, word)
+    # The replacements pad with spaces so "20°C" does not become "20degrees Celsius"; this
+    # takes the padding back out, including before punctuation.
+    text = re.sub(r"\s+", " ", text)
+    return re.sub(r"\s+([,.;:!?])", r"\1", text).strip()
+
+
 @dataclass(frozen=True)
 class Rejection:
     """Why a candidate spoken line was refused. Returned so the harness can assert on it."""
@@ -215,14 +278,20 @@ def split(reply: str, route: str = "", fallback: str = "") -> Response:
     spoken, remainder = _take_spoken_line(raw)
     cards, prose = _extract_cards(remainder)
 
+    # Symbols become words BEFORE the candidate is judged — see `expand_symbols`. Applied to
+    # the candidates only, never to `prose`, which goes on a card where "20°C" is correct.
+    spoken = expand_symbols(spoken)
+
     # 1. The agent's own line, if it survives the filter.
     speech = spoken if spoken and is_speakable(spoken) is None else ""
 
     # 2. Extract one from the prose that is left.
     if not speech and prose:
         got = speakable.extract(prose, max_words=MAX_WORDS)
-        if got and is_speakable(got.text) is None:
-            speech = got.text
+        if got:
+            candidate = expand_symbols(got.text)
+            if is_speakable(candidate) is None:
+                speech = candidate
 
     # 3. A rejected SPOKEN line is still evidence of intent — try its first sentence alone,
     #    which is usually the answer with a code identifier trailing after it.

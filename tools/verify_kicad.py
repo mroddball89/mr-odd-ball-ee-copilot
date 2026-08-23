@@ -438,9 +438,20 @@ except Exception as exc:                                                  # noqa
 check(imported, "agents/hardware_agent.py imports with the new tools", detail)
 
 if imported:
+    # The three KiCad/IPC tools must all be present. Asserted as a SUBSET rather than as an
+    # exact set, and that is the fix for a real false alarm: this check was written when the
+    # hardware agent had exactly three tools, and binding the two vault tools to it turned the
+    # harness red without anything being broken.
+    #
+    # An exact-set assertion on a list designed to grow reports every ADDITION as a
+    # regression — which trains you to ignore it, and the day it means something you already
+    # are. The property that actually matters is that nothing was LOST, so that is what is
+    # checked, and the full list is printed either way.
     names = {t.name for t in HA.TOOLS}
-    check(names == {"calculate_ipc2221_trace_width", "extract_kicad_bom", "analyze_kicad_pcb"},
-          "all three tools are bound", f"{sorted(names)}")
+    required = {"calculate_ipc2221_trace_width", "extract_kicad_bom", "analyze_kicad_pcb"}
+    check(required <= names, "all three KiCad/IPC tools are bound",
+          f"bound: {sorted(names)}"
+          + (f" — MISSING {sorted(required - names)}" if required - names else ""))
     check(set(HA._BY_NAME) == names, "every bound tool is reachable by the name it emits")
     for name in names:
         check(callable(getattr(HA._BY_NAME[name], "invoke", None)),
