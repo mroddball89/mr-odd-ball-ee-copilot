@@ -521,13 +521,28 @@ and still useful if a pywebview window is ever wanted for something else.
 
 ## From the boot-race fix (2026-08-23)
 
-- [ ] **Reboot the Pi to confirm the fix on the path it was written for.** Everything so far is
-      a simulation — `unset-environment` + restart, which reproduces the race exactly but not
-      the boot. After a reboot:
-        systemctl --user show oddball -p ActiveState -p NRestarts
+- [x] ~~Reboot the Pi to confirm the fix on the path it was written for.~~ **Done 2026-08-23**,
+      and the race was real:
+
+        04:54:53  boot
+        04:55:01  unit starts — ExecStartPre begins
+        04:55:01  labwc starts        <- the SAME SECOND. This is the collision.
+        04:55:04  ExecStart runs, with WAYLAND_DISPLAY
+
+      `ExecStartPre` held ~3s and the service came up with `WAYLAND_DISPLAY=wayland-0` and
+      `DISPLAY=:0`, where before the fix it had `XDG_RUNTIME_DIR` and nothing else.
+      `NRestarts=0`. Firefox launched end to end on the fresh boot.
+
+      **Read it off the SERVICE process, not an ssh shell** — an ssh session never has
+      `WAYLAND_DISPLAY`, so checking from one measures the wrong thing and reports a fallback
+      that is not being used. That mistake was made once already here:
+
         PID=$(systemctl --user show oddball -p MainPID --value)
         tr '\0' '\n' < /proc/$PID/environ | grep WAYLAND_DISPLAY    # expect wayland-0
-        journalctl --user -u oddball -b | grep wait_for_display     # how long it waited
+- [ ] `journalctl --user` captures nothing on this box, so `ExecStartPre`'s own log line is not
+      retrievable and the unit timestamps had to stand in for it. Pre-existing (the app logs to
+      `oddball.log` instead), not caused by the boot-race change, but it means anything a
+      `ExecStartPre` or `ExecStopPost` prints is currently written to nowhere.
 - [ ] **CRLF keeps coming back from the Windows side.** Every Python-scripted edit
       (`Path.write_text`) reintroduces it — 23 files on 2026-08-23, including
       `config/oddball.service`, where it reached the Pi's installed unit. systemd tolerated it;
