@@ -12,18 +12,18 @@ Date:    2026-08-21 (ported to the mediapipe Tasks API 2026-08-22)
 
     python tools/live_test_gestures.py               # the camera window, for tuning these
 
-Returns exactly one of `PINCH`, `CLAP`, `CLAW`, `FLICK`, `THUMBS_UP`, `OPEN_PALM`, `NONE` or
-`NO_CAMERA`. Wired into the terminal security prompts in `agents/os_agent.py` and
-`agents/web_agent.py`: **a thumbs up is a yes, and every other token falls through to the
-keyboard** — which is why the six-gesture vocabulary below costs the gate nothing.
+Returns exactly one of `TAP`, `DRAG`, `FLICK`, `PINCH`, `CLAW`, `POINT`, `FIST`, `THUMBS_UP`,
+`THUMBS_DOWN`, `OPEN_PALM`, `NONE` or `NO_CAMERA`. Wired into the terminal security prompts in
+`agents/os_agent.py` and `agents/web_agent.py`: **a thumbs up is a yes, a thumbs down is a no,
+and every other token falls through to the keyboard.**
 
-`FLICK` needs motion, so it needs consecutive frames. `get_gesture()` reads ONE frame from a
-camera it then closes, in a child process that then exits (see `_ask_sidecar`), so there is no
-previous frame for it to have moved from: **the one-shot path never returns `FLICK`.** It is
-produced by `classify_stream()`, the continuous path, which `tools/live_test_gestures.py` and
-any future always-on loop use. Naming it in `_VALID` anyway is deliberate — the token is part
-of the vocabulary, and a whitelist that omits it would silently turn a future streaming
-sidecar's honest answer into `NO_CAMERA`.
+`TAP`, `DRAG` and `FLICK` are movements, so they need consecutive frames. `get_gesture()` reads
+ONE frame from a camera it then closes, in a child process that then exits (see `_ask_sidecar`),
+so there is no previous frame for a hand to have moved from: **the one-shot path returns poses
+only.** Movements come from `classify_stream()`, the continuous path, which
+`tools/live_test_gestures.py` and any future always-on loop use. They are named in `_VALID`
+anyway, because a whitelist that omitted them would silently turn a future streaming sidecar's
+honest answer into `NO_CAMERA`.
 
 ## Two mediapipe APIs and a sidecar, because the Pi forced all three (D14, D15)
 
@@ -122,61 +122,3999 @@ A gesture that fails both is `NONE`, which declines to the keyboard — the safe
 Image coordinates run y-DOWN, so "above" is a smaller y. Every comparison below is in
 normalised landmark space (0..1 of the frame), so it is resolution-independent.
 
-## Four more gestures, and the reason three of them are tested BEFORE the thumbs up
+#
+#
+ 
+T
+h
+e
+ 
+v
+o
+c
+a
+b
+u
+l
+a
+r
+y
+ 
+i
+s
+ 
+j
+a
+r
+e
+d
+r
+h
+o
+d
+/
+b
+a
+r
+e
+h
+a
+n
+d
+s
+'
+,
+ 
+a
+n
+d
+ 
+s
+o
+ 
+i
+s
+ 
+t
+h
+e
+ 
+g
+e
+o
+m
+e
+t
+r
+y
 
-The vocabulary grew on 2026-08-23 to the set in `jaredrhod/barehands` — `PINCH`, `CLAP`,
-`CLAW`, `FLICK` — so the assistant can be driven by hand and not only *approved* by hand.
-Adding them to a module whose output is wired into a security gate has one non-obvious
-consequence, and it is the most important thing on this page.
 
-**A claw and a pinch both pass the old thumbs-up test.** That test is "thumb above the index
-knuckle, above the wrist, and no finger *extended*", where extended means `tip.y < pip.y`. A
-claw holds every fingertip below its PIP — so it is not extended. A pinch curls the index down
-to meet the thumb — so it is not extended either. Both therefore satisfy `not any(extended)`,
-and both put the thumb high. Under the pre-2026-08-23 classifier, **a claw at the camera was a
-`THUMBS_UP`**, and on `agents/os_agent.py`'s path a `THUMBS_UP` runs a shell command.
 
-That was survivable while nobody made claws at the camera on purpose. It stops being
-survivable the moment "the claw" is a gesture LB actually performs, which is what this change
-makes it. So the collision is closed, by ordering:
 
-    CLAP  ->  OPEN_PALM  ->  PINCH  ->  CLAW  ->  THUMBS_UP  ->  NONE
+*
+*
+2
+0
+2
+6
+-
+0
+8
+-
+2
+3
+.
+*
+*
+ 
+T
+h
+e
+ 
+s
+e
+t
+ 
+h
+e
+r
+e
+ 
+i
+s
+ 
+`
+b
+a
+r
+e
+h
+a
+n
+d
+s
+`
+'
+ 
+g
+e
+s
+t
+u
+r
+e
+ 
+v
+o
+c
+a
+b
+u
+l
+a
+r
+y
+,
+ 
+m
+i
+n
+u
+s
+ 
+i
+t
+s
+ 
+c
+l
+a
+p
+,
+ 
+p
+l
+u
+s
+ 
+a
+ 
+t
+h
+u
+m
+b
+s
 
-and by picking a discriminator that separates a fist from a claw cleanly rather than by
-threshold luck. **A real fist tucks the fingertips BELOW the knuckles; a claw holds them
-ABOVE.** So:
 
-    thumbs up   tip.y > mcp.y     tips below the MCP line   (curled into the palm)
-    claw        tip.y < mcp.y     tips above the MCP line   (strained, half-open)
-                pip.y < tip.y     ...but still below the PIP  (not extended)
+u
+p
+ 
+a
+n
+d
+ 
+a
+ 
+t
+h
+u
+m
+b
+s
+ 
+d
+o
+w
+n
+.
+ 
+N
+o
+t
+ 
+j
+u
+s
+t
+ 
+t
+h
+e
+ 
+n
+a
+m
+e
+s
+ 
+—
+ 
+t
+h
+e
+ 
+*
+m
+e
+a
+s
+u
+r
+e
+m
+e
+n
+t
+s
+*
+,
+ 
+p
+o
+r
+t
+e
+d
+ 
+f
+r
+o
+m
+ 
+`
+s
+t
+a
+g
+e
+.
+h
+t
+m
+l
+`
+,
+ 
+w
+h
+o
+s
+e
 
-Those two cases cannot both be true, so a claw can never reach the `THUMBS_UP` branch and a
-genuine thumbs up is never eaten by the claw branch. Mutually exclusive **by construction** —
-the same property `OPEN_PALM` has had since 2026-08-19, and for the same reason.
 
-Note what this did NOT do: **the thumbs-up test itself is unchanged.** Not one threshold in it
-moved. LB has reported missed thumbs-ups before (see `WARMUP_FRAMES` above) and tightening the
-approval geometry in the same commit that adds four gestures would have made the next missed
-approval impossible to attribute. The new gestures are *guards placed in front of* the gate,
-not edits to it. The net effect on the gate is strictly fewer false approvals and exactly the
-same true ones.
+c
+o
+m
+m
+e
+n
+t
+s
+ 
+c
+a
+r
+r
+y
+ 
+t
+h
+e
+ 
+c
+o
+r
+p
+u
+s
+ 
+e
+a
+c
+h
+ 
+c
+o
+n
+s
+t
+a
+n
+t
+ 
+w
+a
+s
+ 
+f
+i
+t
+t
+e
+d
+ 
+a
+g
+a
+i
+n
+s
+t
+ 
+(
+"
+v
+3
+.
+9
+.
+3
+2
+ 
+—
+ 
+h
+i
+s
+ 
+f
+i
+n
+a
+l
+ 
+p
+i
+n
+c
+h
+ 
+s
+a
+m
+p
+l
+e
+"
+,
 
-## Distances are measured in palm-lengths, not in frame-widths
 
-`PINCH` is "landmark 4 touches landmark 8", and the obvious implementation compares their
-Euclidean distance to a constant. That constant is wrong at every camera distance but one:
-landmarks are normalised to the FRAME, so a hand at arm's length is half the size of the same
-hand up close, and a fixed 0.05 that works at 40 cm reads every relaxed hand as a pinch at 80 cm.
+"
+f
+i
+t
+t
+e
+d
+ 
+f
+r
+o
+m
+ 
+h
+i
+s
+ 
+p
+i
+n
+c
+h
+ 
+c
+o
+r
+p
+u
+s
+,
+ 
+3
+ 
+c
+o
+r
+r
+e
+c
+t
+ 
+/
+ 
+3
+ 
+f
+i
+s
+t
+s
+"
+)
+.
+ 
+T
+h
+e
+ 
+c
+o
+n
+s
+t
+a
+n
+t
+s
+ 
+i
+n
+ 
+t
+h
+i
+s
+ 
+f
+i
+l
+e
+ 
+b
+e
+f
+o
+r
+e
+ 
+t
+h
+a
+t
 
-So every distance here is divided by `_hand_scale()` — the wrist-to-middle-knuckle span, which
-is the one length on a hand that does not change when the fingers move. A pinch is then
-"the gap is under 0.40 **palm-lengths**", which is true at any distance from the camera and on
-any size of hand. Same trick for the `CLAP` gap.
 
-The thresholds below are starting values, chosen from geometry rather than measured, and they
-are exactly what `tools/live_test_gestures.py` exists to tune: it prints the live ratio next to
-the gesture so a threshold can be moved against something observed instead of guessed. That is
-the same discipline `WARMUP_FRAMES` is still waiting on.
+d
+a
+t
+e
+ 
+w
+e
+r
+e
+ 
+d
+e
+r
+i
+v
+e
+d
+ 
+f
+r
+o
+m
+ 
+g
+e
+o
+m
+e
+t
+r
+y
+ 
+a
+n
+d
+ 
+h
+o
+n
+e
+s
+t
+l
+y
+ 
+l
+a
+b
+e
+l
+l
+e
+d
+ 
+a
+s
+ 
+g
+u
+e
+s
+s
+e
+s
+.
+ 
+T
+h
+e
+s
+e
+ 
+a
+r
+e
+ 
+n
+o
+t
+ 
+g
+u
+e
+s
+s
+e
+s
+,
+ 
+a
+n
+d
+
+
+t
+h
+a
+t
+ 
+i
+s
+ 
+t
+h
+e
+ 
+e
+n
+t
+i
+r
+e
+ 
+r
+e
+a
+s
+o
+n
+ 
+t
+o
+ 
+p
+o
+r
+t
+ 
+r
+a
+t
+h
+e
+r
+ 
+t
+h
+a
+n
+ 
+r
+e
+i
+n
+v
+e
+n
+t
+.
+
+
+
+
+ 
+ 
+ 
+ 
+p
+o
+s
+e
+s
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+O
+P
+E
+N
+_
+P
+A
+L
+M
+ 
+ 
+F
+I
+S
+T
+ 
+ 
+P
+I
+N
+C
+H
+ 
+ 
+C
+L
+A
+W
+ 
+ 
+P
+O
+I
+N
+T
+ 
+ 
+T
+H
+U
+M
+B
+S
+_
+U
+P
+ 
+ 
+T
+H
+U
+M
+B
+S
+_
+D
+O
+W
+N
+
+
+ 
+ 
+ 
+ 
+m
+o
+v
+e
+m
+e
+n
+t
+s
+ 
+ 
+ 
+ 
+T
+A
+P
+ 
+ 
+D
+R
+A
+G
+ 
+ 
+F
+L
+I
+C
+K
+
+
+
+
+#
+#
+ 
+E
+v
+e
+r
+y
+ 
+f
+i
+n
+g
+e
+r
+ 
+t
+e
+s
+t
+ 
+i
+s
+ 
+n
+o
+w
+ 
+m
+e
+a
+s
+u
+r
+e
+d
+ 
+a
+g
+a
+i
+n
+s
+t
+ 
+t
+h
+e
+ 
+H
+A
+N
+D
+,
+ 
+n
+o
+t
+ 
+a
+g
+a
+i
+n
+s
+t
+ 
+t
+h
+e
+ 
+i
+m
+a
+g
+e
+
+
+
+
+T
+h
+i
+s
+ 
+i
+s
+ 
+t
+h
+e
+ 
+c
+h
+a
+n
+g
+e
+ 
+t
+h
+a
+t
+ 
+m
+a
+t
+t
+e
+r
+s
+ 
+a
+n
+d
+ 
+i
+t
+ 
+i
+s
+ 
+w
+h
+y
+ 
+r
+e
+c
+o
+g
+n
+i
+t
+i
+o
+n
+ 
+w
+a
+s
+ 
+u
+n
+r
+e
+l
+i
+a
+b
+l
+e
+.
+
+
+
+
+T
+h
+e
+ 
+o
+l
+d
+ 
+t
+e
+s
+t
+s
+ 
+w
+e
+r
+e
+ 
+i
+m
+a
+g
+e
+-
+c
+o
+o
+r
+d
+i
+n
+a
+t
+e
+ 
+c
+o
+m
+p
+a
+r
+i
+s
+o
+n
+s
+ 
+—
+ 
+`
+t
+i
+p
+.
+y
+ 
+<
+ 
+p
+i
+p
+.
+y
+`
+ 
+f
+o
+r
+ 
+"
+e
+x
+t
+e
+n
+d
+e
+d
+"
+,
+ 
+`
+t
+i
+p
+.
+y
+`
+
+
+a
+g
+a
+i
+n
+s
+t
+ 
+`
+m
+c
+p
+.
+y
+`
+ 
+f
+o
+r
+ 
+t
+h
+e
+ 
+c
+l
+a
+w
+.
+ 
+T
+h
+a
+t
+ 
+i
+s
+ 
+a
+n
+ 
+a
+n
+g
+l
+e
+ 
+m
+e
+a
+s
+u
+r
+e
+d
+ 
+a
+g
+a
+i
+n
+s
+t
+ 
+t
+h
+e
+ 
+*
+*
+f
+r
+a
+m
+e
+*
+*
+,
+ 
+a
+n
+d
+ 
+i
+t
+ 
+i
+s
+ 
+o
+n
+l
+y
+
+
+c
+o
+r
+r
+e
+c
+t
+ 
+w
+h
+i
+l
+e
+ 
+t
+h
+e
+ 
+h
+a
+n
+d
+ 
+i
+s
+ 
+h
+e
+l
+d
+ 
+u
+p
+r
+i
+g
+h
+t
+.
+ 
+*
+*
+A
+ 
+t
+h
+u
+m
+b
+s
+ 
+u
+p
+ 
+i
+s
+ 
+n
+a
+t
+u
+r
+a
+l
+l
+y
+ 
+m
+a
+d
+e
+ 
+w
+i
+t
+h
+ 
+t
+h
+e
+ 
+p
+a
+l
+m
+ 
+t
+u
+r
+n
+e
+d
+
+
+s
+i
+d
+e
+-
+o
+n
+*
+*
+,
+ 
+a
+n
+d
+ 
+w
+h
+e
+n
+ 
+i
+t
+ 
+i
+s
+,
+ 
+t
+h
+e
+ 
+f
+i
+n
+g
+e
+r
+s
+ 
+c
+u
+r
+l
+ 
+s
+i
+d
+e
+w
+a
+y
+s
+ 
+r
+a
+t
+h
+e
+r
+ 
+t
+h
+a
+n
+ 
+d
+o
+w
+n
+w
+a
+r
+d
+:
+ 
+t
+h
+e
+i
+r
+ 
+t
+i
+p
+s
+ 
+l
+a
+n
+d
+ 
+a
+t
+
+
+r
+o
+u
+g
+h
+l
+y
+ 
+t
+h
+e
+i
+r
+ 
+P
+I
+P
+s
+'
+ 
+h
+e
+i
+g
+h
+t
+,
+ 
+`
+t
+i
+p
+.
+y
+ 
+<
+ 
+p
+i
+p
+.
+y
+`
+ 
+s
+t
+a
+r
+t
+s
+ 
+c
+o
+m
+i
+n
+g
+ 
+b
+a
+c
+k
+ 
+t
+r
+u
+e
+ 
+f
+o
+r
+ 
+a
+ 
+f
+u
+l
+l
+y
+ 
+c
+u
+r
+l
+e
+d
+ 
+f
+i
+n
+g
+e
+r
+,
+
+
+a
+n
+d
+ 
+t
+h
+e
+ 
+"
+a
+l
+l
+ 
+f
+o
+u
+r
+ 
+f
+i
+n
+g
+e
+r
+s
+ 
+c
+u
+r
+l
+e
+d
+"
+ 
+c
+l
+a
+u
+s
+e
+ 
+f
+a
+i
+l
+s
+.
+
+
+
+
+L
+B
+ 
+p
+h
+o
+t
+o
+g
+r
+a
+p
+h
+e
+d
+ 
+e
+x
+a
+c
+t
+l
+y
+ 
+t
+h
+a
+t
+ 
+o
+n
+ 
+2
+0
+2
+6
+-
+0
+8
+-
+2
+3
+ 
+a
+t
+ 
+0
+9
+:
+1
+1
+ 
+—
+ 
+a
+ 
+c
+l
+e
+a
+n
+ 
+t
+h
+u
+m
+b
+s
+ 
+u
+p
+,
+ 
+e
+v
+e
+r
+y
+ 
+l
+a
+n
+d
+m
+a
+r
+k
+
+
+c
+o
+r
+r
+e
+c
+t
+l
+y
+ 
+p
+l
+a
+c
+e
+d
+,
+ 
+c
+l
+a
+s
+s
+i
+f
+i
+e
+d
+ 
+`
+N
+O
+N
+E
+`
+.
+ 
+`
+m
+e
+d
+i
+a
+/
+c
+a
+p
+t
+u
+r
+e
+s
+/
+g
+e
+s
+t
+u
+r
+e
+-
+n
+o
+n
+e
+-
+2
+0
+2
+6
+0
+8
+2
+3
+-
+1
+7
+1
+1
+2
+0
+.
+p
+n
+g
+`
+.
+ 
+N
+o
+t
+h
+i
+n
+g
+
+
+w
+a
+s
+ 
+w
+r
+o
+n
+g
+ 
+w
+i
+t
+h
+ 
+t
+h
+e
+ 
+d
+e
+t
+e
+c
+t
+i
+o
+n
+;
+ 
+t
+h
+e
+ 
+q
+u
+e
+s
+t
+i
+o
+n
+ 
+b
+e
+i
+n
+g
+ 
+a
+s
+k
+e
+d
+ 
+o
+f
+ 
+i
+t
+ 
+w
+a
+s
+ 
+w
+r
+o
+n
+g
+.
+
+
+
+
+T
+w
+o
+ 
+r
+o
+t
+a
+t
+i
+o
+n
+-
+i
+n
+v
+a
+r
+i
+a
+n
+t
+ 
+p
+r
+i
+m
+i
+t
+i
+v
+e
+s
+ 
+r
+e
+p
+l
+a
+c
+e
+ 
+a
+l
+l
+ 
+o
+f
+ 
+i
+t
+,
+ 
+b
+o
+t
+h
+ 
+f
+r
+o
+m
+ 
+`
+b
+a
+r
+e
+h
+a
+n
+d
+s
+`
+:
+
+
+
+
+*
+ 
+*
+*
+`
+_
+c
+u
+r
+l
+(
+)
+`
+*
+*
+ 
+—
+ 
+t
+h
+e
+ 
+d
+o
+t
+ 
+p
+r
+o
+d
+u
+c
+t
+ 
+o
+f
+ 
+a
+ 
+f
+i
+n
+g
+e
+r
+'
+s
+ 
+p
+r
+o
+x
+i
+m
+a
+l
+ 
+s
+e
+g
+m
+e
+n
+t
+ 
+w
+i
+t
+h
+ 
+i
+t
+s
+ 
+d
+i
+s
+t
+a
+l
+ 
+o
+n
+e
+.
+ 
+S
+t
+r
+a
+i
+g
+h
+t
+
+
+ 
+ 
+i
+s
+ 
+~
++
+0
+.
+9
+,
+ 
+h
+o
+o
+k
+e
+d
+ 
+g
+o
+e
+s
+ 
+n
+e
+g
+a
+t
+i
+v
+e
+,
+ 
+*
+i
+n
+ 
+a
+n
+y
+ 
+c
+a
+m
+e
+r
+a
+ 
+o
+r
+i
+e
+n
+t
+a
+t
+i
+o
+n
+*
+.
+ 
+I
+t
+s
+ 
+o
+w
+n
+ 
+n
+o
+t
+e
+ 
+o
+n
+ 
+w
+h
+y
+ 
+a
+n
+ 
+a
+n
+g
+l
+e
+ 
+a
+n
+d
+
+
+ 
+ 
+n
+o
+t
+ 
+a
+ 
+d
+i
+s
+t
+a
+n
+c
+e
+:
+ 
+"
+m
+o
+n
+o
+c
+u
+l
+a
+r
+ 
+z
+ 
+i
+s
+ 
+t
+o
+o
+ 
+w
+e
+a
+k
+ 
+f
+o
+r
+ 
+d
+i
+s
+t
+a
+n
+c
+e
+s
+ 
+.
+.
+.
+ 
+a
+n
+g
+l
+e
+s
+ 
+s
+u
+r
+v
+i
+v
+e
+ 
+t
+h
+e
+ 
+f
+o
+r
+e
+s
+h
+o
+r
+t
+e
+n
+i
+n
+g
+
+
+ 
+ 
+t
+h
+a
+t
+ 
+l
+i
+e
+s
+ 
+a
+b
+o
+u
+t
+ 
+l
+e
+n
+g
+t
+h
+s
+.
+"
+
+
+*
+ 
+*
+*
+`
+_
+r
+e
+a
+c
+h
+(
+)
+`
+*
+*
+ 
+—
+ 
+t
+i
+p
+-
+t
+o
+-
+w
+r
+i
+s
+t
+ 
+o
+v
+e
+r
+ 
+k
+n
+u
+c
+k
+l
+e
+-
+t
+o
+-
+w
+r
+i
+s
+t
+.
+ 
+B
+o
+t
+h
+ 
+m
+e
+a
+s
+u
+r
+e
+d
+ 
+f
+r
+o
+m
+ 
+t
+h
+e
+ 
+s
+a
+m
+e
+ 
+p
+o
+i
+n
+t
+,
+ 
+s
+o
+
+
+ 
+ 
+r
+o
+t
+a
+t
+i
+n
+g
+ 
+t
+h
+e
+ 
+h
+a
+n
+d
+ 
+c
+a
+n
+n
+o
+t
+ 
+c
+h
+a
+n
+g
+e
+ 
+t
+h
+e
+ 
+r
+a
+t
+i
+o
+.
+
+
+
+
+T
+h
+e
+ 
+o
+n
+e
+ 
+t
+e
+s
+t
+ 
+s
+t
+i
+l
+l
+ 
+i
+n
+ 
+i
+m
+a
+g
+e
+ 
+c
+o
+o
+r
+d
+i
+n
+a
+t
+e
+s
+ 
+i
+s
+ 
+`
+_
+t
+h
+u
+m
+b
+_
+d
+i
+r
+e
+c
+t
+i
+o
+n
+(
+)
+`
+,
+ 
+a
+n
+d
+ 
+t
+h
+a
+t
+ 
+i
+s
+ 
+d
+e
+l
+i
+b
+e
+r
+a
+t
+e
+:
+ 
+u
+p
+ 
+a
+n
+d
+
+
+d
+o
+w
+n
+ 
+a
+r
+e
+ 
+f
+a
+c
+t
+s
+ 
+a
+b
+o
+u
+t
+ 
+g
+r
+a
+v
+i
+t
+y
+,
+ 
+n
+o
+t
+ 
+a
+b
+o
+u
+t
+ 
+t
+h
+e
+ 
+h
+a
+n
+d
+.
+ 
+E
+v
+e
+r
+y
+t
+h
+i
+n
+g
+ 
+e
+l
+s
+e
+ 
+i
+s
+ 
+h
+a
+n
+d
+-
+r
+e
+l
+a
+t
+i
+v
+e
+ 
+p
+r
+e
+c
+i
+s
+e
+l
+y
+ 
+s
+o
+
+
+t
+h
+a
+t
+ 
+t
+h
+i
+s
+ 
+o
+n
+e
+ 
+c
+a
+n
+ 
+b
+e
+ 
+w
+o
+r
+l
+d
+-
+r
+e
+l
+a
+t
+i
+v
+e
+ 
+a
+n
+d
+ 
+s
+t
+i
+l
+l
+ 
+m
+e
+a
+n
+ 
+s
+o
+m
+e
+t
+h
+i
+n
+g
+.
+
+
+
+
+#
+#
+ 
+T
+h
+r
+e
+e
+ 
+o
+f
+ 
+t
+h
+e
+s
+e
+ 
+a
+r
+e
+ 
+t
+e
+s
+t
+e
+d
+ 
+B
+E
+F
+O
+R
+E
+ 
+t
+h
+e
+ 
+t
+h
+u
+m
+b
+,
+ 
+a
+n
+d
+ 
+t
+h
+a
+t
+ 
+i
+s
+ 
+a
+ 
+s
+a
+f
+e
+t
+y
+ 
+p
+r
+o
+p
+e
+r
+t
+y
+
+
+
+
+`
+T
+H
+U
+M
+B
+S
+_
+U
+P
+`
+ 
+i
+s
+ 
+w
+h
+a
+t
+ 
+`
+a
+g
+e
+n
+t
+s
+/
+o
+s
+_
+a
+g
+e
+n
+t
+.
+p
+y
+`
+ 
+r
+u
+n
+s
+ 
+a
+ 
+s
+h
+e
+l
+l
+ 
+c
+o
+m
+m
+a
+n
+d
+ 
+o
+n
+.
+ 
+T
+h
+e
+ 
+p
+r
+e
+-
+2
+0
+2
+6
+-
+0
+8
+-
+2
+3
+ 
+c
+l
+a
+s
+s
+i
+f
+i
+e
+r
+
+
+r
+e
+q
+u
+i
+r
+e
+d
+ 
+t
+h
+e
+ 
+f
+o
+u
+r
+ 
+f
+i
+n
+g
+e
+r
+s
+ 
+t
+o
+ 
+b
+e
+ 
+u
+n
+-
+e
+x
+t
+e
+n
+d
+e
+d
+,
+ 
+a
+n
+d
+ 
+*
+*
+a
+ 
+c
+l
+a
+w
+ 
+a
+n
+d
+ 
+a
+ 
+p
+i
+n
+c
+h
+ 
+b
+o
+t
+h
+ 
+s
+a
+t
+i
+s
+f
+i
+e
+d
+ 
+t
+h
+a
+t
+*
+*
+ 
+—
+ 
+s
+o
+
+
+b
+o
+t
+h
+ 
+c
+l
+a
+s
+s
+i
+f
+i
+e
+d
+ 
+a
+s
+ 
+`
+T
+H
+U
+M
+B
+S
+_
+U
+P
+`
+ 
+a
+n
+d
+ 
+a
+p
+p
+r
+o
+v
+e
+d
+ 
+s
+h
+e
+l
+l
+ 
+c
+o
+m
+m
+a
+n
+d
+s
+.
+ 
+`
+t
+o
+o
+l
+s
+/
+v
+e
+r
+i
+f
+y
+_
+g
+e
+s
+t
+u
+r
+e
+s
+.
+p
+y
+ 
+-
+-
+p
+r
+o
+b
+e
+`
+
+
+s
+t
+i
+l
+l
+ 
+r
+e
+p
+r
+o
+d
+u
+c
+e
+s
+ 
+i
+t
+.
+
+
+
+
+T
+h
+e
+ 
+v
+o
+c
+a
+b
+u
+l
+a
+r
+y
+ 
+i
+s
+ 
+b
+i
+g
+g
+e
+r
+ 
+n
+o
+w
+,
+ 
+s
+o
+ 
+t
+h
+e
+ 
+g
+u
+a
+r
+d
+ 
+i
+s
+ 
+s
+t
+a
+t
+e
+d
+ 
+a
+s
+ 
+a
+n
+ 
+i
+n
+v
+a
+r
+i
+a
+n
+t
+ 
+r
+a
+t
+h
+e
+r
+ 
+t
+h
+a
+n
+ 
+a
+s
+ 
+a
+n
+ 
+o
+r
+d
+e
+r
+i
+n
+g
+
+
+a
+c
+c
+i
+d
+e
+n
+t
+:
+ 
+*
+*
+o
+n
+l
+y
+ 
+a
+ 
+h
+a
+n
+d
+ 
+w
+i
+t
+h
+ 
+a
+l
+l
+ 
+f
+o
+u
+r
+ 
+f
+i
+n
+g
+e
+r
+s
+ 
+c
+l
+o
+s
+e
+d
+ 
+c
+a
+n
+ 
+r
+e
+a
+c
+h
+ 
+t
+h
+e
+ 
+t
+h
+u
+m
+b
+ 
+b
+r
+a
+n
+c
+h
+e
+s
+ 
+a
+t
+ 
+a
+l
+l
+*
+*
+,
+ 
+a
+n
+d
+
+
+w
+h
+i
+c
+h
+ 
+o
+f
+ 
+`
+T
+H
+U
+M
+B
+S
+_
+U
+P
+`
+ 
+/
+ 
+`
+T
+H
+U
+M
+B
+S
+_
+D
+O
+W
+N
+`
+ 
+/
+ 
+`
+F
+I
+S
+T
+`
+ 
+i
+t
+ 
+b
+e
+c
+o
+m
+e
+s
+ 
+i
+s
+ 
+d
+e
+c
+i
+d
+e
+d
+ 
+b
+y
+ 
+t
+h
+e
+ 
+t
+h
+u
+m
+b
+ 
+a
+l
+o
+n
+e
+.
+ 
+A
+ 
+c
+l
+a
+w
+
+
+h
+a
+s
+ 
+i
+t
+s
+ 
+f
+i
+n
+g
+e
+r
+s
+ 
+h
+o
+o
+k
+e
+d
+ 
+b
+u
+t
+ 
+r
+e
+a
+c
+h
+i
+n
+g
+ 
+(
+n
+o
+t
+ 
+c
+l
+o
+s
+e
+d
+)
+;
+ 
+a
+ 
+p
+i
+n
+c
+h
+ 
+h
+a
+s
+ 
+t
+h
+r
+e
+e
+ 
+f
+i
+n
+g
+e
+r
+s
+ 
+o
+u
+t
+.
+ 
+N
+e
+i
+t
+h
+e
+r
+ 
+c
+a
+n
+
+
+a
+r
+r
+i
+v
+e
+.
+ 
+`
+v
+e
+r
+i
+f
+y
+_
+g
+e
+s
+t
+u
+r
+e
+s
+.
+p
+y
+`
+ 
+a
+s
+s
+e
+r
+t
+s
+ 
+t
+h
+i
+s
+ 
+e
+x
+h
+a
+u
+s
+t
+i
+v
+e
+l
+y
+ 
+r
+a
+t
+h
+e
+r
+ 
+t
+h
+a
+n
+ 
+t
+r
+u
+s
+t
+i
+n
+g
+ 
+t
+h
+e
+ 
+r
+e
+a
+d
+i
+n
+g
+.
+
+
+
+
+#
+#
+ 
+D
+i
+s
+t
+a
+n
+c
+e
+s
+ 
+a
+r
+e
+ 
+m
+e
+a
+s
+u
+r
+e
+d
+ 
+i
+n
+ 
+p
+a
+l
+m
+-
+s
+p
+a
+n
+s
+,
+ 
+n
+o
+t
+ 
+i
+n
+ 
+f
+r
+a
+m
+e
+-
+w
+i
+d
+t
+h
+s
+
+
+
+
+`
+P
+I
+N
+C
+H
+`
+ 
+i
+s
+ 
+"
+l
+a
+n
+d
+m
+a
+r
+k
+ 
+4
+ 
+t
+o
+u
+c
+h
+e
+s
+ 
+l
+a
+n
+d
+m
+a
+r
+k
+ 
+8
+"
+,
+ 
+a
+n
+d
+ 
+t
+h
+e
+ 
+o
+b
+v
+i
+o
+u
+s
+ 
+i
+m
+p
+l
+e
+m
+e
+n
+t
+a
+t
+i
+o
+n
+ 
+c
+o
+m
+p
+a
+r
+e
+s
+ 
+t
+h
+e
+i
+r
+
+
+d
+i
+s
+t
+a
+n
+c
+e
+ 
+t
+o
+ 
+a
+ 
+c
+o
+n
+s
+t
+a
+n
+t
+.
+ 
+T
+h
+a
+t
+ 
+c
+o
+n
+s
+t
+a
+n
+t
+ 
+i
+s
+ 
+c
+o
+r
+r
+e
+c
+t
+ 
+a
+t
+ 
+e
+x
+a
+c
+t
+l
+y
+ 
+o
+n
+e
+ 
+c
+a
+m
+e
+r
+a
+ 
+d
+i
+s
+t
+a
+n
+c
+e
+:
+ 
+l
+a
+n
+d
+m
+a
+r
+k
+s
+ 
+a
+r
+e
+
+
+n
+o
+r
+m
+a
+l
+i
+s
+e
+d
+ 
+t
+o
+ 
+t
+h
+e
+ 
+F
+R
+A
+M
+E
+,
+ 
+s
+o
+ 
+t
+h
+e
+ 
+s
+a
+m
+e
+ 
+h
+a
+n
+d
+ 
+a
+t
+ 
+8
+0
+ 
+c
+m
+ 
+i
+s
+ 
+h
+a
+l
+f
+ 
+t
+h
+e
+ 
+s
+i
+z
+e
+ 
+i
+t
+ 
+i
+s
+ 
+a
+t
+ 
+4
+0
+ 
+c
+m
+.
+
+
+
+
+E
+v
+e
+r
+y
+ 
+d
+i
+s
+t
+a
+n
+c
+e
+ 
+h
+e
+r
+e
+ 
+i
+s
+ 
+d
+i
+v
+i
+d
+e
+d
+ 
+b
+y
+ 
+`
+_
+h
+a
+n
+d
+_
+s
+c
+a
+l
+e
+(
+)
+`
+ 
+—
+ 
+w
+r
+i
+s
+t
+ 
+t
+o
+ 
+m
+i
+d
+d
+l
+e
+ 
+k
+n
+u
+c
+k
+l
+e
+,
+ 
+`
+b
+a
+r
+e
+h
+a
+n
+d
+s
+`
+'
+ 
+`
+s
+p
+a
+n
+`
+
+
+—
+ 
+t
+h
+e
+ 
+o
+n
+e
+ 
+l
+e
+n
+g
+t
+h
+ 
+o
+n
+ 
+a
+ 
+h
+a
+n
+d
+ 
+t
+h
+a
+t
+ 
+d
+o
+e
+s
+ 
+n
+o
+t
+ 
+c
+h
+a
+n
+g
+e
+ 
+w
+h
+e
+n
+ 
+t
+h
+e
+ 
+f
+i
+n
+g
+e
+r
+s
+ 
+m
+o
+v
+e
+.
+ 
+T
+h
+r
+e
+s
+h
+o
+l
+d
+s
+ 
+a
+r
+e
+ 
+i
+n
+
+
+p
+a
+l
+m
+-
+s
+p
+a
+n
+s
+ 
+a
+n
+d
+ 
+h
+o
+l
+d
+ 
+a
+t
+ 
+a
+n
+y
+ 
+d
+i
+s
+t
+a
+n
+c
+e
+ 
+a
+n
+d
+ 
+o
+n
+ 
+a
+n
+y
+ 
+s
+i
+z
+e
+ 
+o
+f
+ 
+h
+a
+n
+d
+.
+ 
+S
+p
+e
+e
+d
+s
+ 
+l
+i
+k
+e
+w
+i
+s
+e
+,
+ 
+i
+n
+ 
+s
+p
+a
+n
+s
+ 
+p
+e
+r
+
+
+s
+e
+c
+o
+n
+d
+ 
+r
+a
+t
+h
+e
+r
+ 
+t
+h
+a
+n
+ 
+f
+r
+a
+m
+e
+-
+w
+i
+d
+t
+h
+s
+ 
+p
+e
+r
+ 
+s
+e
+c
+o
+n
+d
+.
+
+
+
 
 ## What this is not
 
@@ -215,9 +4153,9 @@ FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 FRAME_FPS = 15
 
-# 2 since 2026-08-23, because CLAP is a two-hand gesture and a detector capped at one hand can
-# never see it. It is not free — mediapipe runs the landmark model once PER HAND, so a frame
-# with two hands in it costs about twice the 47 ms inference measured in the budget above.
+# 2 since 2026-08-23. barehands scales objects with two hands, and a detector capped at one can
+# never see a second. It is not free — mediapipe runs the landmark model once PER HAND, so a
+# frame with two hands costs about twice the 47 ms inference measured in the budget above.
 # That is ~2.26 s instead of ~2.22 s for an approval, which is inside the noise of that table.
 #
 # It does not weaken the gate. Hands are classified INDIVIDUALLY and then resolved by
@@ -267,35 +4205,104 @@ FINGERS = (
 # tracks — a fingertip would add finger motion to hand motion and read a wave as a flick.
 PALM = (WRIST, 5, 9, 13, 17)
 
-# --- thresholds for the four gestures added 2026-08-23 ----------------------------------
+# The four finger chains as (mcp, pip, dip, tip). `FINGERS` above is the (mcp, pip, tip)
+# form the y-comparison era used; this is the full chain, because the curl test needs the
+# DIP joint to see which way the last segment points.
+CHAINS = (
+    (5, 6, 7, 8),        # index
+    (9, 10, 11, 12),     # middle
+    (13, 14, 15, 16),    # ring
+    (17, 18, 19, 20),    # pinky
+)
+
+# --- thresholds, ported from jaredrhod/barehands 2026-08-23 ------------------------------
 #
-# Every one of these is a RATIO against `_hand_scale()`, not a raw normalised distance, for
-# the reason in the palm-lengths section above. All are geometry-derived starting values,
-# NOT measurements — `tools/live_test_gestures.py` prints the live ratio so they can be moved
-# against something observed. Do not nudge them from memory of one bad frame.
-
-# Thumb tip to index tip, in palm-lengths. Touching is ~0.15; an index pointing away with the
-# thumb out is ~1.3. 0.40 sits in the empty middle with room on both sides.
-PINCH_MAX_RATIO = 0.40
-
-# Two palms, centroid to centroid, in palm-lengths, for a clap. Hands actually touching are
-# ~1.0 apart centroid-wise (a palm-width); 1.8 allows the approach and the rebound without
-# reaching across the frame for an unrelated second hand.
-CLAP_MAX_GAP_RATIO = 1.8
-
-# How far above the wrist a fingertip must sit to count as "pointing up" for a clap, again in
-# palm-lengths. A hand held flat edge-on to the camera collapses toward 0.
-CLAP_MIN_FINGER_RISE = 0.6
-
-# FLICK: an open palm crossing the frame. Speed is in frame-widths per second, measured over
-# a short window of recent frames.
+# These are NOT geometry-derived guesses any more. Every number below is the value that
+# project arrived at by fitting against a corpus of real hands — its source carries the
+# version history in comments ("v3.9.32 — his final pinch sample", "fitted from his pinch
+# corpus, 3 correct / 3 fists"). Where a number here differs from barehands it is noted.
 #
-# The travel floor is what stops jitter being a flick: at 6.6 fps a single noisy landmark can
-# look fast over one 150 ms gap, but it cannot also have MOVED a fifth of the frame.
-FLICK_WINDOW_S = 0.45          # how far back to look
-FLICK_MIN_SPEED = 1.1          # frame-widths per second
-FLICK_MIN_TRAVEL = 0.18        # normalised x, floor on total displacement
-FLICK_HISTORY = 12             # frames kept; ~1.8 s at this webcam's 6.6 fps
+# Taking measured constants over invented ones is the whole reason to port rather than
+# reinvent: the previous set of thresholds in this file were honest guesses, and they are
+# what LB was fighting.
+
+# EXTENDED: a finger counts as out when its tip is 1.45x further from the wrist than its own
+# knuckle is. A ratio of distances FROM A COMMON POINT, so it does not care which way the
+# hand is rotated — unlike the `tip.y < pip.y` test this replaces.
+EXTEND_REACH = 1.45
+
+# CURL: the dot product of a finger's proximal segment (mcp->pip) with its distal one
+# (dip->tip), in 3D. An extended finger's segments are aligned, ~+0.9. A hooked finger's
+# distal segment points back against the proximal one, going negative. barehands' note on
+# why this and not distances: "monocular z is too weak for distances... angles survive the
+# foreshortening that lies about lengths."
+CURL_FOLDED = 0.35             # below this the finger is folded
+CURL_STRAIGHT = 0.60           # above this it is straight
+
+# PINCH: thumb-index gap over palm span. Two regimes, because a palm turned side-on to the
+# camera reads a wider gap for the same real touch. barehands v3.9.32 / v3.9.24.
+PINCH_MAX_RATIO = 0.32         # frontal palm (aspect < 2.0)
+PINCH_MAX_RATIO_PROFILE = 0.38 # rotated palm
+
+# THE CONTRAST LAW (barehands v3.8.2). A closed fist also puts the thumb on the index tip,
+# so the gap alone cannot tell a pinch from a clench. The tell is CONTRAST: in a real pinch
+# the index curls IN to the thumb while middle/ring/pinky stay OUT. Measured there at >= 0.28
+# for every correct sample and <= 0.07 for every impostor; cut at 0.18 with a back-arch floor
+# of 1.30 as the fist wall.
+PINCH_CONTRAST = 0.18
+PINCH_BACK_ARCH = 1.30
+
+# THE CLAW. Its signature is a deliberately WIDE mouth — the thumb-index C-gap — with the
+# index and middle folded. barehands walked this floor up over several rounds (0.58 -> 0.72
+# -> 0.80) because a half-closed hand kept impersonating it; 0.80 is where it landed, with
+# the note "a claw is intentional. Bigger distance between thumb and index."
+CLAW_MOUTH_MIN = 0.80
+CLAW_MOUTH_MAX = 1.45
+CLAW_INDEX_CURL = 0.60         # c8  — index must fold
+CLAW_MIDDLE_CURL = 0.35        # c12 — the middle finger leads; always folded in a real claw
+
+# ...and the fingers must still be REACHING. barehands keeps "distance ratios ... as loose
+# sanity rails around his measured real-claw envelope"; this is that rail, and it is the one
+# thing standing between a claw and a fist. Both hook every finger past the curl bars above,
+# so curl alone cannot separate them:
+#
+#     claw   fingers hooked, tips still out past the knuckles   reach ~1.34
+#     fist   fingers folded INTO the palm, tips behind them     reach ~1.17
+#
+# Without this rail a closed fist with the thumb held clear reads as a claw — measured, in the
+# first run of `verify_gestures.py --dump` after the port.
+CLAW_MIN_REACH = 1.28
+
+# THUMB direction, for THUMBS_UP / THUMBS_DOWN. This is the ONE test that is deliberately
+# still in image coordinates: up and down are facts about the world, not about the hand, so
+# rotating the hand must NOT rotate the answer. Measured as a fraction of palm span so it is
+# distance-independent, and required in both directions so a level thumb is neither.
+THUMB_RISE = 0.55              # thumb tip this far above the wrist, in palm spans
+THUMB_DROP = 0.55              # ...or this far below it
+
+# SANITY (barehands v3.9.30). Palm span over palm width. A hand resting on a face read 7-8
+# there — the knuckle row collapsed, a geometrically impossible hand — while no real hand in
+# a two-day corpus exceeded 5.5. Past this the tracker is guessing, and a guess must not be
+# allowed to produce a gesture at all, least of all at a security prompt.
+ASPECT_GARBAGE = 6.0
+ASPECT_FRONTAL = 2.0           # below this the palm faces the camera; picks the pinch regime
+
+# --- the movement layer ------------------------------------------------------------------
+#
+# "Every gesture is a movement, not a pose." — barehands, The Gestures.md
+#
+# TAP, DRAG and FLICK are not hand shapes. They are things that happen to a PINCH over time,
+# which is why the previous FLICK — an open palm swiped across frame — could never be told
+# apart from a stationary open palm and kept reading as OPEN_PALM. It was the wrong gesture.
+#
+# Speeds are in palm-spans per second, not frame-widths: the same physical hand motion covers
+# more of the frame close up, and a throw is a property of the hand, not of the lens.
+TAP_MAX_S = 0.40               # a pinch shorter than this, that went nowhere, is a tap
+TAP_MAX_TRAVEL = 0.45          # ...in palm spans
+DRAG_MIN_TRAVEL = 0.60         # a pinch that has moved this far is a drag
+FLICK_MIN_SPEED = 2.2          # release faster than this throws
+FLICK_WINDOW_S = 0.25          # the window the release speed is measured over
+TRACK_HISTORY = 12             # samples kept per hand; ~1.2 s at this webcam's ~9.7 fps
 
 # Set ODDBALL_GESTURE=0 to keep the camera shut and go straight to the keyboard. Wanted on the
 # Windows authoring box, where `--text` mode is used for debugging agents and opening a webcam
@@ -323,17 +4330,22 @@ SIDECAR_TIMEOUT_S = 20.0
 # The sidecar protocol whitelist. The parent accepts a child's stdout token ONLY if it is in
 # here — anything else becomes NO_CAMERA (see `_ask_sidecar`), so a token added to `_classify`
 # and forgotten here would be silently downgraded to "the camera is broken".
-_VALID = ("PINCH", "CLAP", "CLAW", "FLICK", "THUMBS_UP", "OPEN_PALM", "NONE", "NO_CAMERA")
+_VALID = ("TAP", "DRAG", "FLICK", "PINCH", "CLAW", "POINT", "FIST",
+          "THUMBS_UP", "THUMBS_DOWN", "OPEN_PALM", "NONE", "NO_CAMERA")
 
 # Which gesture wins when the two hands in frame disagree. Most deliberate first; the two
-# permissive resting poses last. `CLAP` is absent because it is a property of the PAIR of
-# hands, not of either one, so it is decided before this list is consulted.
+# permissive resting poses last.
 #
 # `THUMBS_UP` outranking `OPEN_PALM` is the one entry worth defending: a hand held open while
 # the other gives a deliberate thumbs up is the approval, and reading it as OPEN_PALM would
 # just send LB to the keyboard. It cannot manufacture an approval — a hand only reaches this
 # list already classified, and no non-thumbs-up pose classifies as THUMBS_UP.
-_PRIORITY = ("PINCH", "CLAW", "THUMBS_UP", "OPEN_PALM", "NONE")
+# Movement events outrank poses: a TAP is a pinch that already ended, and reporting the pose
+# it passed through instead would lose the event. Then the deliberate poses, then the two
+# resting ones. THUMBS_DOWN sits beside THUMBS_UP; neither can be reached from the other,
+# because the thumb cannot be both above and below the wrist.
+_PRIORITY = ("TAP", "FLICK", "DRAG", "PINCH", "CLAW", "POINT",
+             "THUMBS_UP", "THUMBS_DOWN", "FIST", "OPEN_PALM", "NONE")
 
 
 def sidecar_python() -> str:
@@ -421,32 +4433,24 @@ def fetch_model(dest: Path = MODEL_PATH) -> Path:
     return dest
 
 
-def _extended(landmarks, pip: int, tip: int) -> bool:
-    """True when this finger points up — its tip is above its own middle joint."""
-    return landmarks[tip].y < landmarks[pip].y
-
-
 def _dist(a, b) -> float:
-    """Plain 2-D Euclidean distance between two landmarks, in normalised frame units.
-
-    z is deliberately ignored. mediapipe's z is a relative depth estimate with no metric
-    meaning and far more noise than x and y, and every test here is about a shape on the
-    screen — including the pinch, where the fingers touch in the image plane too.
-    """
+    """2-D Euclidean distance between two landmarks, in normalised frame units."""
     return ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
 
 
+def _dist_xy(ax: float, ay: float, bx: float, by: float) -> float:
+    """Distance between two bare (x, y) pairs. The movement layer has no landmarks."""
+    return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
+
+
 def _hand_scale(landmarks) -> float:
-    """The palm length: wrist to middle knuckle, in normalised frame units.
+    """The palm span: wrist to middle knuckle. barehands calls this `span`.
 
-    This is the yardstick every other distance in this module is divided by, so that a
-    threshold means the same thing at 40 cm from the camera and at 80 cm. It is measured
-    across the PALM rather than along a finger because the palm is rigid — it is the same
-    length whether the hand is open, clawed or in a fist, which is precisely what a yardstick
-    has to be.
+    The yardstick every ratio here divides by, so a threshold means the same thing at 40 cm
+    from the camera and at 80 cm. Measured across the palm because the palm is rigid — it is
+    the same length whether the hand is open, clawed or in a fist.
 
-    Never returns 0: a degenerate hand (every landmark stacked on one point, which happens on
-    a garbage frame) would otherwise divide by zero at a security prompt.
+    Never 0: a degenerate hand on a garbage frame would otherwise divide by zero.
     """
     return max(_dist(landmarks[WRIST], landmarks[MIDDLE_MCP]), 1e-6)
 
@@ -458,129 +4462,240 @@ def _palm_centroid(landmarks) -> tuple[float, float]:
     return sum(xs) / len(xs), sum(ys) / len(ys)
 
 
+def _seg(landmarks, a: int, b: int) -> tuple[float, float, float]:
+    """The unit vector from landmark a to landmark b, in 3D."""
+    p, q = landmarks[a], landmarks[b]
+    dx, dy = q.x - p.x, q.y - p.y
+    dz = getattr(q, "z", 0.0) - getattr(p, "z", 0.0)
+    length = (dx * dx + dy * dy + dz * dz) ** 0.5 or 1.0
+    return dx / length, dy / length, dz / length
+
+
+def _curl(landmarks, mcp: int, pip: int, dip: int, tip: int) -> float:
+    """How hooked this finger is: +1 straight, 0 bent square, negative folded back.
+
+    The dot product of the finger's proximal segment (mcp->pip) with its distal one
+    (dip->tip). An extended finger keeps those aligned, ~+0.9. A hooked finger's last segment
+    points back against the first, so the dot goes negative.
+
+    ## Why an ANGLE and not a distance
+
+    This is the measurement that makes the whole classifier orientation-proof, and it is
+    barehands' finding, stated in its own source:
+
+        monocular z is too weak for distances ... a hooked finger's distal segment points back
+        AGAINST its proximal segment (dot < 0-ish); an extended finger's segments stay aligned
+        (dot ~ +0.9) in ANY camera orientation — angles survive the foreshortening that lies
+        about lengths.
+
+    The version of this file before 2026-08-23 asked `tip.y < pip.y`, which is an angle
+    measured against the IMAGE, not against the hand. It is correct only while the hand is
+    held upright, and a thumbs up is naturally made with the palm turned side-on — so LB's
+    thumbs up photographed at 09:11 that morning classified as NONE, with every finger
+    correctly detected and every landmark in the right place. See `media/captures/`.
+    """
+    a = _seg(landmarks, mcp, pip)
+    b = _seg(landmarks, dip, tip)
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _reach(landmarks, tip: int, mcp: int) -> float:
+    """How far the tip is from the wrist, relative to its own knuckle. barehands' `fR`.
+
+    Both distances start at the wrist, so the ratio is unchanged by rotating the hand — the
+    second rotation-invariant primitive, and the one that says a finger is OUT rather than
+    merely UNFOLDED.
+    """
+    knuckle = _dist(landmarks[WRIST], landmarks[mcp])
+    return _dist(landmarks[WRIST], landmarks[tip]) / knuckle if knuckle > 0 else 9.0
+
+
+def _extended(landmarks, mcp: int, tip: int) -> bool:
+    """True when this finger is out: its tip reaches 1.45x past its own knuckle.
+
+    NOTE the signature changed on 2026-08-23, from `(landmarks, pip, tip)` to
+    `(landmarks, mcp, tip)`. The old one compared y coordinates and took the PIP; this one
+    compares reaches and takes the MCP. Both callers were updated. It is a different test,
+    not a refactor.
+    """
+    return _reach(landmarks, tip, mcp) > EXTEND_REACH
+
+
+def _finger_open(landmarks, chain) -> bool:
+    """This finger is OUT — straight, or at least reaching well past its knuckle.
+
+    Either signal admits, because they fail in different circumstances: `_reach` under-reads a
+    finger pointing towards the lens (foreshortening), and `_curl` under-reads when the tracker
+    puts the DIP joint slightly wrong on a blurred frame.
+    """
+    mcp, pip, dip, tip = chain
+    return (_curl(landmarks, mcp, pip, dip, tip) > CURL_STRAIGHT
+            or _reach(landmarks, tip, mcp) > EXTEND_REACH)
+
+
+def _finger_shut(landmarks, chain) -> bool:
+    """This finger is IN — genuinely folded, by BOTH measures.
+
+    ## Why this is not simply `not _finger_open`
+
+    It is the security test, and the gap between the two is deliberate. `THUMBS_UP` runs a
+    shell command on `agents/os_agent.py`'s path, and it is only reachable when all four
+    fingers are shut — so "shut" has to mean *folded*, not merely *not proven to be out*.
+
+    A hand whose fingers are neither clearly out nor clearly folded — half-curled, or badly
+    tracked — satisfies neither predicate and falls through to `NONE`, which declines to the
+    keyboard. That is the safe direction, and it is the whole point of leaving a band between
+    them rather than splitting hand-space down the middle with one threshold.
+
+    Measured 2026-08-23: LB's pointing hand read index `curl +0.60, reach 1.37`. Under the
+    single-threshold version its index was "not extended" (1.37 < 1.45), which made the hand
+    all-fingers-closed, which sent a POINT into the thumb branch and out as `THUMBS_UP` — an
+    approval, from a hand that is not remotely a fist. See `media/captures/`.
+    """
+    mcp, pip, dip, tip = chain
+    return (_curl(landmarks, mcp, pip, dip, tip) < CURL_FOLDED
+            and _reach(landmarks, tip, mcp) < EXTEND_REACH)
+
+
+def _aspect(landmarks) -> float:
+    """Palm span over palm width. Over ASPECT_GARBAGE the tracker is hallucinating."""
+    width = _dist(landmarks[FINGERS[0][0]], landmarks[FINGERS[3][0]])   # index MCP to pinky MCP
+    return _hand_scale(landmarks) / width if width > 0 else 9.0
+
+
+def _pinch_ratio(landmarks) -> float:
+    """Thumb tip to index tip, in palm spans. barehands' `ratio`; the mouth of the claw too."""
+    return _dist(landmarks[THUMB_TIP], landmarks[INDEX_TIP]) / _hand_scale(landmarks)
+
+
+def _curls(landmarks) -> list[float]:
+    """The four finger curls, index to pinky. barehands' c8, c12, c16, c20."""
+    return [_curl(landmarks, *chain) for chain in CHAINS]
+
+
 def _is_pinch(landmarks) -> bool:
-    """Thumb tip touching index tip — landmarks 4 and 8, within 0.40 palm-lengths."""
-    return (_dist(landmarks[THUMB_TIP], landmarks[INDEX_TIP]) / _hand_scale(landmarks)
-            < PINCH_MAX_RATIO)
+    """Thumb and index touching — and the other three NOT, which is the whole test.
+
+    A closed fist also lays the thumb on the index tip, so gap alone cannot tell a pinch from
+    a clench. barehands' CONTRAST LAW is the fix: in a real pinch the index curls IN while
+    middle, ring and pinky stay OUT, and that contrast separated every correct sample from
+    every impostor in its corpus where absolute finger height did not.
+    """
+    gap = _pinch_ratio(landmarks)
+    ceiling = (PINCH_MAX_RATIO if _aspect(landmarks) < ASPECT_FRONTAL
+               else PINCH_MAX_RATIO_PROFILE)
+    if gap >= ceiling:
+        return False
+
+    index_reach = _reach(landmarks, 8, 5)
+    back = (_reach(landmarks, 12, 9) + _reach(landmarks, 16, 13) + _reach(landmarks, 20, 17)) / 3
+    return back - index_reach > PINCH_CONTRAST and back > PINCH_BACK_ARCH
 
 
 def _is_claw(landmarks) -> bool:
-    """The strained claw: every fingertip below its PIP but still above its MCP.
+    """The claw: a deliberately wide mouth with the index and middle hooked.
 
-    The lower bound (below PIP) is what makes it not an open palm. The upper bound (above MCP)
-    is what makes it not a fist, and therefore what keeps a claw from reaching the THUMBS_UP
-    branch — see the header. All four fingers must agree, because three-of-four admits most of
-    the ways a hand can be half-closed, and the point of this gesture is that it is deliberate.
+    barehands' fingerprint, after it walked the mouth floor up from 0.58 to 0.80 chasing
+    half-closed impostors: the middle finger leads (it is folded in every real claw), the
+    index must fold too (or a pointing hand passes), and the thumb-index C must gape.
+
+    The pinky carries NO vote — it often stays straight in a real claw, which is exactly the
+    range an impostor occupies, so it discriminates nothing.
     """
-    return all(landmarks[pip].y < landmarks[tip].y < landmarks[mcp].y
-               for mcp, pip, tip in FINGERS)
+    mouth = _pinch_ratio(landmarks)
+    if not CLAW_MOUTH_MIN < mouth < CLAW_MOUTH_MAX:
+        return False
+    c8, c12, _c16, _c20 = _curls(landmarks)
+    if not (c8 < CLAW_INDEX_CURL and c12 < CLAW_MIDDLE_CURL):
+        return False
+    # Hooked, but not collapsed: this is what makes it a claw rather than a fist.
+    return all(_reach(landmarks, tip, mcp) > CLAW_MIN_REACH
+               for mcp, _pip, _dip, tip in CHAINS[:3])
 
 
-def _fingers_point_up(landmarks) -> bool:
-    """All four fingers extended AND the hand held upright — for the clap.
+def _thumb_direction(landmarks) -> str:
+    """"UP", "DOWN" or "" — where the thumb points, in the WORLD, not in the hand.
 
-    `_extended` alone only says a tip is above its own middle joint, which stays true for a
-    hand lying on its side. A clap is two upright palms, so the tips must also rise clear of
-    the wrist by a real fraction of a palm length.
+    Deliberately still an image-y comparison, and that is not an oversight. Up and down are
+    facts about gravity; rotating the hand must not rotate the answer. Everything else in this
+    module is hand-relative precisely so that this one test can be world-relative and mean
+    something.
+
+    Measured in palm spans from the wrist so it stays distance-independent, and required in
+    one direction or the other by a real margin, so a thumb held level is neither.
     """
-    if not all(_extended(landmarks, pip, tip) for _mcp, pip, tip in FINGERS):
-        return False
-    rise = min(landmarks[WRIST].y - landmarks[tip].y for _mcp, _pip, tip in FINGERS)
-    return rise / _hand_scale(landmarks) > CLAP_MIN_FINGER_RISE
-
-
-def _is_clap(hands) -> bool:
-    """Two upright open palms, held close together.
-
-    ## What this does not attempt
-
-    The full description is "palms *facing each other*", and this does not test that. Palm
-    orientation from 21 landmarks means recovering the palm normal and comparing two of them,
-    which is doable and is not robust at this camera's resolution and frame rate — the
-    wrist/index/pinky triangle is nearly degenerate exactly when the palms face each other
-    edge-on to the lens, which is the pose it would have to be measured in.
-
-    So the test is the observable part: **two hands, both upright and open, close together.**
-    Stating that plainly is better than a normal-vector calculation that looks rigorous and
-    fires at random, and it is why this returns a clean bool rather than a confidence.
-
-    The cost of the simplification is that two open palms held side by side an inch apart, not
-    facing, also read as CLAP. Nothing in the security gate is reachable from CLAP, so the
-    cost is a wrong app command, not a wrong approval.
-    """
-    if len(hands) != 2:
-        return False
-    first, second = hands[0], hands[1]
-    if not (_fingers_point_up(first) and _fingers_point_up(second)):
-        return False
-
-    ax, ay = _palm_centroid(first)
-    bx, by = _palm_centroid(second)
-    gap = ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5
-    scale = (_hand_scale(first) + _hand_scale(second)) / 2
-    return gap / scale < CLAP_MAX_GAP_RATIO
+    rise = (landmarks[WRIST].y - landmarks[THUMB_TIP].y) / _hand_scale(landmarks)
+    if rise > THUMB_RISE:
+        return "UP"
+    if rise < -THUMB_DROP:
+        return "DOWN"
+    return ""
 
 
 def _classify(landmarks) -> str:
-    """One hand's 21 landmarks -> 'PINCH', 'CLAW', 'THUMBS_UP', 'OPEN_PALM' or 'NONE'.
+    """One hand's 21 landmarks -> a pose.
 
-    Pure, so it is testable without a camera, without a model file and without mediapipe
-    installed at all: hand it any sequence of 21 objects with `.x` and `.y`. Shared by both
-    backends, which is the reason the fork above costs almost nothing.
+    'PINCH', 'CLAW', 'POINT', 'THUMBS_UP', 'THUMBS_DOWN', 'FIST', 'OPEN_PALM' or 'NONE'.
 
-    `CLAP` is not here — it is a property of two hands, so it lives in `_classify_frame`.
-    `FLICK` is not here either — it is a property of two *moments*, so it lives in
-    `classify_stream`. What is left is what one hand looks like right now.
+    Pure: hand it any sequence of 21 objects with `.x`, `.y` and optionally `.z`. No camera,
+    no model file, no mediapipe. Shared by both backends.
 
-    **The order of these branches is a safety property, not a style choice.** See the header:
-    PINCH and CLAW both satisfy the thumbs-up test's "no finger extended" clause, so both must
-    be resolved before it, or a claw at the camera approves a shell command.
+    TAP, DRAG and FLICK are not here — they are movements, and this sees one instant. They
+    live in `classify_stream`.
+
+    **The order of these branches is a safety property.** `THUMBS_UP` is what
+    `agents/os_agent.py` runs a shell command on, so every pose that could be mistaken for it
+    is resolved first. See the header.
     """
-    extended = [_extended(landmarks, pip, tip) for _mcp, pip, tip in FINGERS]
+    if _aspect(landmarks) > ASPECT_GARBAGE:
+        return "NONE"                  # the tracker is guessing; a guess is not a gesture
 
-    # Open palm FIRST. It is the permissive gesture and it overlaps the naive thumbs-up test,
-    # so checking it first is what stops a wave being read as a yes.
-    if all(extended):
+    out = [_finger_open(landmarks, chain) for chain in CHAINS]
+    shut = [_finger_shut(landmarks, chain) for chain in CHAINS]
+
+    # Open palm first, as it has been since 2026-08-19: it is the permissive pose and it
+    # overlaps the naive thumbs-up test, so checking it first is what stops a wave being a yes.
+    if all(out):
         return "OPEN_PALM"
 
-    # Then the two gestures that would otherwise fall through into THUMBS_UP.
+    # Then the two deliberate shapes that would otherwise fall through into the thumb tests.
     if _is_pinch(landmarks):
         return "PINCH"
     if _is_claw(landmarks):
         return "CLAW"
 
-    # Thumbs up: thumb above the index knuckle AND above the wrist, with every other finger
-    # curled. The curl requirement is the whole difference between this and a raised hand.
-    #
-    # Unchanged since 2026-08-19. Everything above is a guard in front of it; nothing above
-    # can make it fire, and the two poses that used to reach it wrongly no longer arrive.
-    thumb_up = (landmarks[THUMB_TIP].y < landmarks[FINGERS[0][0]].y
-                and landmarks[THUMB_TIP].y < landmarks[WRIST].y)
-    if thumb_up and not any(extended):
-        return "THUMBS_UP"
+    # Pointing: index out, the other three genuinely folded. Was NONE before 2026-08-23 — LB
+    # photographed one at 09:12 that morning and it is in `media/captures/`.
+    if out[0] and all(shut[1:]):
+        return "POINT"
+
+    # A closed hand, and ONLY a properly closed one — see `_finger_shut` for why this demands
+    # all four folded rather than merely not-extended. Which gesture it is then depends on the
+    # thumb, and only on the thumb.
+    if all(shut):
+        thumb = _thumb_direction(landmarks)
+        if thumb == "UP":
+            return "THUMBS_UP"
+        if thumb == "DOWN":
+            return "THUMBS_DOWN"
+        return "FIST"
 
     return "NONE"
 
 
 def _classify_frame(hands) -> str:
-    """Every hand mediapipe found in one frame -> a single gesture token.
+    """Every hand in one frame -> a single pose token, resolved by `_PRIORITY`.
 
-    Two hands can disagree, so `_PRIORITY` decides. CLAP is tested first because it is the one
-    gesture that is a fact about the pair rather than about either hand.
-
-    Pure, like `_classify`, and for the same reason: `hands` is a sequence of landmark
-    sequences and nothing here touches a camera.
+    Pure, like `_classify`.
     """
     if not hands:
         return "NONE"
-    if _is_clap(hands):
-        return "CLAP"
-
     seen = {_classify(h) for h in hands}
     for gesture in _PRIORITY:
         if gesture in seen:
             return gesture
     return "NONE"
+
 
 
 class GestureRecognizer:
@@ -602,13 +4717,16 @@ class GestureRecognizer:
         self.backend = ""
         self.why = ""
 
-        # FLICK is the only gesture that is not a function of the current frame, so it is the
-        # only one that needs the recogniser to remember anything. Samples are
-        # (monotonic seconds, (x, y) of the open palm or None, pose), and only
-        # `classify_stream` touches them — `get_gesture()`, the one-shot approval path that
-        # the security gate runs on, never appends here and so carries no state at all.
-        self._history: deque = deque(maxlen=FLICK_HISTORY)
-        self.last_flick = ""          # "LEFT" or "RIGHT", for anything that wants a direction
+        # TAP, DRAG and FLICK are movements, so they are the only gestures that need the
+        # recogniser to remember anything. Samples are (monotonic seconds, x, y, palm span)
+        # of the pinch being tracked. Only `classify_stream` touches any of this —
+        # `get_gesture()`, the one-shot path the security gate runs on, never appends here
+        # and so carries no state between approvals at all.
+        self._history: deque = deque(maxlen=TRACK_HISTORY)
+        self._pinch = False           # was a pinch live on the previous frame?
+        self._started = 0.0           # when the current pinch began
+        self._travel = 0.0            # how far it has moved since, in palm spans
+        self.last_release = ""        # what the last TAP or FLICK measured, for the debugger
 
         try:
             import cv2
@@ -690,12 +4808,13 @@ class GestureRecognizer:
     def get_gesture(self) -> str:
         """One frame from the camera -> one gesture token. The approval path.
 
-        Returns 'PINCH', 'CLAP', 'CLAW', 'THUMBS_UP', 'OPEN_PALM' or 'NONE'. Optimised for
-        Raspberry Pi camera processing: the camera is opened, warmed, read once and closed.
+        Returns a POSE — 'PINCH', 'CLAW', 'POINT', 'THUMBS_UP', 'THUMBS_DOWN', 'FIST',
+        'OPEN_PALM' or 'NONE'. Optimised for Raspberry Pi camera processing: the camera is
+        opened, warmed, read once and closed.
 
-        **Never 'FLICK'.** One frame carries no motion, and this method holds no state across
-        calls by design — in the parent process it is a fresh child every time. Use
-        `detect_hands` + `classify_stream` on a live loop for that.
+        **Never 'TAP', 'DRAG' or 'FLICK'.** Those are movements; one frame carries none, and
+        this method holds no state across calls by design — in the parent process it is a
+        fresh child every time. Use `detect_hands` + `classify_stream` on a live loop.
 
         Returns 'NO_CAMERA' when there is no camera, when mediapipe or OpenCV are missing, or
         when the model file has not been fetched — none of which is ever an approval.
@@ -743,19 +4862,31 @@ class GestureRecognizer:
         return self._detect(rgb)
 
     def classify_stream(self, hands, now: float | None = None) -> str:
-        """Hands from a LIVE loop -> a gesture token, `FLICK` included.
+        """Hands from a LIVE loop -> a gesture token, movements included.
 
-        The difference from `_classify_frame` is memory: this keeps a short history of where
-        the palm was and when, so an open palm that is travelling reads as `FLICK` instead of
-        `OPEN_PALM`. Everything else is passed straight through.
+        The difference from `_classify_frame` is memory. TAP, DRAG and FLICK are things that
+        happen to a pinch over time, so they need to know what the hand was doing a moment ago.
 
-        Call it once per frame, in order. Gaps are handled — a stale history simply fails the
-        window test — but calling it on frames out of order is meaningless.
+        ## Why FLICK was rewritten on 2026-08-23
+
+        The first version defined a flick as *an open palm moving quickly across the frame*.
+        LB reported it "often gets confused with open palm", which was not a tuning problem —
+        it was the definition. A moving open palm and a still open palm are the same hand, and
+        the only thing separating them was a speed threshold that had to be met between two
+        frames 100 ms apart. Below the threshold it reported OPEN_PALM, which is the exact
+        complaint.
+
+        barehands does not define it that way, and says why on its first line: **"Every gesture
+        is a movement, not a pose."** There, a flick is *a pinch released at speed* — you are
+        carrying something and you let go while your hand is still travelling. That has no
+        overlap with an open palm at all, because it starts from a pinch. This now matches.
+
+        Call once per frame, in order. Gaps are handled; out-of-order calls are meaningless.
 
         Args:
             hands: what `detect_hands` returned for this frame.
-            now:   monotonic timestamp; defaults to the current time. Injectable so the flick
-                   logic is testable without a camera and without sleeping.
+            now:   monotonic timestamp; defaults to now. Injectable so the movement logic is
+                   testable without a camera and without sleeping.
 
         Returns:
             One of the tokens in `_VALID`, except `NO_CAMERA`.
@@ -765,51 +4896,67 @@ class GestureRecognizer:
 
         pose = _classify_frame(hands)
 
-        # Track the palm that could be flicking. A flick is an open palm crossing the frame,
-        # so an open hand is the only one worth remembering the position of.
-        centre = None
+        # The pinch being tracked is the first hand that has one. Its palm centre is the
+        # position — a fingertip would add finger motion to hand motion and read a wave as
+        # travel — and its scale converts that position into palm spans.
+        centre = scale = None
         for hand in hands:
-            if _classify(hand) == "OPEN_PALM":
+            if _classify(hand) == "PINCH":
                 centre = _palm_centroid(hand)
+                scale = _hand_scale(hand)
                 break
 
-        self._history.append((now, centre, pose))
+        was = self._pinch
+        self._pinch = centre is not None
+        if centre is not None:
+            self._history.append((now, centre[0], centre[1], scale))
+            if was:
+                self._travel += (_dist_xy(self._history[-2][1], self._history[-2][2],
+                                          centre[0], centre[1]) / max(scale, 1e-6))
+            else:
+                self._history.clear()
+                self._history.append((now, centre[0], centre[1], scale))
+                self._started = now
+                self._travel = 0.0
+            return "DRAG" if self._travel > DRAG_MIN_TRAVEL else "PINCH"
 
-        if pose != "OPEN_PALM" or centre is None:
-            return pose
+        # No pinch this frame. If there was one last frame, it just ended — and how it ended
+        # is the event. This is the only place TAP and FLICK are produced.
+        if was:
+            held = now - self._started
+            speed = self._release_speed(now)
+            self._pinch = False
+            if speed > FLICK_MIN_SPEED:
+                self.last_release = f"FLICK {speed:.1f} spans/s"
+                self._history.clear()
+                return "FLICK"
+            if held < TAP_MAX_S and self._travel < TAP_MAX_TRAVEL:
+                self.last_release = f"TAP {held * 1000:.0f} ms"
+                self._history.clear()
+                return "TAP"
+            self._history.clear()
 
-        direction = self._flick_direction(now, centre[0])
-        if not direction:
-            return pose
+        return pose
 
-        # Edge-triggered, not level-triggered: clearing the history means one swipe of the
-        # hand produces ONE flick, not a flick on every frame for as long as the hand is
-        # moving. A gesture wired to an action has to fire once per intent.
-        self._history.clear()
-        self.last_flick = direction
-        return "FLICK"
+    def _release_speed(self, now: float) -> float:
+        """How fast the hand was travelling as the pinch ended, in palm spans per second.
 
-    def _flick_direction(self, now: float, x: float) -> str:
-        """"LEFT", "RIGHT" or "" — has the palm crossed the frame fast enough, and which way?
-
-        Both a speed floor and a distance floor have to be cleared, and the distance floor is
-        the one doing the real work. This webcam gives ~6.6 fps, so a single jittery landmark
-        between two frames 150 ms apart can look like it is moving quickly; it cannot also
-        have moved a fifth of the frame width.
+        Measured over the last `FLICK_WINDOW_S` of samples rather than the final pair: at this
+        webcam's ~9.7 fps a single mis-placed landmark between two frames can look like a
+        throw, and a window of several frames cannot be faked by one bad one. barehands guards
+        the same failure with a two-frame sustain on its release read.
         """
-        for when, centre, pose in self._history:
-            if centre is None or pose != "OPEN_PALM":
-                continue                       # the hand was not open then; not this flick
-            dt = now - when
+        if len(self._history) < 2:
+            return 0.0
+        latest = self._history[-1]
+        for when, x, y, scale in self._history:
+            dt = latest[0] - when
             if dt <= 0 or dt > FLICK_WINDOW_S:
-                continue                       # too old, or the same sample
-            dx = x - centre[0]
-            if abs(dx) < FLICK_MIN_TRAVEL or abs(dx) / dt < FLICK_MIN_SPEED:
                 continue
-            # x grows to the right in image space. The live window mirrors the frame so it
-            # reads like a mirror, and it names the direction LB sees, not this one.
-            return "RIGHT" if dx > 0 else "LEFT"
-        return ""
+            travel = _dist_xy(x, y, latest[1], latest[2]) / max(scale, 1e-6)
+            return travel / dt
+        return 0.0
+
 
     def close(self) -> None:
         """Release the detector. Safe to call twice."""
@@ -878,6 +5025,15 @@ def approve_by_gesture_or_keyboard(prompt: str = "   Allow execution? (y/n): ") 
     if seen == "THUMBS_UP":
         print("   👍 Thumbs up — approved by gesture.")
         return True
+    if seen == "THUMBS_DOWN":
+        # Added 2026-08-23 with the gesture itself. This is the ONE case where the camera is
+        # allowed to end the question without the keyboard, and it is safe for a reason that
+        # does not generalise: it returns False. A declined action does not run, and a gesture
+        # that can only ever decline cannot approve anything by being misread. The asymmetry
+        # is the whole design — a wrong THUMBS_UP executes a shell command, a wrong
+        # THUMBS_DOWN costs LB one retry.
+        print("   👎 Thumbs down — declined by gesture.")
+        return False
     if seen not in ("NO_CAMERA", "NONE"):
         print(f"   (camera saw {seen}, which is not an approval)")
 
@@ -963,10 +5119,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {get_gesture()}")
         return 0
 
-    print(f"  watching via {worker or 'this interpreter'} — pinch, clap, claw, thumbs up, "
-          f"open palm; ctrl-C to stop")
-    print("  (no FLICK here: each read is one frame from a camera that is then closed — "
-          "run tools/live_test_gestures.py for that)")
+    print(f"  watching via {worker or 'this interpreter'} — pinch, claw, point, fist, "
+          f"thumbs up/down, open palm; ctrl-C to stop")
+    print("  (poses only: each read is one frame from a camera that is then closed, so TAP, "
+          "DRAG and FLICK cannot appear — run tools/live_test_gestures.py for those)")
     try:
         while True:
             print(f"  {time.strftime('%H:%M:%S')}  {get_gesture()}")
