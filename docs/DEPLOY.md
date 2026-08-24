@@ -1046,3 +1046,64 @@ No camera needed to check the classifier itself — that is pure geometry:
 venv/bin/python tools/verify_gestures.py            # 31 checks
 venv/bin/python tools/verify_gestures.py --probe    # proves the suite bites
 ```
+
+## The gesture pointer
+
+`tools/gesture_pointer.py` drives the desktop pointer from a pinch: pinch and move to drag, two
+pinches to scroll. **It cannot type and it cannot click** — see the security model in its header,
+and `tools/verify_pointer.py` for the checks that hold those claims up.
+
+```bash
+cd ~/mr-odd-ball
+.venv-gesture/bin/python tools/gesture_pointer.py --check     # can this box do it
+.venv-gesture/bin/python tools/gesture_pointer.py --dry-run   # print, inject nothing
+.venv-gesture/bin/python tools/gesture_pointer.py             # for real
+.venv-gesture/bin/python tools/gesture_pointer.py --gain 600  # slower pointer
+```
+
+It must run from `.venv-gesture` — that is the interpreter with both mediapipe and evdev.
+
+### One-time system setup, already done on this Pi (2026-08-23)
+
+Wayland forbids a client from moving another client's windows, so this creates a **virtual mouse
+in the kernel** instead and labwc sees an ordinary pointer. That needs `/dev/uinput`, which ships
+root-only:
+
+```bash
+sudo modprobe uinput
+echo uinput | sudo tee /etc/modules-load.d/uinput.conf
+echo 'KERNEL=="uinput", GROUP="input", MODE="0660", OPTIONS+="static_node=uinput"' \
+  | sudo tee /etc/udev/rules.d/99-oddball-uinput.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=uinput
+ls -l /dev/uinput          # expect: crw-rw---- root input
+$HOME/.local/bin/uv pip install --python .venv-gesture/bin/python evdev
+```
+
+LB is already in the `input` group. **This grants any process running as LB the ability to
+create virtual input devices** — that is the price of a pointer on Wayland, and it is worth
+knowing you paid it. `ydotool` would have needed the same thing.
+
+### It and the security gate share one camera
+
+`get_gesture()` opens `/dev/video0` per approval and the daemon holds it open, so they cannot
+both have it. `data/gesture_pointer.pause` is the handshake: `gesture_control._ask_sidecar()`
+writes it, waits 0.5 s, does its read, and removes it. While it exists the daemon releases the
+camera, drops any held button, and **injects nothing at all** — so a synthetic pointer is inert
+for exactly as long as a security prompt is on screen.
+
+If a crash ever leaves it behind, the daemon stays paused until you remove it:
+
+```bash
+rm -f ~/mr-odd-ball/data/gesture_pointer.pause
+```
+
+`data/gesture_pointer.state` carries the live gesture and its deltas, for the HUD or anything
+else that wants to read them.
+
+### Checks
+
+```bash
+.venv-gesture/bin/python tools/verify_pointer.py           # 17 checks, no camera, injects nothing
+.venv-gesture/bin/python tools/verify_pointer.py --probe   # weakens each guarantee, proves they bite
+.venv-gesture/bin/python tools/verify_gestures.py          # 50 checks, incl. LB's captured hands
+```

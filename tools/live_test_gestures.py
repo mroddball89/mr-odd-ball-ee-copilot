@@ -258,13 +258,13 @@ def hand_numbers(gc, hands) -> list[str]:
         scale = gc._hand_scale(h)
         gap = gc._pinch_ratio(h)
         aspect = gc._aspect(h)
-        frontal = aspect < gc.ASPECT_FRONTAL
-        ceiling = gc.PINCH_MAX_RATIO if frontal else gc.PINCH_MAX_RATIO_PROFILE
+        ceiling = gc.PINCH_MAX_RATIO
 
         lines.append(f"hand {n}   pose {gc._classify(h)}"
                      f"{'   GARBAGE (aspect)' if aspect > gc.ASPECT_GARBAGE else ''}")
-        lines.append(f"  span {scale:.3f}   aspect {aspect:.2f} "
-                     f"({'frontal' if frontal else 'profile'})")
+        lines.append(f"  span {scale:.3f}   aspect {aspect:.2f}"
+                     f"{'  GARBAGE' if aspect > gc.ASPECT_GARBAGE else ''}"
+                     f"   (reject > {gc.ASPECT_GARBAGE})")
 
         # curl: the rotation-invariant fold. +1 straight, negative hooked.
         curls = " ".join(f"{c:+.2f}" for c in gc._curls(h))
@@ -325,8 +325,8 @@ def save_sample(cv2, gc, root: Path, label: str | None, verdict: str,
         "backend": getattr(gc, "_LAST_BACKEND", None),
         "thresholds": {k: getattr(gc, k) for k in (
             "EXTEND_REACH", "CURL_FOLDED", "CURL_STRAIGHT", "PINCH_MAX_RATIO",
-            "PINCH_MAX_RATIO_PROFILE", "PINCH_CONTRAST", "PINCH_BACK_ARCH",
-            "THUMB_RISE", "THUMB_DROP", "ASPECT_FRONTAL",
+            "PINCH_CONTRAST", "PINCH_BACK_ARCH", "ASPECT_GARBAGE",
+            "THUMB_RISE", "THUMB_DROP",
             "MOVE_DEADZONE", "SCALE_DEADZONE", "ROTATE_DEADZONE")},
         "hands": [],
     }
