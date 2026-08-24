@@ -41,6 +41,7 @@ ordering bug that still passes when the ordering is wrong is not a test.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 from pathlib import Path
@@ -435,7 +436,77 @@ def run() -> None:
     check(not m.moving,
           "releasing and re-gripping elsewhere does NOT drag the thing across", repr(m))
 
-    section("7. the sidecar protocol carries every token")
+    section("7. LB's OWN HANDS - the captured corpus, replayed")
+
+    root = Path(__file__).resolve().parents[1] / "media" / "captures" / "data"
+    files = sorted(root.glob("*.json")) if root.is_dir() else []
+    if not files:
+        print("      (no captures in media/captures/data - skipping)")
+    else:
+        # Ground truth is what LB was DOING, which is not always what the classifier said at
+        # the time. Two entries are deliberately not their filename:
+        #
+        #   none-...202241   a textbook pinch (gap 0.17, contrast 0.53) that the old aspect
+        #                    bound of 6.0 threw away as a hallucinated hand at aspect 6.30.
+        #                    Named for the verdict it got; it is a PINCH.
+        #   scale-...        two hands both pinching. SCALE is decided by `track()` from two
+        #                    frames; a single frame of it is PINCH, and that is what a
+        #                    frame-level classifier should say.
+        truth = {"none": "PINCH", "scale": "PINCH", "pinch": "PINCH",
+                 "open_palm": "OPEN_PALM", "thumbs_up": "THUMBS_UP"}
+        wrong = []
+        for f in files:
+            want = truth[f.name[8:].rsplit("-", 2)[0]]
+            hands = [[LM(*a) for a in h["landmarks"]]
+                     for h in json.loads(f.read_text())["hands"]]
+            got = gc._classify_frame(hands)
+            if got != want:
+                wrong.append(f"{f.name[8:-5]} wanted {want} got {got}")
+        check(not wrong, f"all {len(files)} captured frames classify as LB intended",
+              "; ".join(wrong) if wrong else f"{len(files)} files, real landmarks")
+
+        # The security property, on real hands rather than trigonometry.
+        approvals = [f.name for f in files
+                     if gc._classify_frame([[LM(*a) for a in h["landmarks"]]
+                                            for h in json.loads(f.read_text())["hands"]])
+                     == "THUMBS_UP"]
+        check(all("thumbs_up" in n for n in approvals),
+              "no captured hand approves unless LB was making a thumbs up",
+              f"{len(approvals)} approvals: {[n[8:-5] for n in approvals]}")
+
+        # What actually separates a pinch from everything else, measured on these hands.
+        every = [h for f in files
+                 for h in [[LM(*a) for a in x["landmarks"]]
+                           for x in json.loads(f.read_text())["hands"]]]
+        pinches = [h for h in every if gc._is_pinch(h)]
+        others = [h for h in every if not gc._is_pinch(h)]
+
+        check(max(gc._pinch_ratio(h) for h in pinches) < gc.PINCH_MAX_RATIO,
+              "every real pinch is inside PINCH_MAX_RATIO",
+              f"widest real pinch {max(gc._pinch_ratio(h) for h in pinches):.2f} "
+              f"< {gc.PINCH_MAX_RATIO}")
+
+        # THE POINT OF THIS CHECK. At 0.66 the gap does NOT separate on its own — LB's thumbs
+        # up measures 0.49, well inside the ceiling — so something else has to be doing the
+        # work, and it is the contrast law. If a future edit weakens or deletes that law while
+        # leaving the gap alone, this is the check that goes red rather than a shell command
+        # being approved by a fist.
+        under = [h for h in others if gc._pinch_ratio(h) < gc.PINCH_MAX_RATIO]
+        check(bool(under),
+              "the gap ALONE cannot separate at this ceiling - non-pinches sit under it",
+              f"{len(under)} of {len(others)} non-pinch hands are inside "
+              f"{gc.PINCH_MAX_RATIO}: gaps "
+              f"{[round(gc._pinch_ratio(h), 2) for h in under]}")
+
+        def contrast(h):
+            back = (gc._reach(h, 12, 9) + gc._reach(h, 16, 13) + gc._reach(h, 20, 17)) / 3
+            return back - gc._reach(h, 8, 5), back
+        check(all(c <= gc.PINCH_CONTRAST or b <= gc.PINCH_BACK_ARCH
+                  for c, b in map(contrast, under)),
+              "...and the CONTRAST LAW is what rejects every one of them",
+              "; ".join(f"contrast {c:+.2f} back {b:.2f}" for c, b in map(contrast, under)))
+
+    section("8. the sidecar protocol carries every token")
 
     for token in ("MOVE", "SCALE", "PINCH", "FIST",
                   "THUMBS_UP", "THUMBS_DOWN", "OPEN_PALM", "NONE"):

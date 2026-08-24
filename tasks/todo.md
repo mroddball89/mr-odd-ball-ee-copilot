@@ -1198,3 +1198,70 @@ layer returns a `Motion` carrying numbers, and the name is a label on top of the
       approval path has no previous frame, so it cannot produce a difference.
 - [ ] One-handed rotate (barehands promotes a held-still pinch into a rotate latch) is NOT
       built. Two-handed twist covers rotation for now.
+
+---
+
+## The pointer bridge, and PINCH_MAX_RATIO fitted to LB's hands (2026-08-23)
+
+- [x] `PINCH_MAX_RATIO = 0.66`, LB's own number, checked against the 17 hands he captured
+- [x] Two real bugs found by replaying those captures — see below
+- [x] `tools/gesture_pointer.py` — a kernel virtual mouse driven by a pinch
+- [x] `tools/verify_pointer.py` — 17 checks that it cannot type and cannot click
+- [x] Section 7 of `verify_gestures.py` replays LB's captured landmarks as a regression corpus
+
+### Review
+
+| check | result |
+|---|---|
+| `verify_gestures.py` | 50/50 (Windows and Pi) |
+| `verify_pointer.py` on the Pi | 17/17 |
+| `verify_pointer.py --probe` | bites — guard removed gives a 0 px click |
+| `verify_gate_state.py` | 20/20 |
+| every captured hand replayed | 12/12 classify as LB intended |
+| live dry-run on the Pi | 52 frames, pause handshake in and out, clean exit |
+| the real device | registers as `oddball-gesture-pointer`, `/devices/virtual/input/input6` |
+
+### What the captures revealed — 0.66 was treating a symptom
+
+LB's genuine pinches measure **0.09 to 0.32**. Every one was already inside the old 0.32
+ceiling, so the gap was never what rejected them. Two other things were:
+
+- **The aspect bound threw a textbook pinch away.** `ASPECT_GARBAGE = 6.0` came from barehands'
+  pipeline. LB's pinching pose turns the palm side-on, which foreshortens the knuckle row and
+  drives that ratio up legitimately — one capture sits at 6.30 with a perfect signature (gap
+  0.17, contrast 0.53) and was discarded as a hallucinated hand. Now 9.0, fitted on **our**
+  landmarks. A ported constant is only as good as the pipeline it was fitted on.
+- **`OPEN_PALM` was tested before `PINCH`.** In a real pinch the index **arcs** to meet the
+  thumb rather than folding, so its curl stays high — LB has a capture reading index curl +0.74,
+  over the 0.6 "straight" bar. All four fingers looked open, `OPEN_PALM` matched, and the pinch
+  below was never reached. **No gap threshold could have fixed this**, which is why loosening
+  the ceiling felt like it helped without ever curing it.
+
+0.66 is kept because it is LB's measured preference and it is safe — but it is a *margin*, not
+the decision. The contrast law is what actually separates a touch: his thumbs-up measures gap
+0.49, well inside 0.66, and is rejected at −0.03 contrast. Section 7 asserts exactly that, so
+deleting the contrast law goes red instead of approving a shell command with a fist.
+
+### The pointer cannot type and cannot click
+
+Not by policy — by what the device can emit.
+
+- **No keyboard capability.** None of the kernel's 514 `KEY_*` codes is declared, so it cannot
+  answer the `input()` prompt in `agents/os_agent.py`. This is the guarantee worth the most.
+- **No click.** Press happens only after travel; before releasing, if the pointer has not moved
+  `CLICK_GUARD_PX` (160) it is displaced that far first. Checked across 120 drag lengths — 118
+  pressed, closest press/release pair 160 px. No widget activates on a release that far from
+  its press.
+- **Left button only**, so no context menu. No `EV_ABS`, so it cannot warp to a screen position.
+- **Inert during an approval.** The pause file releases the camera *and* stops all injection.
+
+### Still open
+
+- [ ] Nothing autostarts the daemon. It runs by hand; a systemd user unit is a small addition
+      once LB has decided he wants it always on.
+- [ ] `POINTER_GAIN` (900 px per palm span) is a first guess, unlike the pinch constants. It is
+      `--gain` on the command line; whatever feels right should be written back as the default.
+- [ ] Rotation is measured and published to the state file but never injected — there is no
+      pointer event for it. Zoom is a plain wheel, deliberately: Ctrl+scroll would need a
+      keyboard capability and that costs the first guarantee.
+- [ ] The two-hand SCALE path has never been exercised on real hands with the pointer running.

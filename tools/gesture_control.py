@@ -206,6 +206,7 @@ gesture replaces the keystroke, not the review.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
@@ -321,10 +322,32 @@ EXTEND_REACH = 1.45
 CURL_FOLDED = 0.35             # below this the finger is folded
 CURL_STRAIGHT = 0.60           # above this it is straight
 
-# PINCH: thumb-index gap over palm span. Two regimes, because a palm turned side-on to the
-# camera reads a wider gap for the same real touch. barehands v3.9.32 / v3.9.24.
-PINCH_MAX_RATIO = 0.32         # frontal palm (aspect < 2.0)
-PINCH_MAX_RATIO_PROFILE = 0.38 # rotated palm
+# PINCH: thumb-index gap over palm span.
+#
+# 0.66, LB's own number, chosen at the camera on 2026-08-23 and then checked against the 17
+# hands he captured. What that check found is worth writing down, because it changes what this
+# constant is FOR:
+#
+#     his genuine pinches      0.09 .. 0.32     (twelve of them)
+#     nearest non-pinch hand   0.69
+#
+# **Every pinch he made was already inside the old 0.32 ceiling.** The gap was never what was
+# rejecting them — the two bugs below were. So 0.66 is not the threshold that makes pinching
+# work; it is a wide margin sitting in a canyon that runs from 0.32 to 0.69, and the CONTRAST
+# LAW is what actually decides a touch. barehands reached the same arrangement from the other
+# direction and parked its own ceiling "in a margin role... the contrast law is the real touch
+# enforcement".
+#
+# The margin above 0.66 is thin — 0.03 to that 0.69 hand. 0.50 would sit mid-canyon and still
+# admit every pinch in the corpus. Kept at 0.66 because it is LB's measured preference and the
+# contrast law carries the duty; change this line, not the logic, if a stray hand ever grabs.
+PINCH_MAX_RATIO = 0.66
+
+# There was a second, wider ceiling here for palms turned side-on, ported from barehands along
+# with an `aspect < 2.0` test to choose between them. Removed 2026-08-23: measured on LB's
+# captures, his hands run aspect 1.13 to 6.30 with a median of 3.74, so that test put 13 of 17
+# real hands in the "profile" lane and the split decided nothing. It was a knob that could only
+# ever be wrong, inherited from a pipeline whose aspect numbers are not these.
 
 # THE CONTRAST LAW (barehands v3.8.2). A closed fist also puts the thumb on the index tip,
 # so the gap alone cannot tell a pinch from a clench. The tell is CONTRAST: in a real pinch
@@ -345,8 +368,13 @@ THUMB_DROP = 0.55              # ...or this far below it
 # there — the knuckle row collapsed, a geometrically impossible hand — while no real hand in
 # a two-day corpus exceeded 5.5. Past this the tracker is guessing, and a guess must not be
 # allowed to produce a gesture at all, least of all at a security prompt.
-ASPECT_GARBAGE = 6.0
-ASPECT_FRONTAL = 2.0           # below this the palm faces the camera; picks the pinch regime
+# 9.0, up from barehands' 6.0. Its 6.0 was measured against ITS OWN landmark pipeline, and the
+# number did not transfer: LB's captures include a textbook pinch — gap 0.17, contrast 0.53 —
+# sitting at aspect 6.30, which 6.0 threw away as a hallucinated hand. His pinching pose turns
+# the palm side-on, which foreshortens the knuckle row and drives this ratio up legitimately.
+# A ported constant is only as good as the pipeline it was fitted on; this one is now fitted
+# on ours.
+ASPECT_GARBAGE = 9.0
 
 # --- the manipulation layer ---------------------------------------------------------------
 #
@@ -448,6 +476,52 @@ def sidecar_python() -> str:
     return sys.executable
 
 
+# The handshake with `tools/gesture_pointer.py`, which holds the camera open to drive the
+# desktop pointer. Two processes cannot both have `/dev/video0`, so the gate takes it.
+POINTER_PAUSE_FILE = REPO_ROOT / "data" / "gesture_pointer.pause"
+
+# How long to give the daemon to notice and let go. It polls every 0.15 s, so 0.5 s is three
+# chances. Paid once per approval, on a prompt that already costs 2.2 s and is about to stop
+# and ask a question anyway.
+POINTER_YIELD_S = 0.5
+
+
+@contextlib.contextmanager
+def _camera_yielded():
+    """Ask the pointer daemon to drop the camera for the duration of this block.
+
+    Two things happen while this file exists, and the second is the one that matters:
+
+    1. The daemon releases `/dev/video0`, so the approval read can open it. Without this a
+       running daemon would make every approval report `NO_CAMERA` — safe, but it would
+       silently delete gesture approval.
+    2. **The daemon stops injecting pointer events entirely.** A security prompt is exactly
+       when a synthetic mouse must not be moving things, and this is what guarantees it is
+       inert. See the security model in `tools/gesture_pointer.py`.
+
+    Best-effort by design: if the file cannot be written the approval still goes ahead, because
+    a gesture read that cannot happen falls to the keyboard, which is the safe direction. It is
+    removed in a `finally` so a crashed approval cannot leave the daemon paused for ever.
+    """
+    made = False
+    try:
+        POINTER_PAUSE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        POINTER_PAUSE_FILE.write_text("gesture approval in progress\n", encoding="utf-8")
+        made = True
+        time.sleep(POINTER_YIELD_S)
+    except OSError as exc:
+        LOG.debug("could not pause the pointer daemon (%s); carrying on", exc)
+    try:
+        yield
+    finally:
+        if made:
+            try:
+                POINTER_PAUSE_FILE.unlink(missing_ok=True)
+            except OSError:
+                LOG.warning("could not clear %s — the pointer daemon will stay paused",
+                            POINTER_PAUSE_FILE)
+
+
 def _ask_sidecar(python: str) -> str:
     """Run one gesture read in `python` and return its answer.
 
@@ -473,10 +547,11 @@ def _ask_sidecar(python: str) -> str:
 
     env = dict(os.environ, ODDBALL_GESTURE_SIDECAR="1")
     try:
-        done = subprocess.run(
-            [python, str(Path(__file__).resolve()), "--once"],
-            capture_output=True, text=True, timeout=SIDECAR_TIMEOUT_S,
-            cwd=str(REPO_ROOT), env=env, check=False)
+        with _camera_yielded():
+            done = subprocess.run(
+                [python, str(Path(__file__).resolve()), "--once"],
+                capture_output=True, text=True, timeout=SIDECAR_TIMEOUT_S,
+                cwd=str(REPO_ROOT), env=env, check=False)
     except subprocess.TimeoutExpired:
         LOG.warning("gesture read timed out after %.0fs", SIDECAR_TIMEOUT_S)
         return "NO_CAMERA"
@@ -699,10 +774,7 @@ def _is_pinch(landmarks) -> bool:
     middle, ring and pinky stay OUT, and that contrast separated every correct sample from
     every impostor in its corpus where absolute finger height did not.
     """
-    gap = _pinch_ratio(landmarks)
-    ceiling = (PINCH_MAX_RATIO if _aspect(landmarks) < ASPECT_FRONTAL
-               else PINCH_MAX_RATIO_PROFILE)
-    if gap >= ceiling:
+    if _pinch_ratio(landmarks) >= PINCH_MAX_RATIO:
         return False
 
     index_reach = _reach(landmarks, 8, 5)
@@ -750,15 +822,23 @@ def _classify(landmarks) -> str:
     out = [_finger_open(landmarks, chain) for chain in CHAINS]
     shut = [_finger_shut(landmarks, chain) for chain in CHAINS]
 
-    # Open palm first, as it has been since 2026-08-19: it is the permissive pose and it
-    # overlaps the naive thumbs-up test, so checking it first is what stops a wave being a yes.
-    if all(out):
-        return "OPEN_PALM"
-
-    # The pinch, which is the verb the whole manipulation layer is built on, and which would
-    # otherwise fall through into the thumb tests.
+    # PINCH FIRST, since 2026-08-23. It used to run after the open-palm test and that was
+    # wrong: in a real pinch the index finger ARCS to meet the thumb rather than folding, so
+    # its segment-alignment curl stays high — LB has a captured pinch reading index curl +0.74,
+    # comfortably over the 0.6 "straight" bar. All four fingers therefore looked open,
+    # OPEN_PALM matched, and the pinch below was never reached. That is the bug his "max pinch
+    # about 0.66" was compensating for, and no gap threshold could have fixed it.
+    #
+    # Moving it in front of OPEN_PALM is safe because `_is_pinch` is not a gap test: it demands
+    # the CONTRAST of an index curled in against three fingers still out. His open palm scores
+    # 0.18 contrast against the 0.18 bar, and 0.78 gap against the 0.66 ceiling — it fails both.
     if _is_pinch(landmarks):
         return "PINCH"
+
+    # Open palm, as it has been since 2026-08-19: the permissive pose, tested before the thumb
+    # so that a wave can never be read as a yes.
+    if all(out):
+        return "OPEN_PALM"
 
     # A closed hand, and ONLY a properly closed one — see `_finger_shut` for why this demands
     # all four folded rather than merely not-extended. Which gesture it is then depends on the
