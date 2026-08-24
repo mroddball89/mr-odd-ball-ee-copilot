@@ -203,8 +203,6 @@ def run() -> None:
             ("FIST",        dict(fingers="fist", thumb="side")),
             ("THUMBS_UP",   dict(fingers="fist", thumb="up")),
             ("THUMBS_DOWN", dict(fingers="fist", thumb="down")),
-            ("CLAW",        dict(fingers="claw", thumb="side")),
-            ("POINT",       dict(fingers=("out", "fist", "fist", "fist"), thumb="side")),
             ("PINCH",       dict(fingers=("claw", "out", "out", "out"), thumb="pinch")),
     ):
         got = gc._classify(hand(**kw))
@@ -215,8 +213,6 @@ def run() -> None:
 
     for want, kw in (
             ("OPEN_PALM",   dict(fingers="out",  thumb="side")),
-            ("CLAW",        dict(fingers="claw", thumb="side")),
-            ("POINT",       dict(fingers=("out", "fist", "fist", "fist"), thumb="side")),
             ("PINCH",       dict(fingers=("claw", "out", "out", "out"), thumb="pinch")),
     ):
         ok, detail = sweep(want, **kw)
@@ -293,16 +289,11 @@ def run() -> None:
           "and only a closed fist reaches EITHER thumb branch",
           f"{len(thumbs)} thumb verdicts")
 
-    claw = hand(fingers="claw", thumb="side")
-    check(gc._classify(claw) == "CLAW", "the canonical claw is a CLAW", gc._classify(claw))
-
-    # No arrangement of the thumb turns a hooked hand into an approval. (A claw with the thumb
-    # raised straight up closes its own mouth and falls to NONE rather than CLAW — physically
-    # right, since an opposed thumb is what makes the C-shape, and safe either way.)
+    # No arrangement of the thumb turns a hooked hand into an approval.
     verdicts = {t: gc._classify(hand(fingers="claw", thumb=t)) for t in
                 ("side", "up", "down", "pinch")}
     check("THUMBS_UP" not in verdicts.values(),
-          "no claw, at any thumb position, is ever an approval", str(verdicts))
+          "a half-curled hand never approves, at any thumb position", str(verdicts))
 
     pinch = hand(fingers=("claw", "out", "out", "out"), thumb="pinch")
     check(gc._classify(pinch) != "THUMBS_UP",
@@ -320,8 +311,9 @@ def run() -> None:
 
     palm = hand(fingers="out", thumb="side")
     up = hand(fingers="fist", thumb="up")
-    for a in (palm, claw, pinch):
-        for b in (palm, claw, pinch):
+    hooked = hand(fingers="claw", thumb="side")
+    for a in (palm, hooked, pinch):
+        for b in (palm, hooked, pinch):
             if gc._classify_frame([a, b]) == "THUMBS_UP":
                 check(False, "two non-approving hands produced an approval")
                 break
@@ -331,52 +323,121 @@ def run() -> None:
           "a thumbs up beside an open hand is still an approval",
           gc._classify_frame([palm, up]))
 
-    section("6. the movements - a pinch is the verb, not a pose")
+    section("6. the manipulation layer - numbers, not names")
 
-    def stream(samples):
-        """Feed (t, hands) to a fresh recogniser; return every token it emitted."""
+    def tracker():
+        """A recogniser with only the state `track()` needs. No camera, no mediapipe."""
         rec = gc.GestureRecognizer.__new__(gc.GestureRecognizer)
-        rec._history = __import__("collections").deque(maxlen=gc.TRACK_HISTORY)
-        rec._pinch, rec._started, rec._travel = False, 0.0, 0.0
-        rec.last_release = ""
-        return [rec.classify_stream(h, now=t) for t, h in samples], rec
+        rec._grip, rec.motion = None, gc.Motion("NONE")
+        return rec
 
-    def pinching(dx=0.0):
-        h = hand(fingers=("claw", "out", "out", "out"), thumb="pinch")
-        for lm in h:
-            lm.x += dx
-        return [h]
+    def pinching(dx=0.0, dy=0.0, at=(0.50, 0.72)):
+        h = hand(fingers=("claw", "out", "out", "out"), thumb="pinch",
+                 at=(at[0] + dx, at[1] + dy))
+        return h
 
     open_hand = [hand(fingers="out", thumb="side")]
 
-    got, _ = stream([(0.00, pinching()), (0.10, pinching()), (0.20, open_hand)])
-    check(got[-1] == "TAP", "a quick pinch that went nowhere is a TAP", str(got))
+    # --- one hand: MOVE ---
+    rec = tracker()
+    rec.track([pinching()], now=0.0)
+    m = rec.track([pinching(dx=0.04)], now=0.1)
+    check(m.name == "MOVE" and m.dx > 0, "a pinch dragged right is MOVE with dx > 0", repr(m))
 
-    got, _ = stream([(0.00, pinching()), (0.20, pinching(0.06)), (0.40, pinching(0.16))])
-    check(got[-1] == "DRAG", "a pinch that has travelled is a DRAG", str(got))
-    check(got[:2] == ["PINCH", "PINCH"],
-          "...and it was a plain PINCH before it had gone anywhere", str(got))
+    rec = tracker()
+    rec.track([pinching()], now=0.0)
+    m = rec.track([pinching(dy=0.04)], now=0.1)
+    check(m.name == "MOVE" and m.dy > 0, "dragged down is MOVE with dy > 0 (y runs down)",
+          repr(m))
 
-    got, rec = stream([(0.00, pinching()), (0.08, pinching(0.06)),
-                       (0.16, pinching(0.13)), (0.24, open_hand)])
-    check(got[-1] == "FLICK", "a pinch released at speed is a FLICK", str(got))
-    check("spans/s" in rec.last_release, "and the release speed is recorded", rec.last_release)
+    # Translation is in palm spans, so the SAME physical movement must report the same dx at
+    # any distance from the camera. This is the property that stops a drag depending on how
+    # far back LB is sitting.
+    rec = tracker()
+    rec.track([pinching()], now=0.0)
+    near = rec.track([pinching(dx=0.04)], now=0.1).dx
+    def shrunk(h, k=0.5):
+        for lm in h:
+            lm.x = 0.5 + (lm.x - 0.5) * k
+            lm.y = 0.5 + (lm.y - 0.5) * k
+        return h
+    # `shrunk` halves every coordinate about the frame centre, so a hand that moved 0.04 near
+    # the camera moves 0.02 of the frame when it is twice as far away — which is exactly what
+    # the same physical movement looks like from there. Its palm span halves too, so dividing
+    # by the span must cancel both and give the same answer back.
+    rec = tracker()
+    rec.track([shrunk(pinching())], now=0.0)
+    far = rec.track([shrunk(pinching(dx=0.04))], now=0.1).dx
+    check(abs(near - far) < 0.02,
+          "the same real movement reports the same dx near and far from the camera",
+          f"near {near:.3f} vs far {far:.3f}")
 
-    got, _ = stream([(0.00, pinching()), (0.50, pinching(0.02)),
-                     (1.00, pinching(0.03)), (1.50, open_hand)])
-    check("FLICK" not in got, "a slow release is not a throw", str(got))
+    # --- holding still ---
+    rec = tracker()
+    rec.track([pinching()], now=0.0)
+    m = rec.track([pinching(dx=0.0005)], now=0.1)
+    check(m.name == "PINCH" and not m.moving,
+          "a pinch held still is PINCH and carries no movement at all", repr(m))
 
-    # THE regression this rewrite exists for: an open palm, moving or still, is never a FLICK.
-    got, _ = stream([(0.00, open_hand), (0.08, [hand(fingers="out", thumb="side",
-                                                     at=(0.75, 0.72))]),
-                     (0.16, [hand(fingers="out", thumb="side", at=(0.95, 0.72))])])
-    check(set(got) == {"OPEN_PALM"},
-          "an open palm swept fast across the frame stays OPEN_PALM - never FLICK",
-          str(got))
+    # --- two hands: SCALE ---
+    def two(gap, angle=0.0):
+        import math
+        cx, cy = 0.50, 0.60
+        dx, dy = math.cos(angle) * gap / 2, math.sin(angle) * gap / 2
+        return [pinching(at=(cx - dx, cy - dy)), pinching(at=(cx + dx, cy + dy))]
+
+    rec = tracker()
+    rec.track(two(0.30), now=0.0)
+    m = rec.track(two(0.42), now=0.1)
+    check(m.name == "SCALE" and m.scale > 1.0,
+          "hands moving APART is SCALE with scale > 1 (bigger, zoom in)", repr(m))
+
+    rec = tracker()
+    rec.track(two(0.42), now=0.0)
+    m = rec.track(two(0.30), now=0.1)
+    check(m.name == "SCALE" and m.scale < 1.0,
+          "hands moving TOGETHER is SCALE with scale < 1 (smaller, zoom out)", repr(m))
+
+    rec = tracker()
+    rec.track(two(0.35), now=0.0)
+    m = rec.track(two(0.35, angle=0.25), now=0.1)
+    check(m.name == "SCALE" and m.rotation > 0 and abs(m.scale - 1.0) < 0.02,
+          "turning both hands rotates WITHOUT scaling", repr(m))
+
+    rec = tracker()
+    rec.track(two(0.35), now=0.0)
+    m = rec.track(two(0.3505), now=0.1)
+    check(m.scale == 1.0, "two hands held still do not drift the zoom", repr(m))
+
+    # A glitch frame must not fling anything.
+    rec = tracker()
+    rec.track(two(0.10), now=0.0)
+    m = rec.track(two(0.90), now=0.1)
+    check(m.scale <= gc.SCALE_MAX_STEP,
+          f"one impossible frame is clamped to x{gc.SCALE_MAX_STEP}", repr(m))
+
+    # --- no hands ---
+    rec = tracker()
+    m = rec.track([], now=0.0)
+    check(m.name == "NONE" and not m.moving and m.scale == 1.0,
+          "an empty frame is a no-op: scale 1.0, every delta zero", repr(m))
+
+    rec = tracker()
+    m = rec.track(open_hand, now=0.0)
+    check(m.name == "OPEN_PALM" and not m.moving,
+          "an open palm is a pose and moves nothing", repr(m))
+
+    # Letting go and re-gripping must not teleport whatever is held.
+    rec = tracker()
+    rec.track([pinching()], now=0.0)
+    rec.track(open_hand, now=0.1)
+    m = rec.track([pinching(dx=0.30)], now=0.2)
+    check(not m.moving,
+          "releasing and re-gripping elsewhere does NOT drag the thing across", repr(m))
 
     section("7. the sidecar protocol carries every token")
 
-    for token in ("TAP", "DRAG", "FLICK", "PINCH", "CLAW", "POINT", "FIST",
+    for token in ("MOVE", "SCALE", "PINCH", "FIST",
                   "THUMBS_UP", "THUMBS_DOWN", "OPEN_PALM", "NONE"):
         check(token in gc._VALID, f"{token} survives the sidecar whitelist")
     check(set(gc._PRIORITY) <= set(gc._VALID), "_PRIORITY names no token _VALID would reject")
@@ -390,8 +451,7 @@ def dump() -> int:
             ("open palm", dict(fingers="out",  thumb="side")),
             ("fist",      dict(fingers="fist", thumb="side")),
             ("thumbs up", dict(fingers="fist", thumb="up")),
-            ("claw",      dict(fingers="claw", thumb="side")),
-            ("point",     dict(fingers=("out", "fist", "fist", "fist"), thumb="side")),
+            ("half-curl", dict(fingers="claw", thumb="side")),
             ("pinch",     dict(fingers=("claw", "out", "out", "out"), thumb="pinch")),
     ):
         h = hand(**kw)
