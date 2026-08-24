@@ -49,13 +49,17 @@ skeleton exactly as the MediaPipe docs show. On a box with mediapipe 1.x there i
 `mp.solutions` at all, so the skeleton is drawn from `HAND_CONNECTIONS` below with plain
 `cv2.line`. Same picture, and the window still opens on both.
 
-## FLICK only exists here
+## MOVE and SCALE only exist here
 
 `get_gesture()` reads one frame from a camera it then closes, in a child process that then
-exits. Motion needs two frames and something that remembers the first, so the one-shot
-approval path structurally cannot report a flick. This loop holds the camera open and calls
-`classify_stream()`, which does remember — so this window is currently the only place FLICK
-can be seen at all. Practising it here is how it gets tuned for whatever wires it up later.
+exits. A manipulation is a DIFFERENCE between two frames, so the one-shot approval path
+structurally cannot report one. This loop holds the camera open and calls `track()`, which
+remembers the previous frame — so this window is the only place `MOVE` and `SCALE` can be seen
+at all, and the only place to watch the numbers they carry.
+
+The banner names what is happening; the line under it shows the deltas a consumer would apply
+— `dx/dy` in palm spans for a one-hand drag, and the scale factor plus twist for two hands.
+Those numbers are what a deadzone is tuned against.
 """
 
 from __future__ import annotations
@@ -63,6 +67,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import math
 import time
 from pathlib import Path
 
@@ -94,19 +99,12 @@ COLOUR = {
     "THUMBS_DOWN": (80, 80, 240),      # the decline
     "OPEN_PALM":   (230, 200, 90),
     "FIST":        (170, 170, 170),
-    "PINCH":       (200, 140, 255),
-    "CLAW":        (90, 170, 255),
-    "POINT":       (255, 190, 120),
-    "TAP":         (255, 255, 140),
-    "DRAG":        (220, 160, 255),
-    "FLICK":       (120, 255, 255),
+    "PINCH":       (200, 140, 255),    # the grip
+    "MOVE":        (120, 255, 255),    # ...travelling
+    "SCALE":       (255, 190, 120),    # ...both hands
     "NONE":        (150, 150, 150),
     "NO_CAMERA":   (80, 80, 240),
 }
-
-# The events. They last one frame by construction — a tap is a pinch that already ended — so
-# they are HELD on screen for a beat or they cannot be read at ~9.7 fps.
-EVENTS = ("TAP", "FLICK")
 
 
 def reexec_into_sidecar() -> None:
@@ -284,10 +282,6 @@ def hand_numbers(gc, hands) -> list[str]:
         lines.append(f"  pinch gap    {gap:.2f} < {ceiling}   "
                      f"contrast {back - reaches[0]:+.2f} > {gc.PINCH_CONTRAST}   "
                      f"{'YES' if gc._is_pinch(h) else 'no'}")
-        lines.append(f"  claw mouth   {gap:.2f} in "
-                     f"{gc.CLAW_MOUTH_MIN}-{gc.CLAW_MOUTH_MAX}   "
-                     f"{'YES' if gc._is_claw(h) else 'no'}")
-
         rise = (h[gc.WRIST].y - h[gc.THUMB_TIP].y) / scale
         lines.append(f"  thumb rise   {rise:+.2f}   "
                      f"(up > {gc.THUMB_RISE}, down < -{gc.THUMB_DROP})   "
@@ -332,8 +326,8 @@ def save_sample(cv2, gc, root: Path, label: str | None, verdict: str,
         "thresholds": {k: getattr(gc, k) for k in (
             "EXTEND_REACH", "CURL_FOLDED", "CURL_STRAIGHT", "PINCH_MAX_RATIO",
             "PINCH_MAX_RATIO_PROFILE", "PINCH_CONTRAST", "PINCH_BACK_ARCH",
-            "CLAW_MOUTH_MIN", "CLAW_MOUTH_MAX", "CLAW_INDEX_CURL", "CLAW_MIDDLE_CURL",
-            "CLAW_MIN_REACH", "THUMB_RISE", "THUMB_DROP", "ASPECT_FRONTAL")},
+            "THUMB_RISE", "THUMB_DROP", "ASPECT_FRONTAL",
+            "MOVE_DEADZONE", "SCALE_DEADZONE", "ROTATE_DEADZONE")},
         "hands": [],
     }
     for h in hands:
@@ -369,12 +363,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="flip left-right so the window reads like a mirror (default on)")
     ap.add_argument("--pinch", type=float, metavar="R",
                     help="override PINCH_MAX_RATIO for this run")
-    ap.add_argument("--claw-mouth", type=float, metavar="R",
-                    help="override CLAW_MOUTH_MIN for this run")
     ap.add_argument("--extend", type=float, metavar="R",
                     help="override EXTEND_REACH (what counts as a finger being out)")
-    ap.add_argument("--flick-speed", type=float, metavar="V",
-                    help="override FLICK_MIN_SPEED, in palm spans per second")
+    ap.add_argument("--deadzone", type=float, metavar="R",
+                    help="override MOVE_DEADZONE, in palm spans")
     ap.add_argument("--label", metavar="POSE",
                     help="tag saved samples with the pose you INTENDED (e.g. --label claw). "
                          "Run one session per pose; press s several times. Without this, "
@@ -391,8 +383,8 @@ def main(argv: list[str] | None = None) -> int:
 
     # Overrides land on the module the classifier reads, so the REAL decision changes — the
     # numbers panel and the gesture name can never disagree about which threshold was used.
-    for flag, const in (("pinch", "PINCH_MAX_RATIO"), ("claw_mouth", "CLAW_MOUTH_MIN"),
-                        ("extend", "EXTEND_REACH"), ("flick_speed", "FLICK_MIN_SPEED")):
+    for flag, const in (("pinch", "PINCH_MAX_RATIO"), ("extend", "EXTEND_REACH"),
+                        ("deadzone", "MOVE_DEADZONE")):
         value = getattr(args, flag)
         if value is not None:
             print(f"  {const} = {value}  (was {getattr(gc, const)}, for this run only)")
@@ -441,8 +433,6 @@ def main(argv: list[str] | None = None) -> int:
     assert window.isascii(), "the cv2 window title must be ASCII; see the note above"
     show_numbers = True
     fps, last = 0.0, time.monotonic()
-    held, held_until, held_note = "NONE", 0.0, ""
-    held_colour = (200, 200, 200)
     saved = frames = 0
 
     if args.label:
@@ -483,22 +473,23 @@ def main(argv: list[str] | None = None) -> int:
             fps = 0.9 * fps + 0.1 * (1.0 / max(now - last, 1e-6))
             last = now
 
-            # FLICK is one frame wide by construction (it clears its own history so a swipe
-            # fires once). One frame at 6.6 fps is 150 ms — too short to read. So it is HELD
-            # on screen for a beat. The held banner is the only thing here that is not the
-            # instantaneous truth, which is why it says so.
-            if gesture in EVENTS:
-                held, held_colour = gesture, COLOUR.get(gesture, (200, 200, 200))
-                held_until, held_note = now + 0.8, rec.last_release
-            banner = held if now < held_until else gesture
-            key_colour = (held_colour if now < held_until
-                          else COLOUR.get(gesture, (200, 200, 200)))
+            # Every frame is the instantaneous truth now — there is no held banner, because
+            # MOVE and SCALE persist for as long as the hands do rather than firing once.
+            banner = gesture
+            key_colour = COLOUR.get(gesture, (200, 200, 200))
 
             h, w = frame.shape[:2]
             label(cv2, frame, banner, (16, 58), scale=1.6, colour=key_colour, thick=4)
-            if now < held_until:
-                label(cv2, frame, f"{held_note}   (held 0.8 s so it can be read)", (18, 84),
-                      scale=0.45, colour=(150, 150, 150))
+            # The numbers the manipulation layer actually emitted this frame. This is the
+            # line to watch when tuning a deadzone: it is the value a consumer would apply.
+            m = rec.motion
+            if m.name == "MOVE":
+                label(cv2, frame, f"dx {m.dx:+.3f}   dy {m.dy:+.3f}   (palm spans)",
+                      (18, 84), scale=0.55, colour=COLOUR["MOVE"])
+            elif m.name == "SCALE":
+                label(cv2, frame,
+                      f"x{m.scale:.3f}   rot {math.degrees(m.rotation):+.1f} deg",
+                      (18, 84), scale=0.55, colour=COLOUR["SCALE"])
 
             label(cv2, frame, f"{len(hands)} hand{'s' if len(hands) != 1 else ''}   "
                               f"{fps:4.1f} fps   {rec.backend}",

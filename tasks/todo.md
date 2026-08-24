@@ -1146,3 +1146,55 @@ Plus screenshots, which is what actually cracked it.
 - [ ] Nothing consumes any gesture but `THUMBS_UP` and now `THUMBS_DOWN`. TAP/DRAG/FLICK need
       the persistent worker before they can drive anything, since the one-shot path has no
       frame-to-frame state.
+
+---
+
+## Cut to two gestures: pinch to move, two pinches to scale (2026-08-23, later)
+
+LB: *"i dont need a point or a claw right now. i just want to be pinch hold to and be able to
+move things around up down around or rotate, double pinch fingers close zoom out make smaller
+fingers moving away makes bigger zoom in."*
+
+That is not a request for more gesture names — it is a request for a **control stream**. A token
+like `DRAG` cannot move anything; whatever is being dragged needs to know *how far*. So the
+layer returns a `Motion` carrying numbers, and the name is a label on top of them.
+
+- [x] `Motion` — per-frame deltas: `dx`, `dy` (palm spans), `scale` (multiplicative),
+      `rotation` (radians), `hands`
+- [x] One pinch travelling -> `MOVE`. Two pinches -> `SCALE`, carrying zoom **and** twist from
+      the same two points, the way every touchscreen has worked for fifteen years
+- [x] Removed `CLAW`, `POINT`, `TAP`, `DRAG`, `FLICK` — five unused gestures are five more ways
+      to misread the two that matter
+- [x] Deadzones and per-frame clamps on all three channels
+- [x] The window shows the live deltas under the banner; that is what a deadzone is tuned against
+
+### Review
+
+| check | result |
+|---|---|
+| `verify_gestures.py`, Windows and Pi | 45/45 both |
+| `--probe` | still bites: old test opens a closed fist at 6 of 12 angles |
+| `verify_gate_state.py` | 20/20 |
+| the window on the Pi | opens, clean SIGINT, camera released |
+
+### What didn't work
+
+- **A slice assignment silently exploded the module docstring.** `lines[a:b] = "text"` assigns a
+  *string* to a list slice, and Python iterates it **character by character** — 3,994 elements,
+  one per character. `gesture_control.py` went from 1,000 lines to 5,156, and because the damage
+  was inside a docstring it was still valid Python: `py_compile` passed, all 48 tests passed, it
+  was committed and pushed. Caught only when a `sed` window printed one letter per line.
+  The other two files used `.split("\n")` on the same line and were fine.
+  **A syntax check is not a content check.** Nothing in the harness looks at prose, so nothing
+  could have caught it; what caught it was reading the file.
+
+### Still open
+
+- [ ] **Thresholds are still barehands', not fitted to LB's hands.** Unchanged by this pass —
+      `PINCH_MAX_RATIO` decides when a grip forms, and the whole manipulation layer sits on top
+      of it, so it is now the single most load-bearing constant in the file. A labelled capture
+      session (`--label pinch`, then `--label open_palm`) is still the next step.
+- [ ] Nothing consumes `MOVE` or `SCALE` yet. They need a persistent worker — the one-shot
+      approval path has no previous frame, so it cannot produce a difference.
+- [ ] One-handed rotate (barehands promotes a held-still pinch into a rotate latch) is NOT
+      built. Two-handed twist covers rotation for now.
