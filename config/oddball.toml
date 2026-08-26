@@ -35,7 +35,8 @@ model = "models/hey_mr_odd_ball.onnx"
 # 0.1461, band 0.8310. 0.76 sits at 74% (rule: 45-85%) with +29% margin under the
 # quietest positive (rule: >=15%). 0.50 sits at 43% — under the floor.
 #
-# tools/tune_threshold.py read the raw model all along and recommended 0.76; the
+# tools/tune_threshold.py (SINCE DELETED — use `python audio/wake.py --meter`, which prints a
+# live score and a recommended threshold) read the raw model all along and recommended 0.76; the
 # harness contradicted it and the harness was wrong. verify_wake.py now measures both
 # numbers separately: `fired_at` for pass/fail, `true_peak` for choosing a threshold.
 # docs/STATE.md's "set it to 0.60" is superseded by the same correction.
@@ -129,7 +130,44 @@ resting_state = "sleeping"
 #
 # Bonus: nothing opening the Bose's microphone also keeps it in A2DP rather than dropping to
 # HFP, which is the difference between music quality and telephone quality on the way OUT too.
-device = "C270"
+#
+# ## The host-API suffix, added with the Windows port 2026-08-26
+#
+# **Every word above is still true here — the C270 is on this box, the Bose Flex 2 is
+# connected, and it is still the system default input's competition.** What changed is that
+# `"C270"` on its own no longer resolves, and the failure is loud rather than silent:
+#
+#     Multiple input devices found for 'C270':
+#       [ 1] Microphone (Logi C270 HD WebCam, MME
+#       [ 7] Microphone (Logi C270 HD WebCam), Windows DirectSound
+#       [14] Microphone (Logi C270 HD WebCam), Windows WASAPI
+#       [17] Microphone (Logi C270 HD WebCam), Windows WDM-KS
+#
+# PortAudio exposes ONE physical device once per host API, and Windows has four. On the Pi
+# there was only ALSA, so one name meant one device. `audio/say.py` already warned about
+# exactly this for the output side; the input side had never met it.
+#
+# WASAPI is chosen deliberately, not taken as whichever came first — but for a SMALLER reason
+# than the first version of this comment claimed, and the correction is worth keeping:
+#
+#   * it is the modern Windows audio API. MME and DirectSound are compatibility shims layered
+#     on top of it, each adding buffering the wake loop does not want.
+#   * WDM-KS is lower still and cannot be opened for blocking reads, which is what
+#     `mic_frames()` does. `--list-devices` marks it as such.
+#
+# **It does NOT avoid a resample.** This comment used to say WASAPI opened the C270 at its
+# native 48000 Hz for "an exact 3:1 decimation" to the wake loop's 16000. That was reasoning
+# rather than measurement and it was wrong: nothing here decimates, and WASAPI is the one host
+# API that REFUSES a rate the hardware does not support natively, so the stream did not open at
+# all — `Invalid sample rate [PaErrorCode -9997]`, which names nothing useful.
+#
+# `audio/wake.py::_wasapi_settings()` now passes `WasapiSettings(auto_convert=True)` for WASAPI
+# devices, which turns on WASAPI's own sample-rate conversion. So it resamples, exactly as MME
+# was doing invisibly; what is left is "not a shim, better converter".
+#
+# The trailing `)` before the comma is load-bearing: it is what makes this a substring of the
+# C270 row and not of anything else. sounddevice matches against "<name>, <host api>".
+device = "C270 HD WebCam), Windows WASAPI"
 
 # "onnx" or "tflite". Must be onnx on Windows — openWakeWord does not ship tflite wheels
 # for it, and its own default is tflite, so this cannot be left implicit.

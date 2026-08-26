@@ -203,7 +203,33 @@ def format_calendar_for_llm(entries: list[dict] | None = None,
     if len(shown) > CALENDAR_MAX_LINES:
         shown, overflow = shown[:CALENDAR_MAX_LINES], shown[CALENDAR_MAX_LINES:]
 
-    lines = [f"Today's date is {datetime.now():%Y-%m-%d}.", "", "KNOWN DEADLINES:"]
+    # WHAT THIS LIST IS, said in the context itself.
+    #
+    # Canvas emits a calendar event only for work that HAS a date on it. A class he is enrolled
+    # in that has posted nothing dated yet produces no events at all and appears here not at
+    # all — it is invisible, not empty. Measured 2026-08-24: his feed carried 155 events tagged
+    # with exactly two course codes (POSC201 139, EEGR105 16, none untagged) while he was
+    # enrolled in four. Nothing was dropped in parsing; the other two were never in the feed.
+    #
+    # This module already makes exactly this argument one level down — it states what it
+    # TRUNCATED so that a model cannot read an absent date as "nothing is due then". The same
+    # reasoning applies to an absent COURSE and had never been applied to it, which is how
+    # "you have 2 classes" came to be said to someone holding four.
+    covered = sorted({str(e.get("course", "")).strip()
+                      for e in entries if str(e.get("course", "")).strip()})
+    lines = [
+        f"Today's date is {datetime.now():%Y-%m-%d}.",
+        "",
+        f"COVERAGE — READ THIS BEFORE COUNTING ANYTHING: the list below is a DEADLINE FEED, "
+        f"not a class roster. It contains only coursework that has a date set in Canvas. It "
+        f"currently holds dated work for {len(covered)} course(s): "
+        f"{', '.join(covered) if covered else 'none'}. He may be enrolled in other classes that "
+        f"have not posted anything dated yet; those are invisible here, not absent from his "
+        f"schedule. Never state how many classes he is taking based on this list, and never "
+        f"tell him a course does not exist because it does not appear in it.",
+        "",
+        "KNOWN DEADLINES:",
+    ]
     for e in shown:
         lines.append(f"- {e.get('due_date', '?')}  {e.get('course', '?')}  "
                      f"{e.get('title', '?')} ({e.get('type', 'other')})")

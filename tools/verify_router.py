@@ -38,6 +38,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# These ledgers are written from `Engine.ask` and `agents/os_agent.py`, so this harness writes
+# to them the moment it drives a failure — even though it was written before they existed and
+# does not mention them. Redirected to a temp directory BEFORE anything under `tools/` is
+# imported, because both read their location at import time. tasks/lessons.md L22.
+import os                                                             # noqa: E402
+import tempfile                                                       # noqa: E402
+
+os.environ.setdefault("ODDBALL_VAULT_DIR",
+                      tempfile.mkdtemp(prefix="oddball-harness-vault-"))
+
+
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
@@ -87,7 +98,7 @@ def section(name: str) -> None:
 def s1_enum() -> None:
     section("1. every string route_hint can return is a real AgentRoute")
 
-    returnable = (hint_mod.ACADEMIC, hint_mod.OS)
+    returnable = (hint_mod.ACADEMIC, hint_mod.OS, hint_mod.SCREEN)
     values = {r.value for r in AgentRoute}
 
     for name in returnable:
@@ -101,7 +112,10 @@ def s1_enum() -> None:
         except ValueError as e:
             check(False, f"AgentRoute({name!r}) constructs", str(e))
 
-    # The module must not grow a third route without this file being told about it.
+    # The module must not grow another route without this file being told about it. SCREEN was
+    # added 2026-08-25 and this check is what caught it — which is the check working, not the
+    # check being in the way. A hint that can name a route nobody has written negatives for is a
+    # hint that will quietly claim turns belonging to somewhere else.
     exported = {v for k, v in vars(hint_mod).items()
                 if k.isupper() and isinstance(v, str) and not k.startswith("_")}
     check(exported == set(returnable),
@@ -109,8 +123,9 @@ def s1_enum() -> None:
           f"found {sorted(exported)}")
 
     # And the hint must never name a route that has no agent behind it.
-    check(AgentRoute.ACADEMIC.value in values and AgentRoute.OS.value in values,
-          "ACADEMIC and OS both still exist as dispatch targets")
+    check(AgentRoute.ACADEMIC.value in values and AgentRoute.OS.value in values
+          and AgentRoute.SCREEN.value in values,
+          "ACADEMIC, OS and SCREEN all still exist as dispatch targets")
 
 
 # =========================================================================================
@@ -163,6 +178,33 @@ def s3_os() -> None:
 
 
 # =========================================================================================
+# 3b. SCREEN — looking at the desktop, and only at the desktop
+# =========================================================================================
+
+SCREEN_YES = (
+    "whats on the screen", "what is on my screen", "whats on my display",
+    "what am i looking at", "what am i seeing", "what do you see",
+    "can you see my screen", "look at my screen", "look at the screen",
+    "take a screenshot", "read the screen", "read whats on the screen",
+    "describe my screen", "what does this window say",
+)
+
+
+def s3b_screen() -> None:
+    section("3b. 'what is on the screen' reaches SCREEN with no API call")
+    for utterance in SCREEN_YES:
+        got = hint_mod.look_up(utterance)
+        check(got == hint_mod.SCREEN, f"{utterance!r} -> screen", f"got {got!r}")
+
+    # The distinction the route exists to make. Both are about this Pi; only one is answered by
+    # looking at pixels.
+    check(hint_mod.look_up("whats the cpu temp") == hint_mod.OS,
+          "a sensor reading is still OS, not SCREEN")
+    check(hint_mod.look_up("whats on the screen") == hint_mod.SCREEN,
+          "...and the display is SCREEN, not OS")
+
+
+# =========================================================================================
 # 4. THE NEGATIVES. The section this file exists for.
 # =========================================================================================
 
@@ -193,6 +235,17 @@ MUST_REFUSE = (
     "save this to my parts list",
     "whats in my inventory",
     "recall what i said about the load cell",
+    # --- "screen" and "looking at" that are NOT about the desktop ------------------------
+    # Every one of these contains a phrase from `_SEEING` and belongs somewhere else. The last
+    # is the one that would have been hardest to find: it is a sentence Mr Odd Ball says HIMSELF
+    # several times a session, and it comes back to him inside the conversation log.
+    "whats on the amp schematic",
+    "what am i looking at in this datasheet",
+    "what does the screen on the scope say",
+    "what does the display on the multimeter say",
+    "how do i drive a 16x2 lcd display",
+    "the output is on the screen",
+    "whats the refresh rate of this oled display",
     # --- stats phrasing that is not about this machine -----------------------------------
     "how hot does this resistor get",
     "how hot does the esp32 get",
@@ -450,7 +503,7 @@ def s8_engine() -> None:
 
 
 def build() -> None:
-    s1_enum(); s2_academic(); s3_os(); s4_negatives()
+    s1_enum(); s2_academic(); s3_os(); s3b_screen(); s4_negatives()
     s5_upload(); s6_courses(); s7_social(); s8_engine()
 
 

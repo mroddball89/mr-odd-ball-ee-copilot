@@ -239,6 +239,54 @@ def _launch(app: str):
     return launch(app)
 
 
+# Which outcome kinds are worth remembering, and what he should take from each. An outcome that
+# is not in here is not written down — `output` and `launched` are successes, and a ledger that
+# records those is a log rather than a lesson.
+#
+# `blocked` IS in here and that deserves saying plainly: the blocklist refusing something is the
+# system working, not a fault, and `tools/os_controller.py` warns that reporting it as a fault
+# is how a guard gets switched off. It is recorded anyway because the *composition* was the
+# mistake — a model wrote a command that must never run — and the lesson is about not writing it
+# again, not about the guard. The wording below keeps that distinction.
+_WORTH_REMEMBERING: dict[str, str] = {
+    "error":         "check the command works before proposing it",
+    "timeout":       "this one does not finish quickly; do not propose it on a spoken turn",
+    "blocked":       "never propose this again — the safety list refuses it, and correctly",
+    "crash":         "",
+    "no-display":    "there is no screen up; do not offer to open applications until there is",
+    "not-installed": "this is not installed on this Pi; say so instead of offering to open it",
+    "unknown-app":   "this app is not in the catalogue; do not claim you can open it",
+    "ambiguous":     "this name matches several apps; ask which one rather than guessing",
+    "launch-failed": "",
+    "unknown-tool":  "",
+}
+
+
+def _reflect(pending: Pending, outcome: Outcome) -> None:
+    """Write a failed OS action to `vault/reflections.md`. **Never raises.**
+
+    The narrow hook that `engine/core._reflect_on_failure` cannot cover: none of these RAISE.
+    `run_command` catches everything and reports it as an `Outcome`, on purpose — that is the
+    whole point of `os_controller`'s "what happened is STATED, not re-parsed" section — so a
+    command that failed is a perfectly successful Python call, and the broad exception hook
+    never sees it. This is where the OS route's mistakes actually are.
+    """
+    lesson = _WORTH_REMEMBERING.get(outcome.kind)
+    if outcome.ok or lesson is None:
+        return
+    try:
+        from tools import reflections
+        subject = pending.shown.splitlines()[0] if pending.shown else outcome.subject
+        reflections.note(
+            kind=f"os/{outcome.kind}",
+            what=("open " if pending.tool == "launch_app" else "run ") + f"`{subject}`",
+            why=" ".join(outcome.detail.split())[:200] or outcome.kind,
+            lesson=lesson)
+    except Exception:                                                     # noqa: BLE001
+        # A ledger failure must not cost the report of what actually happened.
+        pass
+
+
 def resume_os_action(pending: Pending) -> Response:
     """Run the approved action and report what happened.
 
@@ -251,6 +299,8 @@ def resume_os_action(pending: Pending) -> Response:
         outcome = Outcome(ok=False, kind="unknown-tool", detail=pending.tool)
     else:
         outcome = resume(pending.tool_args)
+
+    _reflect(pending, outcome)
 
     launched = pending.tool == "launch_app"
     return Response(

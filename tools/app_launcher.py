@@ -1,101 +1,94 @@
 #!/usr/bin/env python3
-"""
+r"""
 Module:  app_launcher.py
-Purpose: Open a desktop application on the Pi's screen, from a service that has no screen.
+Purpose: Open an application on LB's desktop, from a process that must not hold it open.
 Author:  LB
-Date:    2026-08-21
+Date:    2026-08-21 (ported from systemd/Wayland to Windows 2026-08-26)
 
-    python tools/app_launcher.py firefox        # on the Pi
+    python tools/app_launcher.py "visual studio code"
     python tools/app_launcher.py --display      # just report what screen it can see
 
 ## The bug this exists to fix
 
-Asking him to open Firefox did nothing, and he said "Done." Five things were wrong at once, and
-four of them are here:
+Asking him to open Firefox did nothing, and he said "Done." Five things were wrong at once.
+Two of them were about the Pi's display server and are gone with it; the other three are
+platform-independent, and every one of them would come straight back if this file were
+replaced with a `subprocess.run` and a path:
 
-1. **No display.** `config/oddball.service` is a systemd USER unit that sets no `Environment=`
-   at all, and `Linger=yes` starts it at BOOT — before labwc exists. `WAYLAND_DISPLAY` was never
-   in his environment and could not have been inherited even by luck. Firefox launched into
-   nothing and died.
-2. **A blocking capture with a 15-second kill.** `subprocess.run(capture_output=True,
+1. **A blocking capture with a 15-second kill.** `subprocess.run(capture_output=True,
    timeout=15)` blocks until the child exits, and on timeout it *kills* the child. A GUI app
-   that did find a display would appear and then die at fifteen seconds — and for those fifteen
-   seconds the turn thread, which is also the speech thread, is deaf.
-3. **The wrong cgroup.** Anything spawned from the service lands in the service's cgroup, and
-   `KillMode=control-group` — deliberate, and the right default for that unit — kills it on the
-   next `systemctl --user restart oddball`. The app would not survive a deploy.
-4. **Silence reported as success.** Covered in `tools/os_controller.py`; the fix is `Outcome`.
+   would appear and then die at fifteen seconds — and for those fifteen seconds the turn
+   thread, which is also the speech thread, is deaf. **This is not a Linux problem.** Doing it
+   on Windows produces exactly the same fifteen-second-old corpse.
+2. **The wrong process tree.** On the Pi, anything spawned from the service landed in the
+   service's cgroup and died on the next restart. On Windows the equivalent is a child that
+   is killed when its parent exits, or one holding inherited pipe handles open. Same failure,
+   different mechanism: the app must not be OUR child in any sense that outlives this call.
+3. **Silence reported as success.** Covered in `tools/os_controller.py`; the fix is `Outcome`.
 
-## The shape of the fix: hand the process to systemd and return
+## The shape of the fix: hand the process to the operating system and return
 
-Nothing here holds a running application. `systemd-run --user` enqueues a **transient service**
-and returns in milliseconds; systemd owns the lifetime from there. So `subprocess.run` with a
-capture and a timeout stays, and is now *correct* — the thing being run is a control-plane
-command that finishes, not an app.
+Nothing here holds a running application.
 
-That means no `Popen`, no `start_new_session`, no orphan reaping, no PID tracking. The three
-hardest parts of launching a long-lived process are simply not this program's problem.
+On the Pi this took `systemd-run --user` and a transient unit, with `--property=Type=exec` to
+tell "started" from "started and instantly died", `--collect` so failures did not pile up in
+`list-units --failed`, and a careful argument about services versus scopes. All of that was
+machinery for one goal: **start it, disown it, and know whether the exec worked.**
 
-**A service, not `--scope`**, and the distinction is not cosmetic:
+Windows gives the same three properties in one call. `os.startfile(path)` is `ShellExecuteW`,
+which hands the request to Explorer. The launched process is a child of *Explorer*, not of us:
+it does not die when this process exits, it inherits none of our handles, and there is no PID
+to track or reap. It raises `OSError` when the shell cannot start the thing, which is the
+`Type=exec` guarantee — did the launch actually happen — arriving as an exception instead of
+as an exit code.
 
-  - `--scope` runs the command **synchronously** in our own context, so defect 2 would be
-    entirely unfixed.
-  - A scope is forked from *us*, so it inherits our environment wholesale — including
-    `Nice=-5`. Firefox at higher priority than the audio thread, on a four-core Pi, on the one
-    unit whose comments say audio must never be starved.
-  - `--setenv` on a service becomes `Environment=` on the unit, readable afterwards with
-    `systemctl --user show`. A scope's environment is gone the moment it starts.
+So the three hardest parts of launching a long-lived process are, again, simply not this
+program's problem. Roughly 120 lines of systemd argv construction deleted, and nothing that
+was protecting anybody went with them.
 
-**`--property=Type=exec` is the honesty guarantee**, and it was measured on the Pi rather than
-assumed, because the obvious version of the claim turned out to be wrong:
+## Why the shortcut is launched, and not the .exe it points at
 
-    case                                        Type=simple   Type=exec
-    binary missing entirely                       rc=1          rc=1
-    binary present but cannot exec                rc=0  <--     rc=1
-      (bad shebang, corrupt ELF, missing .so)
+`tools/app_catalogue.py` sets `argv[0]` to the `.lnk`, not to its target, and this is the file
+that depends on that choice.
 
-A *missing* binary is caught either way — systemd validates the `ExecStart` path when it loads
-the unit, so the widely-repeated "Type=simple returns success for a missing program" is not
-true on systemd 257. What `Type=simple` really returns success for is a program that **exists,
-is executable, and then fails to exec** — the start job completes at `fork()`, before `execve`,
-so the failure happens a millisecond after `systemd-run` has already reported rc=0. That is
-"he says he opened it and nothing appears", and it is the realistic case: a package mid-upgrade,
-a broken symlink, a missing shared library.
+A Start Menu shortcut carries more than a path: the arguments, the working directory, the
+"run as administrator" flag, and for a Store app an AppUserModelID rather than a file at all.
+Reading the target out and executing it directly throws every one of those away — which is how
+you get a program that starts with the wrong working directory, or a Store app that cannot be
+started by path because there is no path.
 
-So the two guards are complementary and both are kept: `_which()` catches *not installed*,
-`Type=exec` catches *installed but broken*.
+`os.startfile` on the `.lnk` makes Windows resolve all of it, exactly as double-clicking the
+Start Menu entry would. That is also why there is no field-code parsing here and no
+`Terminal=true` handling: `exec_argv()` has no Windows counterpart, because the shortcut
+already knows.
 
-**`--collect`** unloads the unit when it exits, so failed launches do not pile up in
-`systemctl --user list-units --failed` — the surface LB will be reading to diagnose the *next*
-problem. The journal entry survives, which is where the evidence belongs.
+## The one guard that survived the port, and the one that could not
 
-## Why the Exec line is parsed here rather than handed to `gio launch`
+`_which()` caught *not installed* — the `nautilus` case, where a desktop entry promised a
+program the machine did not have. Its Windows equivalent is `DesktopApp.target`, checked with
+`os.path.exists`, and it is kept for exactly the same reason.
 
-`gio` is installed on the Pi and `gio launch` handles field codes correctly, so it looks like
-the right primitive. It is not, for one reason: **it spawns the app and returns.** It would be
-the transient unit's main process, and when it exited systemd's default `KillMode=control-group`
-would kill the application it had just started. Exec'ing the app directly makes the *app* the
-main process, which is what makes `Type=exec`, the cgroup, and `systemctl --user stop
-oddball-app-firefox-…` each mean the thing they appear to mean.
-
-(`gtk-launch` is not installed on this Pi at all, so it was never an option.)
+**It cannot always run.** 14 of the 41 applications in this machine's catalogue are
+shell-namespace links
+whose target is an IDList rather than a path, so `target` is `""` and there is nothing to
+check. Those still launch correctly — `ShellExecuteW` resolves an IDList fine. Refusing to
+launch them because we could not read a path would break every Control Panel entry on the box,
+so the check is SKIPPED rather than failed, and `Outcome.detail` says which of the two
+happened. A guard that cannot run must say so; a guard that silently passes is worse than none.
 
 ## What he may claim
 
-`Type=exec` proves `execve` succeeded. It does **not** prove a window was mapped — that would
-need a compositor query. So the sentence is "Opening Firefox now", a claim about what he did,
-and never "Firefox is open", a claim about a screen he cannot see.
+`os.startfile` returning proves the shell accepted the request. It does **not** prove a window
+was mapped — that would need a compositor query on the Pi and an `EnumWindows` poll here. So
+the sentence stays "Opening Firefox now", a claim about what he did, and never "Firefox is
+open", a claim about a screen he cannot see.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import re
-import shutil
-import subprocess
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -111,182 +104,143 @@ from tools.os_controller import Outcome                                # noqa: E
 
 LOG = logging.getLogger("oddball.launcher")
 
-__all__ = ["Display", "find_display", "systemd_run_argv", "launch", "launch_app",
-           "PINNED_PATH", "TIMEOUT_S"]
+__all__ = ["Display", "find_display", "launch", "launch_app", "start", "TIMEOUT_S"]
 
-# Never the inherited PATH. `~/oddball/hardware/apps.py` set this rule and it is kept: a launch
-# must not be steerable by whatever happens to be on PATH when the service starts.
-PINNED_PATH = "/usr/local/bin:/usr/bin:/bin"
-
-# systemd-run returns as soon as the start job completes. On this Pi that is ~150ms; ten seconds
-# is a generous ceiling that still cannot make the voice loop feel hung.
+# Kept only because `agents/os_agent.py` and the harnesses import it. Nothing here blocks on a
+# child any more — `os.startfile` returns as soon as the shell has accepted the request — so
+# there is no operation left for a timeout to bound. It is a constant with no remaining reader
+# rather than a lie about a wait that happens.
 TIMEOUT_S = 10
 
-# Terminal emulators, in preference order, for entries with `Terminal=true` (htop, vim). Only
-# `lxterminal` is installed on this Pi — the others are here so the row does not have to be
-# edited on a machine that ships something else.
-TERMINALS = ("lxterminal", "x-terminal-emulator", "foot", "xfce4-terminal", "gnome-terminal")
+# --- injection seam -------------------------------------------------------------------------
+# The one module-level name a harness rebinds. Everything that reaches the operating system
+# goes through it, which is what lets `tools/verify_launch.py` prove the launch without opening
+# a window — the same trick `os_controller.refuse()` uses to test a blocklist without running
+# anything.
+#
+# On the Pi these were `_run` and `_which`. They are `_start` and `_exists` now — still two,
+# because there are still exactly two questions this module asks the operating system: "is
+# that program really there?" and "start this". What went away is the argv between them.
+_start = getattr(os, "startfile", None)
 
-# Unit names may hold alphanumerics and `:-_.\`. Desktop ids like `org.thonny.Thonny` are already
-# legal; this exists so a hand-written id or a future entry cannot produce an invalid unit.
-_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
-
-# --- injection seams ---------------------------------------------------------------------
-# The two module-level names a harness rebinds. Everything that touches the operating system
-# goes through one of them, which is what lets `tools/verify_launch.py` prove the argv without
-# starting a process — the same trick `refuse()` uses to test a blocklist without running it.
-_run = subprocess.run
-_which = shutil.which
+# The second seam, and it is a genuine second touchpoint rather than a testing convenience:
+# "does this file exist" is a question about the machine, asked at launch time, and it is the
+# whole of guard 2. It was `shutil.which` on the Pi and it is `os.path.exists` here, for the
+# same reason and with the same seam around it.
+_exists = os.path.exists
 
 
 @dataclass(frozen=True)
 class Display:
-    """Where the screen is, as of right now.
+    """Whether there is a screen to open something on, as of right now.
+
+    A much smaller thing than it was. On the Pi this held `XDG_RUNTIME_DIR`, the Wayland socket
+    name, the D-Bus address and every socket found, because the socket name changed whenever
+    the compositor restarted and a value baked into a config file was right until the first
+    session restart and silently wrong forever after.
+
+    Windows has no such moving part: a logged-in interactive session has a desktop, and
+    `GetSystemMetrics(SM_CMONITORS)` counts the monitors attached to it.
+
+    **The `no-display` outcome is kept even so**, and not out of sentiment. It is reachable
+    here: a Remote Desktop session that has been disconnected rather than logged off still runs
+    processes and has no console to draw on, and that is precisely when he would announce
+    "Opening Firefox now" about a window nobody will ever see.
 
     Args:
-        runtime_dir: `XDG_RUNTIME_DIR`. The Wayland socket path is relative to it.
-        wayland:     the socket name ("wayland-0"), or "" if none was found.
-        dbus:        `DBUS_SESSION_BUS_ADDRESS`, or "" if absent. Never invented.
-        home:        the user's home directory.
-        seen:        every socket found, for the card. Absence is evidence too.
+        monitors: how many display monitors the session has. 0 means nothing to draw on.
+        detail:   what was looked at, for the card.
     """
 
-    runtime_dir: str
-    wayland: str = ""
-    dbus: str = ""
-    home: str = ""
-    seen: tuple[str, ...] = ()
+    monitors: int = 0
+    detail: str = ""
 
     @property
     def usable(self) -> bool:
-        return bool(self.wayland)
+        return self.monitors > 0
 
     def describe(self) -> str:
-        """What he looked at, for the card. This is the difference between a report and an
-        apology — "I couldn't find the screen" with no detail is not diagnosable."""
-        found = ", ".join(self.seen) if self.seen else "(none)"
-        return (f"XDG_RUNTIME_DIR = {self.runtime_dir}\n"
-                f"wayland sockets = {found}\n"
-                f"DBUS_SESSION_BUS_ADDRESS = {self.dbus or '(unset)'}")
+        """What he looked at, for the card. The difference between a report and an apology —
+        "I couldn't find the screen" with no detail is not diagnosable."""
+        return self.detail or f"monitors = {self.monitors}"
 
 
 def find_display(environ: dict | None = None) -> Display:
-    """Find the compositor socket, at launch time.
+    """Is there a screen, at launch time?
 
-    Discovery, not configuration, and the reason is the same one that makes `wake.device
-    = "C270"` better than a card index: **the socket name changes when the compositor
-    restarts.** labwc picks `wayland-1` after a session restart, so a value baked into
-    `oddball.service` or `oddball.toml` is right until the first time LB restarts the desktop
-    and then silently wrong forever — presenting as "he stopped being able to open anything."
-
-    Putting it in the unit is wrong for a second reason: the unit starts before labwc exists,
-    and its own comments say it deliberately has nothing to do with the screen.
+    Discovery rather than configuration, which is the one principle that carried over intact
+    from the Wayland version: the answer can change while he is running (a monitor is unplugged,
+    an RDP session disconnects), so it is asked at the moment it is needed and never cached.
 
     Args:
-        environ: the environment to read. Defaults to `os.environ`; the harness passes a dict.
+        environ: accepted and ignored on Windows; the Pi read the compositor socket out of it.
+                 Kept in the signature because `launch()` passes it and the harness pins it.
 
     Returns:
-        A `Display`. Never raises. `usable` is False when no socket was found, and the caller
-        must then refuse — launching into a missing display kills the app instantly with an
-        error nobody sees, which is indistinguishable from doing nothing.
+        A `Display`. Never raises. `usable` is False when there is nothing to draw on, and the
+        caller must then refuse — launching into a session with no desktop starts a process
+        nobody can see, which is indistinguishable from doing nothing.
     """
-    env = dict(os.environ if environ is None else environ)
+    if sys.platform != "win32":                                        # pragma: no cover
+        # The Pi's path is gone. Say so honestly rather than returning a plausible answer.
+        return Display(monitors=0, detail=f"no display detection for {sys.platform}")
 
-    # Windows has no getuid. D7 requires every harness to run on the authoring box.
-    uid = getattr(os, "getuid", lambda: 1000)()
-    runtime = env.get("XDG_RUNTIME_DIR") or f"/run/user/{uid}"
-    home = env.get("HOME") or str(Path.home())
+    try:
+        import ctypes
 
-    seen: tuple[str, ...] = ()
-    wayland = env.get("WAYLAND_DISPLAY", "")
-    if not wayland:
-        try:
-            seen = tuple(sorted(p.name for p in Path(runtime).glob("wayland-[0-9]")))
-        except OSError:
-            seen = ()
-        # Lowest-numbered socket, matching `tools/measure_face.py`. More than one means more
-        # than one compositor; the card lists them all so a wrong pick is visible.
-        wayland = seen[0] if seen else ""
+        SM_CMONITORS = 80
+        SM_REMOTESESSION = 0x1000
+        user32 = ctypes.windll.user32
+        monitors = int(user32.GetSystemMetrics(SM_CMONITORS))
+        remote = bool(user32.GetSystemMetrics(SM_REMOTESESSION))
+    except Exception as exc:                                           # noqa: BLE001
+        # A failure to ASK is not a failure to have a screen. Assume one monitor and say what
+        # went wrong: refusing every launch because a ctypes call misbehaved would be a much
+        # worse bug than the one this function exists to prevent.
+        LOG.warning("could not count monitors (%s) — assuming a display is present", exc)
+        return Display(monitors=1, detail=f"monitor count unavailable ({exc}); assumed present")
 
-    return Display(runtime_dir=runtime, wayland=wayland,
-                   dbus=env.get("DBUS_SESSION_BUS_ADDRESS", ""), home=home, seen=seen)
+    detail = f"monitors = {monitors}"
+    if remote:
+        detail += "\nsession = Remote Desktop"
+    return Display(monitors=monitors, detail=detail)
 
 
-def systemd_run_argv(unit: str, program: str, args: tuple[str, ...],
-                     display: Display, description: str) -> list[str]:
-    """The transient-unit argv. A pure function: it builds a list and runs nothing.
+def start(path: str) -> None:
+    """Hand `path` to the shell. The entire operating-system surface of this module.
 
-    Built element by element and never as a string. There is no shell anywhere on this path,
-    so an application name cannot become shell syntax no matter what the model wrote.
+    Wrapped in a function of its own so that the injection seam has exactly one call site and
+    the harness has exactly one thing to replace. `os.startfile` exists only on Windows, so the
+    attribute is looked up rather than called directly — importing this module on the Pi must
+    not fail, because `tools/verify_launch.py` runs there too.
 
-    Args:
-        unit:        the transient unit name, without `.service`.
-        program:     absolute path to the binary, already resolved on `PINNED_PATH`.
-        args:        the rest of the argv from the desktop entry.
-        display:     from `find_display()`. Must be `usable`.
-        description: what shows in `systemctl --user show`.
-
-    Returns:
-        The argv for `subprocess.run`.
+    Raises:
+        OSError: the shell could not start it. This is the honesty guarantee — the equivalent
+                 of `Type=exec` on the Pi, which was what distinguished "started" from
+                 "started and instantly died".
+        RuntimeError: this platform has no `os.startfile`.
     """
-    argv = [
-        "systemd-run",
-        "--user",
-        "--quiet",
-        "--collect",
-        f"--unit={unit}",
-        f"--description={description}",
-        "--property=Type=exec",
-        # THE fix. Without this line the app has no compositor to connect to and dies silently.
-        f"--setenv=WAYLAND_DISPLAY={display.wayland}",
-        f"--setenv=XDG_RUNTIME_DIR={display.runtime_dir}",
-        # Several toolkits branch on this; without it a client can guess X11, find no DISPLAY
-        # and exit. Cheap, and it removes a whole class of "it works for some apps".
-        "--setenv=XDG_SESSION_TYPE=wayland",
-        f"--setenv=PATH={PINNED_PATH}",
-        f"--setenv=HOME={display.home}",
-        f"--working-directory={display.home}",
-    ]
-    # Only if it is really there. Inventing a bus address gets a confusing failure deep inside
-    # GTK rather than an honest one here.
-    if display.dbus:
-        argv.append(f"--setenv=DBUS_SESSION_BUS_ADDRESS={display.dbus}")
-
-    # DISPLAY is deliberately NOT set. Setting it invites a Wayland-capable app onto Xwayland,
-    # which on this Pi means worse fractional scaling and a separate clipboard. GDK_BACKEND is
-    # never set either — forcing it breaks apps that only ship an X11 build.
-
-    argv.append("--")
-    argv.append(program)
-    argv.extend(args)
-    return argv
-
-
-def _unit_name(entry_id: str, now: str | None = None) -> str:
-    """A transient unit name for this launch.
-
-    Timestamped so two launches of the same app do not collide. Passed in rather than read from
-    the clock so the harness can pin it.
-    """
-    stamp = now or time.strftime("%Y%m%d-%H%M%S")
-    return f"oddball-app-{_UNSAFE.sub('-', entry_id)}-{stamp}"
+    if _start is None:                                                 # pragma: no cover
+        raise RuntimeError(f"os.startfile is Windows-only and this is {sys.platform}")
+    _start(path)
 
 
 def launch(name: str, environ: dict | None = None, now: str | None = None) -> Outcome:
     """Open the application LB asked for.
 
-    Four things are checked before anything is run, because every one of them is a way to say
-    "Done" about a window that never appeared:
+    Four things are checked before anything is started, because every one of them is a way to
+    say "Done" about a window that never appeared:
 
-        1. the catalogue knows the name        -> unknown-app / ambiguous
-        2. the binary exists on the pinned PATH -> not-installed
-        3. a compositor socket exists           -> no-display
-        4. systemd-run reports a good execve    -> launch-failed
+        1. the catalogue knows the name          -> unknown-app / ambiguous
+        2. the shortcut's target exists          -> not-installed   (skipped when unreadable)
+        3. there is a screen to open it on       -> no-display
+        4. the shell accepted the request        -> launch-failed
 
     Args:
         name:    the application, as the model named it ("firefox", "the browser").
         environ: passed to `find_display()`. Defaults to the real environment.
-        now:     timestamp for the unit name. Defaults to the clock.
+        now:     accepted and ignored. The Pi used it to timestamp a transient unit name; there
+                 are no unit names now. Kept so existing callers and harnesses do not change.
 
     Returns:
         An `Outcome`. `kind="launched"` is the only success. Never raises.
@@ -309,74 +263,53 @@ def launch(name: str, environ: dict | None = None, now: str | None = None) -> Ou
 
     app = match.app
 
-    # `shutil.which` handles both shapes an Exec line produces: a bare name is searched along
-    # PINNED_PATH, and an absolute path is access-checked directly (it ignores `path=` when the
-    # argument has a directory part). An earlier version added an `os.path.exists` fallback for
-    # the absolute case — dead code, since which() already did it, and it quietly bypassed the
-    # injection seam so the harness went green on Windows and red on the Pi.
-    program = _which(app.argv[0], path=PINNED_PATH)
-    if program is None:
-        # This is the `nautilus` case, caught rather than spoken as success. The desktop entry
-        # exists and promises a program the machine does not have.
-        return Outcome(ok=False, kind="not-installed", subject=app.name,
-                       detail=f"{app.path} runs {app.argv[0]!r}, "
-                              f"which is not on {PINNED_PATH}")
-
-    args = app.argv[1:]
-    if app.terminal:
-        # `Terminal=true` entries are console programs and need an emulator wrapped round them.
-        term = next((t for t in TERMINALS if _which(t, path=PINNED_PATH)), None)
-        if term is None:
+    # GUARD 2. The `nautilus` case: the entry exists and promises a program the machine does
+    # not have. `target` is "" for a shell-namespace shortcut, and then there is nothing to
+    # check — see the module docstring. Skipped, never silently passed.
+    checked = "not checked (this shortcut names no local path)"
+    if app.target:
+        if not _exists(app.target):
             return Outcome(ok=False, kind="not-installed", subject=app.name,
-                           detail=f"{app.name} needs a terminal window and none of "
-                                  f"{', '.join(TERMINALS)} is installed")
-        args = ("-e", program, *args)
-        program = _which(term, path=PINNED_PATH)
+                           detail=f"{app.path}\npoints at {app.target!r}, "
+                                  f"which is not on this machine")
+        checked = f"target verified: {app.target}"
 
+    # GUARD 3.
     display = find_display(environ)
     if not display.usable:
-        # Nothing is run. Launching into a missing display kills the app instantly with an error
-        # nobody sees, which is the exact symptom this whole change exists to remove.
-        LOG.warning("no wayland socket; refusing to launch %s", app.entry_id)
+        # Nothing is started. Launching into a session with no desktop starts a process nobody
+        # can see, which is the exact symptom this whole module exists to remove.
+        LOG.warning("no display; refusing to launch %s", app.entry_id)
         return Outcome(ok=False, kind="no-display", subject=app.name, detail=display.describe())
 
-    unit = _unit_name(app.entry_id, now)
-    argv = systemd_run_argv(unit, program, args, display,
-                            description=f"Mr Odd Ball opened {app.name}")
-
+    # GUARD 4. The shortcut, not its target — see the module docstring.
+    target = app.argv[0] if app.argv else app.path
     try:
-        result = _run(argv, capture_output=True, text=True, timeout=TIMEOUT_S)
-    except subprocess.TimeoutExpired:
+        start(target)
+    except OSError as exc:
         return Outcome(ok=False, kind="launch-failed", subject=app.name,
-                       detail=f"systemd-run did not return within {TIMEOUT_S} seconds")
-    except Exception as e:                                             # noqa: BLE001
-        return Outcome(ok=False, kind="launch-failed", subject=app.name, detail=str(e))
+                       detail=f"the shell refused to start\n  {target}\n\n{exc}")
+    except Exception as exc:                                           # noqa: BLE001
+        return Outcome(ok=False, kind="launch-failed", subject=app.name, detail=str(exc))
 
-    if result.returncode != 0:
-        return Outcome(ok=False, kind="launch-failed", subject=app.name,
-                       detail=f"{(result.stderr or '').strip()}\n\n"
-                              f"unit: {unit}\njournalctl --user -u {unit}")
-
-    LOG.info("launched %s as %s", app.entry_id, unit)
+    LOG.info("launched %s via %s", app.entry_id, target)
     return Outcome(ok=True, kind="launched", subject=app.name,
-                   detail=f"{' '.join(argv)}\n\nunit: {unit}\njournalctl --user -u {unit}")
+                   detail=f"{target}\n\n{checked}\n{display.describe()}")
 
 
 @tool
 def launch_app(app: str) -> str:
     """
-    Opens a desktop application on the Raspberry Pi's SCREEN and leaves it running.
+    Opens a desktop application on this PC's SCREEN and leaves it running.
 
     Use this for any request to open, start, launch, bring up or run a graphical program — a
     browser, an editor, a file manager, a media player. Pass the application's NAME, not a
-    command: launch_app(app="firefox").
+    path or a command: launch_app(app="firefox").
     """
     return launch(app).text
 
 
 def main(argv: list[str] | None = None) -> int:
-    import sys
-
     args = argv if argv is not None else sys.argv[1:]
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 

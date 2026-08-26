@@ -37,6 +37,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# These ledgers are written from `Engine.ask` and `agents/os_agent.py`, so this harness writes
+# to them the moment it drives a failure — even though it was written before they existed and
+# does not mention them. Redirected to a temp directory BEFORE anything under `tools/` is
+# imported, because both read their location at import time. tasks/lessons.md L22.
+import os                                                             # noqa: E402
+import tempfile                                                       # noqa: E402
+
+os.environ.setdefault("ODDBALL_VAULT_DIR",
+                      tempfile.mkdtemp(prefix="oddball-harness-vault-"))
+
+
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
@@ -50,7 +61,7 @@ os.environ.setdefault("GOOGLE_API_KEY", "harness-not-a-real-key")
 import tools.app_catalogue as cat                                     # noqa: E402
 import tools.app_launcher as launcher                                 # noqa: E402
 import orchestrator.launch_intent as launch_intent_mod                # noqa: E402
-from tools.app_catalogue import exec_argv, load_catalogue, parse_entry, resolve   # noqa: E402
+from tools.app_catalogue import load_catalogue, resolve             # noqa: E402
 from tools.os_controller import KINDS, Outcome                        # noqa: E402
 from engine.split import is_speakable                                 # noqa: E402
 from agents.os_agent import _SPEECH, _speech_for                      # noqa: E402
@@ -108,121 +119,147 @@ def fake_which(installed: set[str]):
 
 # --- fixtures ----------------------------------------------------------------------------
 # Mirrors of real entries from the Pi, including the two awkward ones: a reverse-DNS id
-# (org.thonny.Thonny) and a Terminal=true console program (htop).
+# The fixture Start Menu.
+#
+# This was twelve `.desktop` entries until 2026-08-26. It is now a shortcut tree, because
+# `tools/app_catalogue.py` reads the Start Menu and the XDG reader was deleted — but the
+# SHAPE is deliberately preserved entry for entry, so that section 2's resolution tests are
+# the same tests they were. Two browsers, so "the browser" is still ambiguous. A reverse-DNS
+# name. A program in a vendor subfolder, standing in for the reverse-DNS id that used to
+# prove nesting. An uninstaller and an excluded folder, which are this platform's version of
+# `NoDisplay=true` and `pishutdown`.
+#
+# Synthesized, never copied from the real Start Menu: a harness that depends on what happens
+# to be installed on the box running it tests the box.
+_tmp = tempfile.TemporaryDirectory()
+FIXTURE_DIR = Path(_tmp.name) / "Programs"
+FIXTURE_DIR.mkdir(parents=True)
 
-ENTRIES = {
-    "firefox": """[Desktop Entry]
-Type=Application
-Name=Firefox
-Exec=/usr/bin/firefox %u
-Categories=Network;WebBrowser;
-""",
-    "chromium": """[Desktop Entry]
-Type=Application
-Name=Chromium Web Browser
-Exec=chromium %U
-Categories=Network;WebBrowser;
-""",
-    "org.thonny.Thonny": """[Desktop Entry]
-Type=Application
-Name=Thonny
-Exec=thonny %F
-Categories=Development;IDE;
-""",
-    "pcmanfm": """[Desktop Entry]
-Type=Application
-Name=PCMan File Manager
-Exec=pcmanfm %U
-Categories=System;FileTools;FileManager;
-""",
-    "galculator": """[Desktop Entry]
-Type=Application
-Name=Galculator
-Exec=galculator --icon %i
-Categories=Utility;Calculator;
-""",
-    "htop": """[Desktop Entry]
-Type=Application
-Name=Htop
-Exec=htop
-Terminal=true
-Categories=System;Monitor;
-""",
-    # Must be EXCLUDED: NoDisplay
-    "xdg-desktop-portal-gtk": """[Desktop Entry]
-Type=Application
-Name=Portal
-Exec=/usr/libexec/xdg-desktop-portal-gtk
-NoDisplay=true
-""",
-    # Must be EXCLUDED: ends the session
-    "pishutdown": """[Desktop Entry]
-Type=Application
-Name=Logout
-Exec=pishutdown
-Categories=System;
-""",
-    # Must be EXCLUDED: Hidden
-    "oldthing": """[Desktop Entry]
-Type=Application
-Name=Old Thing
-Exec=oldthing
-Hidden=true
-""",
-    # Must be EXCLUDED: not an application
-    "somelink": """[Desktop Entry]
-Type=Link
-Name=A Link
-URL=https://example.com
-""",
-    # Must be EXCLUDED: unparseable Exec (unbalanced quote), and must not take the rest with it
-    "broken": """[Desktop Entry]
-Type=Application
-Name=Broken
-Exec="unclosed quote
-""",
-    # A second group must NOT be read — its Exec is an action, not the program.
-    "vlc": """[Desktop Entry]
-Type=Application
-Name=VLC media player
-Exec=/usr/bin/vlc --started-from-file %U
-Categories=AudioVideo;Player;
-
-[Desktop Action Fullscreen]
-Name=Fullscreen
-Exec=/usr/bin/vlc --fullscreen
-""",
+# (relative path under Programs, target) — the folder is the category, the stem is the name.
+SHORTCUTS = {
+    "Firefox":                          r"C:\Program Files\Mozilla Firefox\firefox.exe",
+    # Named in full, so that "browser" is ambiguous by NAME. On the Pi both browsers
+    # carried `Categories=WebBrowser` and the role tier made them ambiguous; the
+    # fixture tree has no registry behind it, so the ambiguity has to arrive the way
+    # it really would on this platform — through the names themselves.
+    "Chromium Web Browser":             r"C:\Program Files\Chromium\chrome.exe",
+    "Waterfox Web Browser":             r"C:\Program Files\Waterfox\waterfox.exe",
+    "Thonny":                           r"C:\Program Files\Thonny\thonny.exe",
+    "PCMan File Manager":               r"C:\Program Files\PCManFM\pcmanfm.exe",
+    "Galculator":                       r"C:\Program Files\Galculator\galculator.exe",
+    "Htop":                             r"C:\Program Files\Htop\htop.exe",
+    "VLC media player":                 r"C:\Program Files\VideoLAN\VLC\vlc.exe",
+    # Nested in a vendor folder, so the folder-as-category path is exercised.
+    "Autodesk/Autodesk Fusion":         r"C:\Users\lb\AppData\Local\Autodesk\fusion.exe",
+    # --- and the ones that must NOT become applications ---
+    "Uninstall":                        r"C:\Program Files\Thing\uninstall.exe",
+    "Uninstall Thonny":                 r"C:\Windows\SysWOW64\msiexec.exe",
+    "Administrative Tools/Disk Cleanup": r"C:\Windows\System32\cleanmgr.exe",
+    "Administrative Tools/Event Viewer": r"C:\Windows\System32\eventvwr.exe",
 }
 
-_tmp = tempfile.TemporaryDirectory()
-FIXTURE_DIR = Path(_tmp.name) / "applications"
-FIXTURE_DIR.mkdir(parents=True)
-for _stem, _body in ENTRIES.items():
-    (FIXTURE_DIR / f"{_stem}.desktop").write_text(_body, encoding="utf-8")
-
-CATALOGUE = load_catalogue((FIXTURE_DIR,))
-BY_NAME = {a.name: a for a in CATALOGUE}
-
-# A display that exists, and one that does not.
-LIVE = {"XDG_RUNTIME_DIR": "/run/user/1000", "WAYLAND_DISPLAY": "wayland-0",
-        "HOME": "/home/ironi", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"}
-DARK = {"XDG_RUNTIME_DIR": str(Path(_tmp.name) / "empty-runtime"), "HOME": "/home/ironi"}
-Path(DARK["XDG_RUNTIME_DIR"]).mkdir(parents=True, exist_ok=True)
-
-INSTALLED = {"firefox", "chromium", "thonny", "pcmanfm", "galculator", "htop", "lxterminal"}
+# `_make_lnk` is defined further down, beside the section that first needed it. Fixtures are
+# built lazily at first use rather than at import for that reason alone.
+def _build_fixture_tree() -> tuple:
+    for rel, target in SHORTCUTS.items():
+        path = FIXTURE_DIR / f"{rel}.lnk"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _make_lnk(path, target)
+    return _cat_mod.load_start_menu((FIXTURE_DIR,))
 
 
-def run_launch(name, *, installed=None, environ=None, rc=0, stderr=""):
-    """Drive the real `launch()` with both seams faked. Returns (Outcome, FakeRunner)."""
-    runner = FakeRunner(returncode=rc, stderr=stderr)
-    real_run, real_which, real_load = launcher._run, launcher._which, cat.load_catalogue
-    launcher._run = runner
-    launcher._which = fake_which(INSTALLED if installed is None else installed)
-    cat.load_catalogue = lambda dirs=None: CATALOGUE
+import tools.app_catalogue as _cat_mod                               # noqa: E402
+
+# A few probes below resolve a REAL application name against the REAL catalogue, to prove the
+# guards fire on this machine and not only on fixtures. They are skipped where there is
+# nothing installed to resolve, so the harness stays honest on a bare box rather than
+# reporting a pass it did not earn.
+_HAS_REAL_CATALOGUE = len(_cat_mod.load_catalogue()) > 0
+
+# Filled in by `build()`, once `_make_lnk` is defined.
+CATALOGUE: tuple = ()
+BY_NAME: dict = {}
+
+# `find_display` reads no environment on Windows — it counts monitors — so LIVE is now just
+# "whatever the real environment is" and the no-display case is produced by faking
+# `find_display` itself. See `run_launch(dark=True)`.
+LIVE: dict = {}
+
+# The programs whose target should EXIST. Everything else in the fixture tree gets a target
+# that does not, which is the `nautilus` case: an entry promising a program the machine lacks.
+INSTALLED = {"firefox.exe", "chrome.exe", "waterfox.exe", "thonny.exe", "pcmanfm.exe",
+             "galculator.exe", "htop.exe", "vlc.exe", "fusion.exe"}
+
+# Something guaranteed to exist for `with_targets` to point "installed" rows at. This
+# file: it is on disk by definition, on every platform, and outlives every temp dir.
+_REAL_FILE = Path(__file__).resolve()
+
+
+class FakeShell:
+    """Records what was handed to the shell, and starts nothing.
+
+    The replacement for `FakeRunner`. That class faked `subprocess.run` and carried a
+    returncode and a stderr, because the Pi asked systemd to launch things and read an exit
+    code back. `os.startfile` has no exit code — it returns, or it raises — so failure is
+    modelled the way the real thing signals it.
+    """
+
+    def __init__(self, error: Exception | None = None):
+        self.started: list[str] = []
+        self.error = error
+
+    def __call__(self, path):
+        self.started.append(str(path))
+        if self.error is not None:
+            raise self.error
+
+    @property
+    def ran(self) -> bool:
+        return bool(self.started)
+
+
+def with_targets(catalogue, installed):
+    """Give each fixture row a `target`, so guard 2 has something to check.
+
+    The XDG fixtures are `.desktop` rows and `parse_entry` leaves `target` empty — correct on
+    the Pi, where `argv[0]` already IS the program. Guard 2 on Windows reads `target`, so
+    without this every fixture would skip the check and `INSTALLED` would mean nothing: the
+    harness would report a passing not-installed test that could never fail.
+
+    `installed` names the apps whose target should exist. Everything else gets a target that
+    does not, which is the `nautilus` case.
+    """
+    out = []
+    for a in catalogue:
+        program = Path(a.target).name if a.target else a.name
+        target = str(_REAL_FILE) if program in installed else "C:\\nowhere\\%s" % program
+        out.append(cat.DesktopApp(a.entry_id, a.name, a.argv, a.path, a.terminal,
+                                  a.categories, target))
+    return tuple(out)
+
+
+def run_launch(name, *, installed=None, environ=None, error=None, dark=False):
+    """Drive the real `launch()` with every seam faked. Returns (Outcome, FakeShell).
+
+    `dark` replaces the old `environ=DARK`. On the Pi "no display" was expressible as an
+    environment with no Wayland socket in it, so the harness could produce it by passing a
+    dict. Windows counts monitors through `GetSystemMetrics`, which no environment can lie
+    about — so the seam is `find_display` itself.
+    """
+    shell = FakeShell(error=error)
+    real_start, real_load = launcher._start, cat.load_catalogue
+    real_find = launcher.find_display
+    fixture = with_targets(CATALOGUE, INSTALLED if installed is None else installed)
+    launcher._start = shell
+    cat.load_catalogue = lambda dirs=None: fixture
+    if dark:
+        launcher.find_display = lambda environ=None: launcher.Display(
+            monitors=0, detail="monitors = 0\nsession = Remote Desktop")
     try:
-        return launch_result(name, environ), runner
+        return launch_result(name, environ), shell
     finally:
-        launcher._run, launcher._which = real_run, real_which
+        launcher._start = real_start
+        launcher.find_display = real_find
         cat.load_catalogue = real_load
 
 
@@ -235,49 +272,67 @@ def launch_result(name, environ):
 def s1_catalogue() -> None:
     section("1. the catalogue is the machine's list, read correctly")
 
-    check(exec_argv("/usr/bin/firefox %u") == ("/usr/bin/firefox",),
-          "%u is stripped from an Exec line")
-    check(exec_argv("thonny %F") == ("thonny",), "so is %F")
-    check(exec_argv("galculator --icon %i") == ("galculator", "--icon"),
-          "and %i, which expands to TWO arguments and would otherwise arrive as a filename")
-    check(exec_argv("foo %%f bar") == ("foo", "%f", "bar"),
-          "%% is a literal percent and survives — stripped AFTER the codes, never before")
-    check(exec_argv('"/opt/My App/run" %f') == ("/opt/My App/run",),
-          "shlex.split runs FIRST, so a quoted path with a space stays one argument")
-    check(exec_argv('"unclosed') == (), "an unbalanced quote is a refusal, not a guess")
-    check(exec_argv("") == (), "an empty Exec yields no argv")
+    # This section tested `exec_argv()` — the XDG field-code stripper — until 2026-08-26.
+    # Seven checks about `%u`, `%F`, `%i`, `%%` and shlex quoting, all deleted with the reader.
+    #
+    # **Windows needs none of it, and that is the interesting part rather than a loss.** A
+    # `.lnk` already holds its arguments, working directory and elevation flag as structured
+    # fields, so there is no command LINE to parse and no way for a quoted path with a space
+    # in it to become two arguments. The entire class of bug those seven checks guarded
+    # against does not exist on this platform. What replaces them is the check that the
+    # shortcut is read at all, and that the things which must not be applications are not.
 
-    check("Firefox" in BY_NAME, "Firefox is in the catalogue")
+    check("Firefox" in BY_NAME, "Firefox is in the catalogue", ", ".join(sorted(BY_NAME)))
     check("VLC media player" in BY_NAME, "so is VLC")
-    check(BY_NAME["VLC media player"].argv == ("/usr/bin/vlc", "--started-from-file"),
-          "and only its [Desktop Entry] group was read — the Fullscreen ACTION is not the program",
-          str(BY_NAME["VLC media player"].argv))
+    check("Autodesk Fusion" in BY_NAME, "and one nested in a vendor folder")
 
-    for hidden in ("Portal", "Old Thing", "A Link", "Broken"):
-        check(hidden not in BY_NAME, f"{hidden!r} is excluded from the catalogue")
-    check("Logout" not in BY_NAME,
-          "and so is Logout — it ends the session, which is not a launch")
-    check(len(CATALOGUE) == 7,
-          "7 of 12 fixture entries are real applications", f"got {len(CATALOGUE)}")
+    check(BY_NAME["Firefox"].target.endswith("firefox.exe"),
+          "the shortcut's TARGET is read out of the .lnk binary, with no dependency",
+          BY_NAME["Firefox"].target)
+    check(BY_NAME["Firefox"].argv[0].endswith(".lnk"),
+          "but argv[0] is the SHORTCUT — os.startfile resolves the rest",
+          BY_NAME["Firefox"].argv[0])
 
-    check(BY_NAME["Htop"].terminal is True, "Terminal=true is carried")
-    check(BY_NAME["Firefox"].terminal is False, "and defaults to False")
-    check(BY_NAME["Thonny"].entry_id == "org.thonny.Thonny",
-          "a reverse-DNS desktop id survives intact")
+    # The Windows equivalents of NoDisplay=true and pishutdown.
+    for excluded in ("Uninstall", "Uninstall Thonny", "Disk Cleanup", "Event Viewer"):
+        check(excluded not in BY_NAME, f"{excluded!r} is excluded from the catalogue")
+    check(len(CATALOGUE) == 9,
+          "9 of 13 fixture shortcuts are real applications", f"got {len(CATALOGUE)}")
 
-    # A user entry must shadow a system one with the same id.
-    user_dir = Path(_tmp.name) / "user-applications"
+    check(BY_NAME["Htop"].terminal is False,
+          "Terminal is always False — a .lnk carries its own console decision, so the "
+          "terminal-emulator wrapping the Pi needed has no counterpart")
+    check("autodesk" in BY_NAME["Autodesk Fusion"].categories,
+          "the containing folder becomes a category, as Categories= did on the Pi",
+          str(BY_NAME["Autodesk Fusion"].categories))
+
+    # A per-user shortcut must shadow a machine-wide one of the same name.
+    user_dir = Path(_tmp.name) / "user-Programs"
     user_dir.mkdir(exist_ok=True)
-    (user_dir / "firefox.desktop").write_text(
-        "[Desktop Entry]\nType=Application\nName=Firefox ESR\nExec=/opt/firefox-esr/firefox\n",
-        encoding="utf-8")
-    shadowed = load_catalogue((user_dir, FIXTURE_DIR))
-    check(any(a.name == "Firefox ESR" for a in shadowed)
-          and not any(a.name == "Firefox" for a in shadowed),
-          "a user entry shadows the system one with the same id, per the XDG spec")
+    _make_lnk(user_dir / "Firefox.lnk", r"C:\Users\lb\AppData\Local\Firefox\firefox.exe")
+    shadowed = {a.name: a for a in _cat_mod.load_start_menu((user_dir, FIXTURE_DIR))}
+    check(shadowed["Firefox"].target.startswith(r"C:\Users"),
+          "a per-user shortcut shadows the machine-wide one of the same name",
+          shadowed["Firefox"].target)
+    check(len([a for a in shadowed.values() if a.name == "Firefox"]) == 1,
+          "and there is exactly one Firefox, not two")
 
-    check(load_catalogue((Path(_tmp.name) / "nope",)) == (),
+    check(_cat_mod.load_start_menu((Path(_tmp.name) / "nope",)) == (),
           "a missing directory is an empty catalogue, not a crash")
+
+    # A malformed shortcut costs its own row and nothing else.
+    (FIXTURE_DIR / "Corrupt.lnk").write_bytes(b"this is not a shortcut")
+    try:
+        after = _cat_mod.load_start_menu((FIXTURE_DIR,))
+        check(len(after) == len(CATALOGUE) + 1,
+              "an unreadable .lnk is still listed — os.startfile can resolve an IDList "
+              "even where the target cannot be parsed", f"{len(after)} rows")
+        corrupt = next(a for a in after if a.name == "Corrupt")
+        check(corrupt.target == "",
+              "...with an empty target, so the launcher SKIPS the existence check "
+              "rather than refusing")
+    finally:
+        (FIXTURE_DIR / "Corrupt.lnk").unlink(missing_ok=True)
 
 
 def s2_resolution() -> None:
@@ -285,7 +340,8 @@ def s2_resolution() -> None:
 
     check(resolve("firefox", CATALOGUE).app is BY_NAME["Firefox"], "by desktop id")
     check(resolve("Firefox", CATALOGUE).app is BY_NAME["Firefox"], "by name, case-insensitively")
-    check(resolve("org.thonny.Thonny", CATALOGUE).app is BY_NAME["Thonny"], "by reverse-DNS id")
+    check(resolve("autodesk fusion", CATALOGUE).app is BY_NAME["Autodesk Fusion"],
+          "by the full name of a program nested in a vendor folder")
     check(resolve("thonny", CATALOGUE).app is BY_NAME["Thonny"], "and by its plain name")
     check(resolve("file manager", CATALOGUE).app is BY_NAME["PCMan File Manager"],
           "by a whole-word phrase inside the name")
@@ -305,22 +361,102 @@ def s2_resolution() -> None:
           "and a role word never lands on an unrelated app")
 
     # A leading article is dropped, so ROLES needs one row per role, not one per phrasing.
+    # The fixture tree has no registry behind it, so nothing carries the WebBrowser tag and
+    # "browser" falls through to the name tiers — where it finds Chromium, because that
+    # shortcut has "Browser" in its name and Firefox does not.
     for phrasing in ("browser", "the browser", "a browser"):
-        check(resolve(phrasing, CATALOGUE).ambiguous,
-              f"{phrasing!r} reaches the WebBrowser role")
-    check(resolve("the file manager", CATALOGUE).app is BY_NAME["PCMan File Manager"],
-          "'the file manager' works without a second ROLES row")
+        m = resolve(phrasing, CATALOGUE)
+        check(m.ambiguous and {a.name for a in m.candidates} ==
+              {"Chromium Web Browser", "Waterfox Web Browser"},
+              f"{phrasing!r} finds both browsers, article or not",
+              str(sorted(a.name for a in m.candidates)))
 
-    # Role words, read off Categories. Two browsers are installed, so this is ambiguous — and
-    # that is the CORRECT answer, not a shortcoming.
-    m = resolve("the browser", CATALOGUE)
-    check(m.ambiguous, "'the browser' is ambiguous with two browsers installed")
-    check({a.name for a in m.candidates} == {"Firefox", "Chromium Web Browser"},
-          "and both are named", str([a.name for a in m.candidates]))
-    check(resolve("calculator", CATALOGUE).app is BY_NAME["Galculator"],
-          "a role word with ONE match resolves — Categories=Calculator")
-    check(resolve("files", CATALOGUE).app is BY_NAME["PCMan File Manager"],
-          "'files' is a role word, and finds the file manager this Pi actually has")
+    # ROLES lost five of its seven rows in the port. See the note above the table in
+    # app_catalogue.py: Windows Start Menu folders are named after VENDORS, not roles, so a
+    # `calculator` or `terminal` row could never match and would only block the name tiers
+    # from finding the program. What is checked here is that the fall-through actually works.
+    # --- the role map -------------------------------------------------------------------
+    #
+    # `PROGRAM_ROLES` is a curated table in a module that refuses curated tables, so these
+    # checks are about the property that makes it the acceptable kind: it says what KIND a
+    # program is, never which programs exist. Nothing here asserts that any particular tool
+    # is installed, and the fixture tree contains none of LB's real stack.
+
+    # EVERY token a program can be tagged with must be reachable by something spoken. A token
+    # in PROGRAM_ROLES with no ROLES phrase pointing at it is a row that can never fire — the
+    # program gets a category nobody can ask for, which is worse than no category because it
+    # looks like coverage.
+    _spoken = set(_cat_mod.ROLES.values())
+    _tagged = {tok for toks in _cat_mod.PROGRAM_ROLES.values() for tok in toks}
+    _unreachable = _tagged - _spoken
+    check(not _unreachable,
+          "every role token a program can carry has a spoken phrase that reaches it",
+          f"UNREACHABLE: {sorted(_unreachable)}" if _unreachable else
+          f"{len(_tagged)} tokens, all reachable")
+
+    # And the other direction, which is the softer of the two: a spoken phrase pointing at a
+    # token nothing can carry resolves to nothing forever. WebBrowser is the legitimate
+    # exception — it is assigned from the REGISTRY in load_start_menu(), not from this table.
+    _orphan = _spoken - _tagged - {"WebBrowser"}
+    check(not _orphan,
+          "and every spoken role phrase points at a token some program can carry",
+          f"ORPHANED: {sorted(_orphan)}" if _orphan else "")
+
+    # Keyed on the EXECUTABLE, which is what makes it durable. A Start Menu name carries a
+    # version — "KiCad 8.0", "Creality Print 7.2" — and goes stale on the next update, which
+    # is the exact failure mode of hardcoding a versioned install path.
+    check(all(k == k.lower() and not k.endswith(".exe") for k in _cat_mod.PROGRAM_ROLES),
+          "the keys are lower-case executable stems, never display names or paths",
+          "so a version bump in the Start Menu name cannot break a role")
+    check("kicad" in _cat_mod.PROGRAM_ROLES and "eeschema" in _cat_mod.PROGRAM_ROLES,
+          "the KiCad binaries are listed individually",
+          "'open the pcb editor' must not open the schematic editor")
+    check("cmd" not in _cat_mod.PROGRAM_ROLES,
+          "cmd.exe is deliberately NOT tagged as a terminal",
+          "several Start Menu entries point at it with different arguments, so tagging it "
+          "would make 'the terminal' ambiguous between things that are not terminals")
+
+    # It claims nothing about what EXISTS — the whole distinction from the table this module
+    # refuses. The fixture catalogue has no KiCad in it, and asking for one says so.
+    check(not resolve("the schematic editor", CATALOGUE).ok,
+          "a role for a program that is not installed resolves to NOTHING",
+          "PROGRAM_ROLES supplies an adjective; the catalogue remains the only source of "
+          "truth about what is on the machine")
+
+    # The tagging itself, on a fixture whose target is a known key.
+    with tempfile.TemporaryDirectory() as _rt:
+        _r = Path(_rt)
+        _make_lnk(_r / "KiCad 9.0.lnk", r"C:\Program Files\KiCad\9.0\bin\kicad.exe")
+        _make_lnk(_r / "Schematic Editor.lnk", r"C:\Program Files\KiCad\9.0\bin\eeschema.exe")
+        _roled = _cat_mod.load_start_menu((_r,))
+        _by = {a.name: a for a in _roled}
+        check("EDA" in _by["KiCad 9.0"].categories,
+              "a program is tagged from its executable, not its display name",
+              f"'KiCad 9.0' -> {_by['KiCad 9.0'].categories}")
+        check(resolve("the eda tool", _roled).ambiguous,
+              "and both KiCad binaries answer to 'the eda tool'")
+        m = resolve("the schematic editor", _roled)
+        check(m.ok and m.app.name == "Schematic Editor",
+              "while 'the schematic editor' reaches exactly one of them",
+              "which is the distinction the individually-named binaries buy")
+    check(resolve("file manager", CATALOGUE).app is BY_NAME["PCMan File Manager"],
+          "'file manager' still resolves — through the NAME tier now, not the role tier",
+          "which is why deleting the dead role rows was necessary rather than merely tidy")
+    check(resolve("the file manager", CATALOGUE).app is BY_NAME["PCMan File Manager"],
+          "and the article is still dropped before the name tiers run")
+
+    # The registry path, which is the half the fixtures cannot exercise. Tagged by hand here
+    # exactly as `load_start_menu()` tags it from `_default_browser_target()`.
+    tagged = tuple(
+        cat.DesktopApp(a.entry_id, a.name, a.argv, a.path, a.terminal,
+                       a.categories + (("WebBrowser",) if a.name == "Firefox" else ()),
+                       a.target)
+        for a in CATALOGUE)
+    m = resolve("the browser", tagged)
+    check(m.ok and m.app.name == "Firefox",
+          "with a default browser recorded, 'the browser' resolves to it OUTRIGHT",
+          "the Pi had two browsers and had to ask; Windows records a preference, so this is "
+          "one place the port made the answer better rather than merely different")
 
     # The negatives. Edit-distance matching is refused on purpose: a threshold loose enough to
     # catch `tawny -> thonny` is loose enough to catch `shut up -> shut down`, and the failure
@@ -333,143 +469,254 @@ def s2_resolution() -> None:
 
 
 def s3_argv() -> None:
-    section("3. the argv is built element by element, and never reaches a shell")
+    section("3. the launch is one call, and the app is not our child")
 
-    d = launcher.find_display(LIVE)
-    argv = launcher.systemd_run_argv("oddball-app-firefox-20260821-143012",
-                                     "/usr/bin/firefox", (), d, "Mr Odd Ball opened Firefox")
+    # The Pi built an 18-element `systemd-run` argv and this section proved every flag in it.
+    # Windows needs none of that construction — `os.startfile` IS the disown — so what is
+    # checked here is the set of guarantees those flags were BUYING, restated as claims about
+    # this module. A shorter section is the correct outcome of deleting machinery; a section
+    # that merely got shorter without saying what it stopped covering would not be.
 
-    check(argv[0] == "systemd-run", "argv[0] is systemd-run")
-    check("--user" in argv, "--user — a user unit, like the service itself")
-    check("--collect" in argv,
-          "--collect, so failed launches do not fill up `list-units --failed`")
-    check("--property=Type=exec" in argv,
-          "Type=exec — the start job completes after execve, not at fork. Measured on the Pi "
-          "2026-08-21: a program that exists but CANNOT EXEC (bad shebang, corrupt ELF, "
-          "missing .so) returns rc=0 under Type=simple and rc=1 under Type=exec.")
-    check(f"--setenv=WAYLAND_DISPLAY={d.wayland}" in argv,
-          "WAYLAND_DISPLAY is set — this single line is the fix for the reported bug")
-    check(f"--setenv=XDG_RUNTIME_DIR={d.runtime_dir}" in argv, "XDG_RUNTIME_DIR is set")
-    check(f"--setenv=PATH={launcher.PINNED_PATH}" in argv, "PATH is pinned, never inherited")
-    check("--setenv=XDG_SESSION_TYPE=wayland" in argv, "XDG_SESSION_TYPE is set")
-    check(any(a.startswith("--setenv=DBUS_SESSION_BUS_ADDRESS=") for a in argv),
-          "DBUS_SESSION_BUS_ADDRESS is passed through when present")
-
-    nodbus = launcher.systemd_run_argv("u", "/usr/bin/firefox", (),
-                                       launcher.find_display(DARK | {"WAYLAND_DISPLAY": "wayland-0"}),
-                                       "d")
-    check(not any(a.startswith("--setenv=DBUS_SESSION_BUS_ADDRESS=") for a in nodbus),
-          "and NOT invented when it is absent")
-
-    check(not any(a.startswith("--setenv=DISPLAY=") for a in argv),
-          "DISPLAY is deliberately absent — setting it invites the app onto Xwayland")
-    check(not any("GDK_BACKEND" in a for a in argv),
-          "GDK_BACKEND is never forced — it breaks apps that only ship an X11 build")
-
-    check(argv.count("--") == 1, "exactly one -- separator")
-    check(argv[argv.index("--") + 1] == "/usr/bin/firefox",
-          "and the program follows it, as an absolute path")
-    check(all(isinstance(a, str) for a in argv), "every element is a string")
-    check(not any(re.search(r"[;|&`$><\n]", a) for a in argv[:argv.index("--")]),
-          "no shell metacharacter appears anywhere in the flags")
-
-    unit = launcher._unit_name("org.thonny.Thonny", "20260821-143012")
-    check(unit == "oddball-app-org.thonny.Thonny-20260821-143012",
-          "a reverse-DNS id makes a legal unit name unchanged", unit)
-    check(re.fullmatch(r"oddball-app-[A-Za-z0-9_.-]+-\d{8}-\d{6}", unit) is not None,
-          "and the unit name matches the pattern the Pi will be grepped for")
-    check("/" not in launcher._unit_name("weird/id:name", "20260821-143012"),
-          "an illegal character in a desktop id cannot produce an illegal unit name")
+    # The module WITHOUT its own docstring. Not `source.split('"""')[-1]` — that takes only
+    # the file's tail, because every function docstring splits it too, so a `shell=True`
+    # anywhere above the last one would sail through. `ast` knows where the docstring ends.
+    import ast
 
     source = Path(launcher.__file__).read_text(encoding="utf-8")
-    check("shell=True" not in source.replace("shell=True, ", "", 0).split('"""')[-1],
-          "the module body contains no shell=True outside its docstring")
+    _tree = ast.parse(source)
+    _doc = ast.get_docstring(_tree, clean=False) or ""
+    body = source.replace(_doc, "", 1) if _doc else source
+
+    # --- what `--collect`, `Type=exec` and the transient unit were for --------------------
+    check(not hasattr(launcher, "systemd_run_argv"),
+          "systemd_run_argv is GONE, not kept as dead code")
+    check(not hasattr(launcher, "PINNED_PATH"),
+          "so is PINNED_PATH — there is no argv to pin a PATH into any more")
+
+    check("subprocess" not in body,
+          "the module does not import subprocess at all",
+          "a blocking capture with a timeout is what killed the app at 15 seconds; there is "
+          "now no call that could regress to it")
+    check("shell=True" not in body,
+          "and contains no shell=True outside its docstring")
+    check("Popen" not in body,
+          "no Popen either — the launched app must not be our child in any sense")
+
+    # --- the single OS surface, and the seam over it ---------------------------------------
+    check(callable(launcher.start), "start() is the entire operating-system surface")
+    check(body.count("_start(") == 1,
+          "and the injection seam has exactly ONE call site, so a harness has one thing to "
+          "replace", f"found {body.count('_start(')}")
+
+    # `os.startfile` raising OSError is the honesty guarantee that `--property=Type=exec` was
+    # on the Pi: it is what separates "the shell accepted it" from "nothing happened".
+    calls = []
+    real = launcher._start
+    try:
+        launcher._start = lambda path: (_ for _ in ()).throw(OSError(2, "no application"))
+        out = launcher.launch("openscad") if _HAS_REAL_CATALOGUE else None
+    finally:
+        launcher._start = real
+    if _HAS_REAL_CATALOGUE:
+        check(out is not None and out.kind == "launch-failed" and not out.ok,
+              "a shell refusal becomes launch-failed, never a silent success",
+              f"kind={out.kind!r}" if out else "")
+        check(out is not None and "no application" in out.detail,
+              "and the reason reaches the card verbatim")
+
+    # --- the shortcut, not the target -------------------------------------------------------
+    with tempfile.TemporaryDirectory() as tmp:
+        lnk = Path(tmp) / "Thing.lnk"
+        _make_lnk(lnk, r"C:\\Program Files\\Thing\\thing.exe")
+        app = cat.parse_shortcut(lnk, Path(tmp))
+        real = launcher._start
+        try:
+            launcher._start = calls.append
+            cat_real = cat.load_catalogue
+            cat.load_catalogue = lambda dirs=None: (app,)
+            try:
+                out = launcher.launch("thing")
+            finally:
+                cat.load_catalogue = cat_real
+        finally:
+            launcher._start = real
+
+        check(out.kind == "not-installed",
+              "a shortcut whose TARGET does not exist is not-installed — the nautilus case, "
+              "which is the one guard that survived the port", out.kind)
+        check(not calls, "and nothing was started")
+
+
+def s3b_display_free_launch() -> None:
+    section("3b. the shortcut is launched, never the .exe it points at")
+
+    calls: list[str] = []
+    with tempfile.TemporaryDirectory() as tmp:
+        lnk = Path(tmp) / "Real.lnk"
+        # Point it at something that genuinely exists, so guard 2 passes and guard 4 is reached.
+        _make_lnk(lnk, sys.executable)
+        app = cat.parse_shortcut(lnk, Path(tmp))
+
+        real_start, real_cat = launcher._start, cat.load_catalogue
+        try:
+            launcher._start = calls.append
+            cat.load_catalogue = lambda dirs=None: (app,)
+            out = launcher.launch("real")
+        finally:
+            launcher._start, cat.load_catalogue = real_start, real_cat
+
+    check(out.ok and out.kind == "launched", "a resolvable, present application launches",
+          f"kind={out.kind!r} detail={out.detail[:60]!r}")
+    check(calls == [str(lnk)],
+          "and what was handed to the shell is the .LNK, not its target",
+          f"got {calls!r}")
+    check(str(sys.executable) not in calls,
+          "the target is never executed directly — that would discard the shortcut's "
+          "arguments, working directory and run-as flag")
+    check(sys.executable in out.detail,
+          "though the verified target IS on the card, so the check is visible")
 
 
 def s4_outcomes() -> None:
-    section("4. every refusal runs NOTHING, and none of them is spoken as success")
+    section("4. every refusal starts NOTHING, and none of them is spoken as success")
 
-    out, runner = run_launch("firefox")
+    out, shell = run_launch("firefox")
     check(out.kind == "launched" and out.ok, "the happy path launches", out.kind)
-    check(len(runner.calls) == 1, "and runs exactly one command")
-    check(runner.calls[0][0] == "systemd-run", "which is systemd-run")
+    check(len(shell.started) == 1, "and hands the shell exactly one thing")
+    _fx = next(a for a in with_targets(CATALOGUE, INSTALLED) if a.name == "Firefox")
+    check(shell.started[0] == _fx.argv[0],
+          "and what it hands over is the catalogue's own argv[0], verbatim",
+          f"started {shell.started[0]!r}; on Windows argv[0] is the .lnk, which is what "
+          f"makes the shell resolve the target, arguments and working directory")
+    check(shell.started[0] != _fx.target,
+          "never the resolved TARGET — that would discard the shortcut's own arguments, "
+          "working directory and run-as flag", f"target was {_fx.target!r}")
     check(out.subject == "Firefox", "the subject is the spoken name, for the sentence")
-    check("journalctl --user -u oddball-app-firefox" in out.detail,
-          "and the card carries the journal line, so a real failure is one command away")
+    check("target verified" in out.detail,
+          "and the card says the existence check actually RAN — a guard that cannot run must "
+          "say so, and this is how the two are told apart", out.detail.splitlines()[-2:])
 
-    out, runner = run_launch("nautilus")
+    out, shell = run_launch("nautilus")
     check(out.kind == "unknown-app" and not out.ok, "an app not in the catalogue", out.kind)
-    check(runner.calls == [], "and NOTHING ran")
+    check(not shell.ran, "and NOTHING was started")
     check("Firefox" in out.detail, "the card lists what he CAN open")
 
-    out, runner = run_launch("the browser")
+    out, shell = run_launch("the browser")
     check(out.kind == "ambiguous" and not out.ok, "two matches is ambiguous", out.kind)
-    check(runner.calls == [], "and NOTHING ran — guessing would open the wrong browser")
+    check(not shell.ran, "and NOTHING was started — guessing would open the wrong browser")
 
-    # The `nautilus` case, generalised: the desktop entry promises a binary the machine lacks.
-    out, runner = run_launch("firefox", installed=set())
+    # The `nautilus` case, generalised: the entry promises a program the machine lacks.
+    out, shell = run_launch("firefox", installed=set())
     check(out.kind == "not-installed" and not out.ok,
-          "an entry whose binary is missing is caught BEFORE launching", out.kind)
-    check(runner.calls == [], "and NOTHING ran")
-    check("not on" in out.detail, "the card says where it looked")
+          "an entry whose program is missing is caught BEFORE launching", out.kind)
+    check(not shell.ran, "and NOTHING was started")
+    check("not on this machine" in out.detail, "the card says where it looked")
 
-    out, runner = run_launch("firefox", environ=DARK)
-    check(out.kind == "no-display" and not out.ok, "no compositor socket", out.kind)
-    check(runner.calls == [],
-          "and NOTHING ran — launching into a missing display is indistinguishable "
-          "from doing nothing, which IS the reported bug")
-    check("wayland sockets = (none)" in out.detail,
-          "the card says what he looked at, not just that he failed")
+    out, shell = run_launch("firefox", dark=True)
+    check(out.kind == "no-display" and not out.ok,
+          "a session with no monitors refuses", out.kind)
+    check(not shell.ran,
+          "and NOTHING was started — launching into a session with no screen is "
+          "indistinguishable from doing nothing, which IS the reported bug")
+    check("Remote Desktop" in out.detail,
+          "the card says what he looked at, not just that he failed",
+          "a disconnected RDP session is the reachable case this outcome exists for")
 
-    out, runner = run_launch("firefox", rc=1, stderr="Unit already exists.")
+    # `os.startfile` signals failure by RAISING, not by an exit code. This is the Windows
+    # form of the `Type=exec` guarantee: it separates "the shell took it" from "nothing
+    # happened", which was defect 4 of the original bug — silence reported as success.
+    out, shell = run_launch("firefox", error=OSError(2, "No application is associated"))
     check(out.kind == "launch-failed" and not out.ok,
-          "a non-zero systemd-run is a failure, not a success", out.kind)
-    check("Unit already exists." in out.detail, "and stderr is carried to the card")
+          "a shell refusal is a failure, not a success", out.kind)
+    check("No application is associated" in out.detail,
+          "and the reason is carried to the card verbatim")
+    check(shell.ran, "the attempt really was made — this is a failure, not a refusal")
 
-    out, runner = run_launch("htop")
-    check(out.kind == "launched" and out.ok, "a Terminal=true program launches", out.kind)
-    tail = runner.calls[0][runner.calls[0].index("--") + 1:]
-    check(tail[0].endswith("lxterminal") and "-e" in tail,
-          "wrapped in a terminal emulator", str(tail))
+    # A shortcut with no readable target: the check is SKIPPED, and the launch proceeds.
+    # 14 of the 41 applications on this machine are like this, so getting it wrong would break
+    # every Control Panel entry on the box.
+    skipped = tuple(cat.DesktopApp(a.entry_id, a.name, a.argv, a.path, a.terminal,
+                                   a.categories, "")
+                    for a in CATALOGUE)
+    real_start, real_load = launcher._start, cat.load_catalogue
+    shell = FakeShell()
+    try:
+        launcher._start = shell
+        cat.load_catalogue = lambda dirs=None: skipped
+        out = launcher.launch("firefox")
+    finally:
+        launcher._start, cat.load_catalogue = real_start, real_load
 
-    out, runner = run_launch("htop", installed={"htop"})
-    check(out.kind == "not-installed" and runner.calls == [],
-          "and refuses when no terminal emulator is installed", out.kind)
+    check(out.ok and out.kind == "launched",
+          "a shortcut naming no local path still launches", out.kind)
+    check("not checked" in out.detail,
+          "and the card SAYS the check was skipped rather than implying it passed",
+          "a guard that silently passes is worse than no guard")
 
     # The single most important check in the file.
     check(all(o.ok is False for o in [
         run_launch("nautilus")[0], run_launch("the browser")[0],
-        run_launch("firefox", installed=set())[0], run_launch("firefox", environ=DARK)[0],
-        run_launch("firefox", rc=1)[0]]),
+        run_launch("firefox", installed=set())[0], run_launch("firefox", dark=True)[0],
+        run_launch("firefox", error=OSError(2, "x"))[0]]),
         "NONE of the five refusal paths reports ok=True")
 
 
 def s5_display() -> None:
-    section("5. the display is discovered at launch time, from the real filesystem")
+    section("5. the display is discovered at launch time, not configured")
 
-    d = launcher.find_display(LIVE)
-    check(d.usable and d.wayland == "wayland-0", "an explicit WAYLAND_DISPLAY is honoured")
+    # The Pi globbed $XDG_RUNTIME_DIR for a compositor socket, because labwc picks a new socket
+    # number after a session restart and a value baked into a config file would be right until
+    # the first restart and silently wrong forever after. Windows has no such moving part —
+    # but the PRINCIPLE is the one thing worth carrying over, so it is still asked at the
+    # moment it is needed rather than cached, and this section is what pins that.
 
-    d = launcher.find_display(DARK)
-    check(not d.usable and d.seen == (), "an empty runtime dir yields no socket")
+    d = launcher.find_display()
+    check(isinstance(d.monitors, int), "find_display counts monitors", str(d.monitors))
+    check(d.usable == (d.monitors > 0),
+          "usable is exactly 'there is at least one monitor'")
+    check(d.describe(),
+          "and it describes what it looked at — 'I couldn't find the screen' with no detail "
+          "is not diagnosable", d.describe().replace("\n", " | "))
 
-    # The real glob, on real files, in a temp dir — so what ships is what is tested.
-    with tempfile.TemporaryDirectory() as tmp:
-        (Path(tmp) / "wayland-1").touch()
-        (Path(tmp) / "wayland-1.lock").touch()
-        d = launcher.find_display({"XDG_RUNTIME_DIR": tmp, "HOME": "/home/ironi"})
-        check(d.usable and d.wayland == "wayland-1",
-              "a socket is FOUND by globbing, not assumed to be wayland-0 — labwc picks a new "
-              "number after a session restart", d.wayland)
-        check(d.seen == ("wayland-1",), "and the .lock file is not mistaken for a socket")
+    # `no-display` is kept for a REACHABLE case, not out of sentiment: a disconnected RDP
+    # session still runs processes and has nothing to draw on. Proven by construction.
+    dark = launcher.Display(monitors=0, detail="monitors = 0")
+    check(not dark.usable, "zero monitors is not usable")
 
-        (Path(tmp) / "wayland-0").touch()
-        d = launcher.find_display({"XDG_RUNTIME_DIR": tmp, "HOME": "/home/ironi"})
-        check(d.wayland == "wayland-0" and d.seen == ("wayland-0", "wayland-1"),
-              "with two compositors he takes the lowest and lists both on the card")
+    calls: list[str] = []
+    real_find, real_start = launcher.find_display, launcher._start
+    try:
+        launcher.find_display = lambda environ=None: dark
+        launcher._start = calls.append
+        out = launcher.launch("the browser") if _HAS_REAL_CATALOGUE else None
+    finally:
+        launcher.find_display, launcher._start = real_find, real_start
 
-    d = launcher.find_display({"XDG_RUNTIME_DIR": "/nonexistent/xyz", "HOME": "/home/ironi"})
-    check(not d.usable, "an unreadable runtime dir is 'no display', not a crash")
+    if _HAS_REAL_CATALOGUE:
+        check(out is not None and out.kind == "no-display",
+              "a session with no desktop refuses rather than launching",
+              f"kind={out.kind!r}" if out else "")
+    check(not calls,
+          "and NOTHING was started — launching into a session with no screen starts a process "
+          "nobody can see, which is indistinguishable from doing nothing")
+
+    # A failure to ASK is not a failure to have a screen.
+    import ctypes as _ctypes
+    real_windll = getattr(_ctypes, "windll", None)
+    if real_windll is not None:
+        class _Boom:
+            def __getattr__(self, _):
+                raise OSError("simulated ctypes failure")
+        try:
+            _ctypes.windll = _Boom()
+            d = launcher.find_display()
+        finally:
+            _ctypes.windll = real_windll
+        check(d.usable and "unavailable" in d.describe(),
+              "if the monitor count cannot be READ, a display is assumed present and the "
+              "reason is on the card",
+              "refusing every launch because a ctypes call misbehaved is a worse bug than "
+              "the one this guard prevents")
 
 
 def s6_speech() -> None:
@@ -505,7 +752,7 @@ def s7_free_intent() -> None:
     import tools.app_catalogue as _cat
 
     real = _cat.cached_catalogue
-    _cat.cached_catalogue = lambda: CATALOGUE
+    _cat.cached_catalogue = lambda: CATALOGUE   # late-bound: built in build()
 
     def ask(utterance):
         return launch_intent.look_up(Query(raw=utterance, text=normalise(utterance)))
@@ -564,10 +811,9 @@ def s7_free_intent() -> None:
         # to nothing, exactly as its full name does.
         with tempfile.TemporaryDirectory() as _t:
             _d = Path(_t)
-            (_d / "code.desktop").write_text(
-                "[Desktop Entry]\nType=Application\nName=Visual Studio Code\nExec=code\n",
-                encoding="utf-8")
-            vscode_cat = load_catalogue((_d,))
+            _make_lnk(_d / "Visual Studio Code.lnk",
+                      r"C:\Users\lb\AppData\Local\Programs\Microsoft VS Code\Code.exe")
+            vscode_cat = _cat.load_start_menu((_d,))
             _cat.cached_catalogue = lambda: vscode_cat
 
             for utterance in ["open vscode", "launch vs code", "open code",
@@ -594,18 +840,22 @@ def s7_free_intent() -> None:
         # "schematic editor standalone" and misses. Verified on hardware 2026-08-23.
         with tempfile.TemporaryDirectory() as _t:
             _d = Path(_t)
-            for _id, _name in [
-                ("org.kicad.kicad", "KiCad"),
-                ("org.kicad.eeschema", "KiCad Schematic Editor (Standalone)"),
-                ("org.kicad.pcbnew", "KiCad PCB Editor (Standalone)"),
-                ("org.kicad.gerbview", "KiCad Gerber Viewer"),
-                ("org.kicad.pcbcalculator", "KiCad PCB Calculator"),
+            # Shortcut names as a Windows KiCad install writes them. The bracketed
+            # qualifier is preserved verbatim from the Pi's `Name=` values, because it is the
+            # point of the test rather than a platform detail: the distinguishing words sit
+            # in the MIDDLE of the name, so a trailing-run rule yields only
+            # "schematic editor standalone" and misses.
+            (_d / "KiCad").mkdir()
+            for _exe, _name in [
+                ("kicad", "KiCad"),
+                ("eeschema", "KiCad Schematic Editor (Standalone)"),
+                ("pcbnew", "KiCad PCB Editor (Standalone)"),
+                ("gerbview", "KiCad Gerber Viewer"),
+                ("pcbcalculator", "KiCad PCB Calculator"),
             ]:
-                (_d / f"{_id}.desktop").write_text(
-                    f"[Desktop Entry]\nType=Application\nName={_name}\n"
-                    f"Exec={_id.split('.')[-1]}\nCategories=Electronics;Science;\n",
-                    encoding="utf-8")
-            kicad_cat = load_catalogue((_d,))
+                _make_lnk(_d / "KiCad" / (_name + ".lnk"),
+                          "C:\\Program Files\\KiCad\\9.0\\bin\\" + _exe + ".exe")
+            kicad_cat = _cat.load_start_menu((_d,))
             _cat.cached_catalogue = lambda: kicad_cat
 
             for utterance, want in [
@@ -633,7 +883,7 @@ def s7_free_intent() -> None:
                 check(ask(utterance) is None, f"{utterance!r} is NOT a launch",
                       f"claimed {ask(utterance)}")
 
-        _cat.cached_catalogue = lambda: CATALOGUE
+        _cat.cached_catalogue = lambda: CATALOGUE   # late-bound: built in build()
 
         # THE negatives. Every one names something launchable and none is a request to launch
         # it. D38 for the sixth time — and the first time where a false match RUNS something.
@@ -741,22 +991,168 @@ def s8_gate_plumbing() -> None:
     check(set(osa._RESUME) == {"execute_terminal_command", "launch_app"},
           "both tools are dispatchable", str(sorted(osa._RESUME)))
 
-    runner = FakeRunner()
-    real_run, real_which, real_cat = launcher._run, launcher._which, cat.load_catalogue
-    launcher._run, launcher._which = runner, fake_which(INSTALLED)
-    cat.load_catalogue = lambda dirs=None: CATALOGUE
+    shell = FakeShell()
+    real_start, real_cat = launcher._start, cat.load_catalogue
+    launcher._start = shell
+    cat.load_catalogue = lambda dirs=None: with_targets(CATALOGUE, INSTALLED)
     try:
         r = osa.resume_os_action(Pending("os", {"tool": "nope"}, "q", "s", "not-a-real-tool"))
         check("unknown-tool" in r.raw, "an unrecognised tool name refuses", r.raw[:60])
-        check(runner.calls == [], "and runs NOTHING — dispatch is on the name, never on the "
-                                  "shape of tool_args, so an extra key cannot pick the shell")
+        check(not shell.ran, "and starts NOTHING — dispatch is on the name, never on the "
+                             "shape of tool_args, so an extra key cannot pick the shell")
     finally:
-        launcher._run, launcher._which = real_run, real_which
+        launcher._start = real_start
         cat.load_catalogue = real_cat
 
 
+
+def _make_lnk(path: Path, target: str) -> None:
+    """Write a minimal but SPEC-CORRECT .lnk pointing at `target`.
+
+    Synthesized rather than copied from the real Start Menu, for the reason every fixture in
+    this file is synthesized: a harness that depends on what happens to be installed on the
+    box running it tests the box, not the code. This one also has to run on the Pi, where
+    there are no shortcuts to copy.
+
+    The layout is MS-SHLLINK: a 76-byte ShellLinkHeader with LinkFlags = HasLinkInfo, then a
+    LinkInfo block in its basic (0x1C header) form holding a VolumeID and a null-terminated
+    ANSI LocalBasePath. Deliberately NOT the Unicode form — `shortcut_target()` reads both,
+    and the ANSI branch is the one a hand-written fixture can exercise without ambiguity.
+    """
+    import struct
+
+    header = bytearray(76)
+    header[0:4] = struct.pack("<I", 0x4C)                       # HeaderSize, the magic
+    header[4:20] = bytes.fromhex("01140200000000000000000000000046")   # CLSID
+    header[20:24] = struct.pack("<I", 0x2)                      # LinkFlags = HasLinkInfo
+
+    # VolumeID: size, drive type, serial, label offset, then a null label. 17 bytes.
+    volume = struct.pack("<IIII", 0x11, 3, 0x12345678, 0x10) + b"\x00"
+
+    base = target.encode("mbcs") + b"\x00"
+    header_size = 0x1C
+    volume_off = header_size
+    base_off = volume_off + len(volume)
+    suffix_off = base_off + len(base)
+    info_size = suffix_off + 1                                  # + the empty suffix
+
+    info = struct.pack("<IIIIIII", info_size, header_size, 0x1,
+                       volume_off, base_off, 0, suffix_off)
+    path.write_bytes(bytes(header) + info + volume + base + b"\x00")
+
+
+def s7_start_menu() -> None:
+    """The Windows backend: the Start Menu read as this platform's desktop-entry database.
+
+    Runs on BOTH platforms and deliberately so. Every function under test is pure file
+    parsing — no registry, no COM, no Windows API — so the Pi can prove the Windows reader
+    still works, which is what stops it rotting the moment LB stops testing on the Pi.
+    """
+    import tempfile
+
+    from tools.app_catalogue import (EXCLUDED_FOLDERS, SESSION_ENDING_WIN, load_start_menu,
+                                     parse_shortcut, shortcut_target, start_menu_dirs)
+
+    section("7. the Windows backend — the Start Menu is the desktop-entry database")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "Autodesk").mkdir()
+        (root / "Administrative Tools").mkdir()
+
+        _make_lnk(root / "OpenSCAD.lnk", r"C:\Program Files\OpenSCAD\openscad.exe")
+        _make_lnk(root / "Autodesk" / "Autodesk Fusion.lnk",
+                  r"C:\Users\lb\AppData\Local\Autodesk\FusionLauncher.exe")
+        _make_lnk(root / "Administrative Tools" / "Disk Cleanup.lnk",
+                  r"C:\Windows\System32\cleanmgr.exe")
+        _make_lnk(root / "Uninstall.lnk", r"C:\Program Files\Thing\uninstall.exe")
+        _make_lnk(root / "Uninstall Node.js.lnk", r"C:\Windows\SysWOW64\msiexec.exe")
+
+        # --- the parser ---
+        got = shortcut_target(root / "OpenSCAD.lnk")
+        check(got == r"C:\Program Files\OpenSCAD\openscad.exe",
+              "shortcut_target reads the target out of a .lnk with no dependency", repr(got))
+
+        (root / "broken.lnk").write_bytes(b"not a shortcut at all")
+        check(shortcut_target(root / "broken.lnk") == "",
+              "a malformed shortcut returns '' rather than raising",
+              "one bad file must never cost LB the whole catalogue")
+        check(shortcut_target(root / "nope.lnk") == "",
+              "so does a missing one")
+
+        # --- the loader ---
+        apps = load_start_menu((root,))
+        by_name = {a.name: a for a in apps}
+
+        check("OpenSCAD" in by_name, "a top-level shortcut becomes an application",
+              ", ".join(sorted(by_name)))
+        check("Autodesk Fusion" in by_name, "so does one nested in a vendor folder")
+        check("Disk Cleanup" not in by_name,
+              "Administrative Tools is excluded wholesale — none of it is an app LB can mean")
+        check("Uninstall" not in by_name,
+              "a bare 'Uninstall' is excluded: removing a program is not opening one")
+        check("Uninstall Node.js" not in by_name,
+              "and so is a PREFIXED one — exact-match alone let this through, and "
+              "resolve('uninstall') then offered to run it")
+
+        # --- argv is the SHORTCUT, which is the whole trick ---
+        openscad = by_name["OpenSCAD"]
+        check(openscad.argv == (str(root / "OpenSCAD.lnk"),),
+              "argv[0] is the .lnk, not the target — os.startfile makes Windows resolve it",
+              str(openscad.argv))
+        check(openscad.target == r"C:\Program Files\OpenSCAD\openscad.exe",
+              "the target is carried alongside, for the 'is it installed' check")
+        check(openscad.terminal is False,
+              "Terminal is always False on Windows — a .lnk carries its own console decision")
+
+        # --- the category, which is the folder ---
+        fusion = by_name["Autodesk Fusion"]
+        check("autodesk" in fusion.categories,
+              "the containing folder becomes a category, as Categories= did on the Pi",
+              str(fusion.categories))
+
+        # --- resolution runs on these rows unchanged, which is the point of the port ---
+        check(resolve("openscad", apps).ok, "resolve() works on Start Menu rows unchanged")
+        check(resolve("fusion", apps).ok, "including a whole-word phrase match")
+        check(not resolve("kicad", apps).ok,
+              "and an application that is NOT installed resolves to nothing — which is the "
+              "honest answer a hardcoded path could not give")
+
+        # --- shadowing ---
+        with tempfile.TemporaryDirectory() as tmp2:
+            user = Path(tmp2)
+            _make_lnk(user / "OpenSCAD.lnk", r"C:\Users\lb\OpenSCAD\openscad.exe")
+            merged = {a.name: a for a in load_start_menu((user, root))}
+            check(merged["OpenSCAD"].target.startswith(r"C:\Users"),
+                  "a per-user shortcut shadows a machine-wide one of the same name",
+                  merged["OpenSCAD"].target)
+
+    check(load_start_menu((Path(tempfile.gettempdir()) / "definitely-not-here",)) == (),
+          "a missing Start Menu directory is empty, not an error")
+
+    # --- the directories, which is where the case-folding bug lived ---
+    dirs = start_menu_dirs({"APPDATA": r"C:\U\R", "PROGRAMDATA": r"C:\PD"})
+    check(len(dirs) == 2 and str(dirs[0]).startswith(r"C:\U\R"),
+          "start_menu_dirs puts the USER directory first, so a user shortcut can shadow",
+          str(dirs))
+    check(start_menu_dirs({"AppData": r"C:\U\R", "ProgramData": r"C:\PD"}) == dirs,
+          "and it is CASE-INSENSITIVE — dict(os.environ) loses Windows' case folding, "
+          "which silently produced a catalogue of ZERO applications")
+    check(start_menu_dirs({}) == (),
+          "an environment naming neither directory yields none, rather than guessing a path")
+
+    check(bool(EXCLUDED_FOLDERS) and bool(SESSION_ENDING_WIN),
+          "both exclusion sets are non-empty on every platform",
+          f"{len(EXCLUDED_FOLDERS)} folders, {len(SESSION_ENDING_WIN)} names")
+
 def build() -> None:
-    s1_catalogue(); s2_resolution(); s3_argv(); s4_outcomes(); s5_display(); s6_speech()
+    global CATALOGUE, BY_NAME
+    CATALOGUE = _build_fixture_tree()
+    BY_NAME = {a.name: a for a in CATALOGUE}
+
+    s1_catalogue(); s2_resolution(); s3_argv(); s3b_display_free_launch()
+    s4_outcomes(); s5_display(); s6_speech()
+    s7_start_menu()
     s7_free_intent(); s8_gate_plumbing()
 
 
@@ -806,8 +1202,7 @@ def probe() -> int:
     # --- M2: pretend a display is always there --------------------------------------------
     real_find = launcher.find_display
     launcher.find_display = lambda environ=None: launcher.Display(
-        runtime_dir="/run/user/1000", wayland="wayland-0", home="/home/ironi",
-        seen=("wayland-0",))
+        monitors=1, detail="monitors = 1")
     _, failed = _rerun([s4_outcomes, s5_display])
     launcher.find_display = real_find
     results.append(("M2 display always assumed", failed))
@@ -829,15 +1224,30 @@ def probe() -> int:
     print(f"   M3  old startswith() reporting -> {failed} check(s) red "
           f"({'timeout and blocked are spoken as Done' if failed else 'NOT COVERED'})")
 
-    # --- M4: drop Type=exec and the which() pre-flight -------------------------------------
-    real_argv, real_which = launcher.systemd_run_argv, launcher._which
-    launcher.systemd_run_argv = lambda *a, **k: [
-        x for x in real_argv(*a, **k) if x != "--property=Type=exec"]
-    _, failed = _rerun([s3_argv])
-    launcher.systemd_run_argv, launcher._which = real_argv, real_which
-    results.append(("M4 Type=exec dropped", failed))
-    print(f"   M4  Type=exec dropped          -> {failed} check(s) red "
-          f"({'a missing binary would report success' if failed else 'NOT COVERED'})")
+    # --- M4: the existence pre-flight removed ----------------------------------------------
+    # `Type=exec` was the Pi's half of this and no longer exists to drop; `os.startfile`
+    # raising is what replaced it, and M4b below mutates that. What is left to remove here is
+    # the OTHER half, which survived the port unchanged: the check that the program named by
+    # the entry is actually on the machine. That is the `nautilus` case.
+    real_exists = launcher._exists
+    launcher._exists = lambda path: True                 # everything is "installed"
+    _, failed = _rerun([s4_outcomes])
+    launcher._exists = real_exists
+    results.append(("M4 existence pre-flight removed", failed))
+    print(f"   M4  nautilus check removed     -> {failed} check(s) red "
+          f"({'a missing program reports success' if failed else 'NOT COVERED'})")
+
+    # --- M4b: a shell that fails silently ---------------------------------------------------
+    # The Windows form of "silence reported as success", which is defect 4 of the original
+    # bug. If `start()` swallowed its OSError, `launch()` would return `launched` for a
+    # program that never started — and only section 4 stands between that and LB.
+    real_start = launcher.start
+    launcher.start = lambda path: None                   # never raises, never starts
+    _, failed = _rerun([s3_argv, s3b_display_free_launch])
+    launcher.start = real_start
+    results.append(("M4b shell errors swallowed", failed))
+    print(f"   M4b shell failure swallowed    -> {failed} check(s) red "
+          f"({'a refused launch is spoken as Done' if failed else 'NOT COVERED'})")
 
     # --- M5: drop the end-anchor rule from the free launch intent -------------------------
     # The mutation that matters most in this file: without it, a QUESTION starts a program.

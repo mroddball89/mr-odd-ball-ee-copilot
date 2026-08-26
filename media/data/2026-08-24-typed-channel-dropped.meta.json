@@ -1,0 +1,30 @@
+{
+  "title": "The typed channel dropped every line, and the microphone was one of the reasons",
+  "taken": "2026-08-24T21:19-04:00",
+  "author": "LB",
+  "hardware": "Raspberry Pi 5, 8 GB, Debian 13 (trixie), aarch64, Python 3.13.5",
+  "host": "oddball-pi (familyhub) 10.0.0.96",
+  "service": "oddball.service, systemd --user scope, enabled",
+  "conditions": {
+    "microphone": "Logitech C270 NOT enumerating; sounddevice offers only pipewire and default",
+    "load_average_1min": 4.98,
+    "concurrent_work": "tools/benchmark_glm_vs_gemini.py --backend glm --task router was running throughout and was deliberately not disturbed",
+    "face_window": "hud/float.py --url http://127.0.0.1:8765/?chat=1, WebKitGTK 6.0 under labwc/Wayland"
+  },
+  "what_this_shows": "Typing into Mr Odd Ball's chat panel produced no answer, and the plain-language reason is that the typed line was never leaving the browser, or was being thrown away once it arrived. Three independent faults stacked. The browser kept sending into a WebSocket that had closed hours earlier, and the browser API fails silently in exactly that case, so the line was echoed into the transcript as though he had received it. The engine's typed thread skipped Approve clicks off the queue that a waiting permission gate needed. And the typed channel — the fallback that exists specifically because this microphone is unreliable — was watching the same shutdown flag that the microphone thread sets when the device disappears, so it shut down 0.08 seconds after start when the C270 went missing.",
+  "why_it_matters": "The measured wake-word scores on this hardware are 0.17-0.28 against a 0.76 threshold (2026-08-19), so typing is not a convenience on this build, it is the channel that works. A fallback that shares a shutdown signal with the thing it is a fallback for is not a fallback. The 24-spoken-turns-to-0-typed-lines split in a single 8-hour log is the whole finding in one number.",
+  "before_after": {
+    "before": "0 typed lines answered in 7.98 hours, alongside 24 spoken turns",
+    "after": "typed wake and typed question both answered in under a second, with the microphone still missing"
+  },
+  "verified_by": [
+    "node tools/verify-chat-send.mjs   18/18 on the fix, 7 FAIL against git show HEAD",
+    "python tools/verify_chat.py       49/49, 3 ordering checks FAIL against git show HEAD",
+    "python tools/verify_typed.py      81/81",
+    "node tools/verify-rig.mjs         38/38",
+    "python tools/verify_gate_state.py 20/20",
+    "python tools/verify_upload.py     169/169"
+  ],
+  "caveat": "The browser half is proven by executing the rig's own wiring against a stub DOM, not by driving the GTK window. The engine half is proven on the Pi against the live WebSocket. Nothing here drove a real keystroke into the real window; that check is still LB's to make.",
+  "related": ["docs/DECISIONS.md D28", "tasks/lessons.md L21"]
+}

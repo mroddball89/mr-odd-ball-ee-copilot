@@ -59,8 +59,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-__all__ = ["ROUTER_MODEL", "AGENT_MODEL", "PERSONA_MODEL", "FREE_TIER_DAILY_LIMIT",
-           "LLM_MAX_RETRIES"]
+__all__ = ["ROUTER_MODEL", "AGENT_MODEL", "PERSONA_MODEL", "VISION_MODEL",
+           "FREE_TIER_DAILY_LIMIT", "LLM_MAX_RETRIES"]
 
 # Measured, not documented — from the 429 body on 2026-08-19. Defined above the key
 # guard because the guard quotes it.
@@ -136,9 +136,26 @@ if _problem:
         f"  Content: GOOGLE_API_KEY=AIza...        <- the actual key, not this text\n\n"
         f"Get one from https://aistudio.google.com/apikey — the free tier is "
         f"{FREE_TIER_DAILY_LIMIT} requests per model per day.\n\n"
-        f"On the Pi, avoid retyping it — pipe it in so nothing can be truncated:\n"
-        f"  read -rs KEY && printf 'GOOGLE_API_KEY=%s\\n' \"$KEY\" > {ENV_FILE} "
-        f"&& chmod 600 {ENV_FILE}\n\n"
+        # PowerShell, because this is where he runs now. This block used to give the bash
+        # recipe (`read -rs KEY && ... && chmod 600`) prefixed "On the Pi" — and after the
+        # port it printed those commands beside a Windows path, which is advice that
+        # cannot be followed on the machine showing it. A wrong instruction is worse than
+        # no instruction: it sends the reader to look for a shell they do not have.
+        #
+        # `Read-Host -AsSecureString` for the same reason the bash version used `read -rs`:
+        # so the key is not echoed, and does not land in PSReadLine's history file, which
+        # keeps every command ever typed in plain text. `tools/os_controller.py` refuses to
+        # read that file for exactly this reason, so it would be poor form to fill it.
+        #
+        # No `chmod` equivalent is offered. `.env` inherits the repo directory's ACL, and
+        # an icacls line here would be one more thing to get subtly wrong.
+        f"Avoid retyping it — pipe it in so nothing can be truncated, and so the key "
+        f"never lands in your shell history:\n"
+        f"  $k = Read-Host 'paste the key' -AsSecureString\n"
+        f"  [Runtime.InteropServices.Marshal]::PtrToStringAuto("
+        f"[Runtime.InteropServices.Marshal]::SecureStringToBSTR($k)) |\n"
+        f"    ForEach-Object {{ \"GOOGLE_API_KEY=$_\" }} |\n"
+        f"    Set-Content -Encoding utf8 '{ENV_FILE}'\n\n"
         f"`.env` is gitignored and excluded from the deploy, so it is created once per machine "
         f"and never syncs.\n"
     )
@@ -176,3 +193,15 @@ LLM_MAX_RETRIES = int(os.environ.get("ODDBALL_LLM_MAX_RETRIES", "0"))
 ROUTER_MODEL = os.environ.get("ODDBALL_ROUTER_MODEL", "gemini-3.5-flash-lite")
 AGENT_MODEL = os.environ.get("ODDBALL_AGENT_MODEL", "gemini-3.5-flash")
 PERSONA_MODEL = os.environ.get("ODDBALL_PERSONA_MODEL", "gemini-3.5-flash-lite")
+
+# Reading a screenshot — `agents/screen_agent.py`. Defaults to the SAME NAME as AGENT_MODEL,
+# which means it shares that model's daily bucket, and that is worth stating rather than hiding:
+# looking at the screen costs the firmware agent a question.
+#
+# The reason it is a separate constant anyway is D3's own argument. The free tier is per model
+# per project, so pointing this at a different model name is how LB buys screen-reading its own
+# 20 requests a day without touching anything else — one environment variable, no code change.
+# It is not defaulted that way because accuracy matters here more than budget: reading a dialog
+# box off a downscaled JPEG is the job, and `flash-lite` is the model this repo already measured
+# as the cheap one, not the careful one.
+VISION_MODEL = os.environ.get("ODDBALL_VISION_MODEL", AGENT_MODEL)

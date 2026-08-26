@@ -277,6 +277,45 @@ def list_devices() -> str:
     return "input devices (* = system default):\n" + "\n".join(lines)
 
 
+def _wasapi_settings(device: str | int | None):
+    """`WasapiSettings(auto_convert=True)` when `device` is on WASAPI, else None.
+
+    **Without this, a WASAPI device cannot be opened at all**, and the error says nothing
+    useful:
+
+        sounddevice.PortAudioError: Error opening InputStream:
+            Invalid sample rate [PaErrorCode -9997]
+
+    WASAPI is the only Windows host API that refuses a rate the hardware does not natively
+    support. MME and DirectSound are compatibility shims and resample silently, which is why
+    they open at 16 kHz on any device and why this never came up until the wake device was
+    pinned to WASAPI (2026-08-26). The C270's native rate is 48000; `SAMPLE_RATE_HZ` is 16000,
+    because that is what openWakeWord's models take.
+
+    `auto_convert` turns on WASAPI's own sample-rate conversion. So the honest accounting is
+    that this costs a resample — the same one MME was doing invisibly — and WASAPI's remaining
+    advantages are that it is not a shim and that its converter is the better of the two. An
+    earlier version of `docs/DEPLOY.md` claimed WASAPI avoided a resample entirely by taking
+    48000 and decimating 3:1. **That was wrong**: nothing in this file decimates, and the
+    stream would not have opened to try.
+
+    Returns None off Windows and for every other host API, so this is a no-op everywhere it is
+    not needed rather than a branch the caller has to think about.
+    """
+    import sounddevice as sd
+
+    if not hasattr(sd, "WasapiSettings"):
+        return None
+    try:
+        info = sd.query_devices(device if device not in ("", None) else None, "input")
+        host = sd.query_hostapis(info["hostapi"])["name"]
+    except Exception:                                                  # noqa: BLE001
+        # A device that cannot be queried is a device the InputStream below will reject with a
+        # better message than anything this helper could invent.
+        return None
+    return sd.WasapiSettings(auto_convert=True) if "WASAPI" in host.upper() else None
+
+
 def mic_frames(device: str | int | None = None) -> Iterator[np.ndarray]:
     """Yield frames from a live microphone until the caller stops consuming.
 
@@ -308,6 +347,7 @@ def mic_frames(device: str | int | None = None) -> Iterator[np.ndarray]:
         dtype="int16",
         blocksize=FRAME_SAMPLES,
         device=device if device not in ("", None) else None,
+        extra_settings=_wasapi_settings(device),
     ) as stream:
         LOG.info("listening at %dHz on %s", SAMPLE_RATE_HZ, stream.device)
         while True:

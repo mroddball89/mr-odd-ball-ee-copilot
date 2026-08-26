@@ -42,6 +42,12 @@ data/projects/**
 !data/projects/
 !data/projects/.gitkeep
 
+# Frames grabbed by tools/screen_capture.py when LB asks what is on his screen. His desktop,
+# which may have anything on it — this is the one ignore rule in the file that is about privacy
+# rather than about size or rebuildability. Kept on disk (see KEEP_FRAMES) so he can open the
+# exact image that was sent to Gemini; never committed.
+data/screen/
+
 # Datasheet PDFs and scratch downloads — large, and not ours to redistribute.
 raw_downloads/
 data/**/*.pdf
@@ -67,3 +73,34 @@ install.log
 # The gesture sidecar venv (tools/install_gesture_venv.sh) — a Python 3.12 interpreter and
 # mediapipe, ~400MB, rebuildable in two minutes. Built on the box; wheels are arch-specific.
 .venv-gesture/
+
+# =========================================================================================
+# Runtime output — his voice, his logs, his desktop. Added 2026-08-26, and the first two
+# were found by listing what `git add` would actually stage rather than by trusting that
+# nothing new had appeared.
+# =========================================================================================
+
+# RECORDINGS OF LB'S VOICE. `main.py --save-captures` writes one WAV per utterance, and the
+# FILENAME IS A TRANSCRIPT — `162315_family-home--yes--k-t-o-p--3-nsu-5dk-.wav`. So this
+# directory leaks twice over: the audio is his voice, and the file listing is what he said,
+# readable without downloading anything.
+#
+# There were 22 of them sitting untracked when the first push was prepared. Nothing had gone
+# wrong yet; nothing had stopped it either, which is the same position `data/screen/` was in
+# before somebody thought about it.
+#
+# The directory is kept so `--save-captures` has somewhere to write on a fresh clone.
+captures/**
+!captures/
+!captures/.gitkeep
+
+# Runtime logs from config/start_oddball.bat. They carry stack traces, file paths and
+# whatever the assistant printed — none of it useful in a diff, all of it changing on every
+# start, and a log is not source.
+data/oddball.log
+data/face.log
+*.log
+
+# The remembered window size (hud/float.py, Ctrl+/Ctrl-). Per-machine state, and committing
+# it would mean one person's screen deciding everyone else's default.
+data/face_scale

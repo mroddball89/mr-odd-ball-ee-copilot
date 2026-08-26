@@ -647,3 +647,151 @@ depend on makes every two-word query match too much, to solve a problem one line
 
 And test findability against the real searcher, not against the string. `"late policy" in note`
 and `read_from_vault("late policy")` are different assertions, and only the second is the feature.
+
+---
+
+## L21 — A fallback must not share a shutdown signal with the thing it is a fallback for
+
+The typed chat channel exists because the microphone does not work: measured 2026-08-19, wake
+utterances peaked 0.17–0.28 against a 0.76 threshold. `engine/run_voice.py` says so in a comment
+directly above the code — *"Typing is the channel that works when the microphone does not."*
+
+That channel looped on `while not stop.is_set()`. And `_listen_thread` calls `stop.set()` when
+the audio device goes away, which is correct for everything that reads audio.
+
+Measured 2026-08-24: the C270's microphone stopped enumerating. `mic_frames` raised
+`no such input device 'C270'` **0.08 seconds after start**, `stop` was set, and the typed channel
+exited before it had drained a single message. The WebSocket stayed up, the panel kept accepting
+text, his face kept animating, and every typed line went nowhere. 8 hours later the log held
+24 spoken turns and **zero** typed lines.
+
+**Why:** one event carried two meanings — "stop pulling frames" and "the process is ending". They
+agree until the day the microphone dies on its own, which is the one day the difference decides
+whether the fallback runs. The name `stop` is what hid it: it reads as belonging to everything.
+
+**How to apply:** when you write a fallback, name the thing it is a fallback FOR, then check the
+fallback does not depend on it — not just in the obvious place (does it read audio? no) but
+through shared events, shared threads, shared queues and shared shutdown paths. A dependency that
+only matters during failure is invisible during success, and success is when you are looking.
+
+The fix was to split the event: `stop` ends the audio threads, `closing` ends the typed channel,
+and only the shutdown path sets `closing`. Two meanings, two names.
+
+## L22 — A new persistent file makes every existing harness a writer to it
+
+**What happened:** `vault/reflections.md` is written by `Engine.ask` whenever a turn fails. The
+new harness for it, `tools/verify_reflections.py`, redirected the ledger to a temp directory
+before writing a single entry — carefully, deliberately, because `tools/verify_engine.py` already
+says in its own comments that *"a test that edits production data is a test nobody runs twice"*.
+
+Then `tools/verify_engine.py` was run. Its section 5 drives model failures **on purpose** to check
+that failure lines name the right layer. Every one of those deliberate 400s was appended to LB's
+real ledger — and from there injected into every agent prompt as something that had "gone wrong".
+Two junk entries, discovered only by listing the ledger at the end of the session.
+
+The new harness was careful. The old one could not have been: it was written before the file it
+was now writing to existed.
+
+**Why:** adding a write to a shared code path retroactively changes what every existing test does.
+`verify_engine.py` was not modified, was not wrong when it was written, and started corrupting
+production data anyway — because `Engine.ask` gained a side effect underneath it. The blast radius
+of a new persistent file is not "the code that writes it", it is **every path that reaches that
+code**, including the ones already written and already passing.
+
+It is worse than an ordinary side effect, too, because this file feeds back into the prompt: a
+test's deliberate failures become the assistant's beliefs about its own history.
+
+**How to apply:** when you add a file that code on a hot path writes to, do not stop at redirecting
+it in the new harness. Grep for every harness that can reach the writing path — here, anything
+importing `engine.core`, `agents/os_agent.py` or `agents/screen_agent.py` — and give the file
+**one** override they can all use, rather than monkeypatching the module in each of them:
+
+```python
+VAULT_DIR = Path(os.environ.get("ODDBALL_VAULT_DIR")
+                 or Path(__file__).resolve().parents[1] / "vault")
+```
+
+then one line at the top of each harness, above every `tools/` import, because the module reads
+its location once at import time:
+
+```python
+os.environ.setdefault("ODDBALL_VAULT_DIR", tempfile.mkdtemp(prefix="oddball-harness-vault-"))
+```
+
+Set it at module scope, never inside the section that needs it. The leak is always in whichever
+section runs first, which is never the section you are adding — `verify_launch.py` leaked from a
+section about desktop entries that has nothing to do with ledgers.
+
+**And then check the real file.** Run the whole sweep, clearing between harnesses, and assert both
+ledgers come back empty. That is the only step that catches this class of bug: every harness was
+green the entire time it was happening, twice, and the second leak was found only by listing the
+ledger after a sweep that reported 12,220 passing checks.
+
+
+## L23 — A table selected at import makes every harness a test of the wrong platform
+
+**What happened.** Porting the assistant from the Pi to Windows, the destructive-command
+blocklist in `tools/os_controller.py` went from doing its job to doing nothing, and every
+harness in the repo stayed green through the transition. 16 of 17 destructive Windows commands
+were reported as **allowed**: `format C: /y`, `del /s /q C:\`, `Remove-Item -Recurse -Force`,
+`vssadmin delete shadows /all /quiet`, `iwr ... | iex`. Measured, not estimated —
+`media/data/2026-08-26-windows-blocklist-gap.csv`.
+
+Every pattern in `FORBIDDEN` was a Linux command shape. Point `subprocess.run(shell=True)` at
+`cmd.exe` and not one of them can match anything that shell would ever run. And `refuse()` has
+no way to say so: it does not raise, does not warn, and has no "I do not recognise this
+platform" return. It finds no match, returns `None`, and answers **allowed**.
+
+`tools/verify_os_guard.py` was green because it fed Linux strings to a Linux table. Both halves
+of that stayed true. Both halves had stopped being relevant.
+
+**Why:** a harness proves *the code you tested* works. It never proves that the code you tested
+is *the code that will run*. The moment any table, backend, path or pattern list is selected at
+import — by `sys.platform`, an environment variable, a config key, a feature flag — the harness
+has silently acquired a second job it was not written to do, and the failure is invisible from
+every direction anybody normally looks. Nothing errors. Nothing warns. The count goes up.
+
+This is the same shape as **L22**, and worth noticing that it is: there, a new persistent file
+made every existing harness a writer to it. Here, a new platform makes every existing harness a
+test of the other one. In both cases the harnesses were green throughout, and in both cases the
+only thing that found it was asking a question the harness was not asking.
+
+**How to apply:** when a module selects one of several tables at import, add the dullest
+possible check and put it FIRST, before every check about whether the patterns work:
+
+```python
+# tools/os_controller.py — the module states which table it chose
+def active_table_name() -> str:
+    return "windows" if _IS_WINDOWS else "linux"
+
+# the harness asserts the RUNNING platform got one, and that it is not empty
+check(guard.active_table_name() == ("windows" if _IS_WINDOWS else "linux"),
+      f"the loaded table is the one for {sys.platform}")
+check(len(guard.FORBIDDEN) > 0,
+      "and it is not empty — an empty table refuses nothing and reports success")
+check(guard.FORBIDDEN is not (guard._LINUX if _IS_WINDOWS else guard._WINDOWS),
+      "and it is not the OTHER platform's table, which would match nothing here")
+```
+
+Three lines, none of them clever. They are the checks that would have caught this on day one.
+
+Then **make the corpus follow the selection.** `MUST_REFUSE` and `MUST_ALLOW` are selected by
+platform now, in the same way and for the same reason `FORBIDDEN` is: a test written in a
+language the shell does not speak is not a weak test, it is not a test.
+
+**Two smaller rules from the same day.**
+
+*A probe must be a thing the running platform genuinely refuses.* Section 4 of that harness
+called `run_command("rm -rf /")` on a hardcoded literal. On Windows that is not a refusal — so
+it fell through to `subprocess.run` and **the harness executed a command**, against the promise
+in its own first line. It surfaced as two ordinary-looking assertion failures somewhere else
+entirely. Generalised: a harness that reaches real execution when a guard MISSES has no way to
+report that the guard missed. Parameterise the probe from the same selection the table uses.
+
+*Do not translate the other platform's table.* It was tried on paper and is wrong in both
+directions: `vssadmin delete shadows` and `iwr | iex` have no Linux equivalent to translate
+FROM, and half the Linux rows (`mkfs`, `dd of=/dev/`, `chown -R`) have no Windows meaning to
+translate TO. Write the new one against the new platform's shapes, keep the old one verbatim,
+and select. Do not merge them either — on Windows the Linux `rm` row starts matching inside
+unrelated commands and names the wrong cause, and a refusal that gives the wrong reason is how
+a guard gets switched off in frustration.

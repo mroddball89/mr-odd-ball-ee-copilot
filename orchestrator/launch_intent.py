@@ -104,6 +104,14 @@ def _strip(text: str, phrase: str) -> str:
 DESCRIPTOR: frozenset[str] = frozenset({
     "internet", "web", "browser", "editor", "terminal", "calculator", "manager",
     "app", "application", "program", "window", "file", "files", "text", "document",
+    # Added 2026-08-26, when `_targets` began admitting distinctive single words from a
+    # multi-word Name. These are the ones that are NOT distinctive: "player" is the last word
+    # of "VLC media player" and the harness caught it immediately — "open the player" started
+    # claiming to be a launch of VLC, when it is a phrase that names a KIND of program and
+    # should reach the paid router or a question. "viewer" is the same shape, from "KiCad
+    # Gerber Viewer". Both are still reachable as two-word phrases ("media player",
+    # "gerber viewer"), which is how somebody actually says them.
+    "player", "viewer", "suite", "tool", "tools", "client", "reader",
 })
 
 
@@ -170,18 +178,35 @@ def _targets(catalogue, roles) -> tuple[str, ...]:
     # "schematic editor standalone" — a phrase nobody says. Every contiguous run is the general
     # form, and the qualifier in brackets stops mattering.
     #
-    # **Two words minimum.** A single word is "editor", "manager", "files", "calculator" —
-    # exactly what `ROLES` owns and deliberately maps to a CATEGORY rather than to whichever
-    # app happens to contain it. Adding them here would let "open the editor" pick KiCad's
-    # schematic editor over a text editor, which is the ambiguity ROLES exists to resolve.
+    # **Two words minimum, with one exception added 2026-08-26.**
     #
-    # Ambiguity is still never guessed — `resolve()` returns every hit and `propose_launch`
-    # asks. This widens what can be NAMED, not what can be assumed.
+    # The rule: a single word is "editor", "manager", "files", "calculator" — exactly what
+    # `ROLES` owns and deliberately maps to a CATEGORY rather than to whichever app happens to
+    # contain it. Adding those here would let "open the editor" pick KiCad's schematic editor
+    # over a text editor, which is the ambiguity ROLES exists to resolve.
+    #
+    # The exception, and why the Windows port forced it: **`entry_id` used to supply the
+    # distinctive single words for free, and on Windows it no longer does.** On the Pi,
+    # `vlc.desktop` gave `entry_id == "vlc"` and `code.desktop` gave `"code"` — one stable
+    # lowercase token per app, already in `phrases` two lines above. A Windows shortcut has no
+    # such id: `entry_id` is derived from the file's path, so "VLC media player.lnk" yields
+    # "vlc media player" and the bare word "vlc" appears nowhere. The regression was real and
+    # measured — "fire up vlc" and "open code" both stopped being free launches and fell
+    # through to the paid router, for no reason a person could see.
+    #
+    # So a single word is admitted when it is NOT one of the words that means a KIND of thing.
+    # `DESCRIPTOR` and `ROLES` are exactly that vocabulary and they already exist, so this
+    # borrows the repo's own lists rather than inventing a third: "vlc", "code", "thonny" and
+    # "firefox" get in; "editor", "browser", "files" and "calculator" are still refused, and
+    # still belong to ROLES. Nothing about the ambiguity story changes — `resolve()` returns
+    # every hit and `propose_launch` asks. This widens what can be NAMED, not what is assumed.
     for app in catalogue:
         words = _norm(app.name).split()
         for size in range(2, len(words)):
             for i in range(len(words) - size + 1):
                 phrases.add(" ".join(words[i:i + size]))
+        if len(words) > 1:
+            phrases |= {w for w in words if w not in DESCRIPTOR and w not in roles}
 
     return tuple(sorted((p for p in phrases if p), key=len, reverse=True))
 

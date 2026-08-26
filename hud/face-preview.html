@@ -149,14 +149,27 @@
     min-width: 0;                 /* or a wide <pre> forces the whole column to scroll */
     min-height: 0;                /* ...and lets #chatLog actually scroll instead of growing */
     flex-direction: column;
-    /* 50% opacity, on the BACKGROUND only — never `opacity: 0.5` on the element.
-       That would fade the text and the code with it, and a half-transparent register value
-       over a wallpaper is unreadable at exactly the moment it matters. The box gets to be
-       see-through; what he is telling you does not. */
-    background: rgba(16, 20, 28, 0.5);
-    /* The blur is what makes 50% survivable. Without it the wallpaper's own contrast shows
-       straight through the text; with it the backdrop is muted to a wash and the foreground
-       stays legible. If the Pi's compositor ever drops backdrop-filter, raise the 0.5. */
+    /* Transparency on the BACKGROUND only — never `opacity` on the element. That would fade
+       the text and the code with it, and a half-transparent register value over a wallpaper
+       is unreadable at exactly the moment it matters. The box gets to be see-through; what
+       he is telling you does not.
+
+       `--chat-dim` is set from `?dim=` (see the script), default 0.30. It was a hardcoded
+       0.5 until 2026-08-26; it is a variable now because the right value depends on the
+       wallpaper behind it, which is not something this file can know.
+
+       ## The blur does LESS than it used to, and that is worth knowing before tuning
+
+       `backdrop-filter` blurs what is behind the element WITHIN THE PAGE. On an opaque
+       window that is the page's own background and the effect is real. On a TRANSPARENT
+       window — which is how he now runs — there is nothing behind the panel to sample: the
+       desktop belongs to the compositor, not to the document, and the page cannot reach it.
+
+       So on a transparent window the blur is close to a no-op and legibility rests entirely
+       on `--chat-dim`. That is the reason for the floor in the script: below about 0.15 the
+       wallpaper's own contrast comes straight through the text. It is kept because it costs
+       nothing and does the real thing again the moment the window is opaque. */
+    background: rgba(16, 20, 28, var(--chat-dim, 0.30));
     backdrop-filter: blur(14px);
     border: 1px solid rgba(255,255,255,0.14);
     border-radius: 14px;
@@ -820,6 +833,26 @@
   // Same mechanism as solo and for the same reason: one file, two behaviours, no kiosk copy
   // drifting away from the rig everything is verified against.
   if (flagOn("chat")) document.documentElement.dataset.chat = "on";
+
+  // ---- ?dim= : how opaque the chat panel's own background is, 0 (invisible) to 1 (solid).
+  // A number rather than a flag, because "as transparent as possible" is a matter of taste
+  // and of what the wallpaper behind it looks like — neither of which this file can judge.
+  //
+  // CLAMPED, with a floor that is not 0. `backdrop-filter` cannot blur the desktop behind a
+  // transparent window (see the CSS note above), so below roughly 0.15 the wallpaper's own
+  // contrast reads straight through the text and the panel stops being a panel. A value that
+  // makes the thing unusable is not a value worth honouring, so it is pulled back rather than
+  // obeyed — and NaN falls through to the default rather than to zero, because `?dim=very`
+  // should not make him disappear.
+  const dimParam = new URLSearchParams(location.search).get("dim");
+  if (dimParam !== null) {
+    const asked = parseFloat(dimParam);
+    if (Number.isFinite(asked)) {
+      const dim = Math.max(0.15, Math.min(1, asked));
+      document.documentElement.style.setProperty("--chat-dim", String(dim));
+      if (dim !== asked) console.log(`dim ${asked} clamped to ${dim}`);
+    }
+  }
 
   const $ = (id) => document.getElementById(id);
   const el = {
@@ -1587,8 +1620,48 @@
     }
   }
 
+  // The live socket — and the reason it is a variable up here rather than the parameter it was.
+  //
+  // `wireChat` runs on every `onopen`, but each block inside it is guarded by a `dataset.wired`
+  // flag so its listeners attach exactly once. That guard is right: without it every reconnect
+  // would add another submit handler and one Enter would send the same line three times. The
+  // consequence was not: the ONE handler closed over the `ws` it happened to be wired with, so
+  // after any reconnect it went on sending into the socket from the FIRST connect, for the rest
+  // of the page's life.
+  //
+  // And nothing showed. `send()` on a CLOSED socket does not throw — the spec says to discard
+  // the data — so there was no error for the `catch {}` to catch, and the line had already been
+  // echoed into the transcript by then. Typing looked like it had worked and he looked like he
+  // was ignoring it. One `systemctl restart oddball`, one Wi-Fi blink or one closed lid was
+  // enough to enter that state, and only a page reload left it. This is the whole of "typing
+  // doesn't always trigger a response".
+  let socket = null;
+
+  /** Send one message to the engine. Returns whether it actually went. */
+  function send(msg) {
+    // `readyState` is the test, not try/catch. CONNECTING throws InvalidStateError, but CLOSING
+    // and CLOSED discard silently — only one of the two failures is catchable, so catching is
+    // not enough to know a message was delivered. Everything below relies on this return value,
+    // which is why it is a boolean and not a swallowed exception.
+    if (!socket || socket.readyState !== WebSocket.OPEN) return false;
+    try { socket.send(JSON.stringify(msg)); return true; } catch { return false; }
+  }
+
+  /** Say so, on a card, when something did not reach him. `tail` is what to do about it. */
+  function notConnected(what, tail) {
+    chatMessage({ type: "card", value: {
+      kind: "error", title: "Not connected",
+      body: `He did not receive:\n${what}\n\n` +
+            `The LINK indicator reads "–", and the page retries every ` +
+            `${(LINK_RETRY_MS / 1000).toFixed(0)}s. ` +
+            (tail || `Your text is still in the box — press Enter again once it reads "live".`),
+    } });
+  }
+
   function wireChat(ws) {
-    const send = (msg) => { try { ws.send(JSON.stringify(msg)); } catch {} };
+    // Every connect, and above the wiring guards: the listeners are attached once, but the
+    // socket they send into is whichever one is live right now.
+    socket = ws;
 
     const form = $("chatForm");
     if (form && !form.dataset.wired) {
@@ -1598,11 +1671,21 @@
         const input = $("chatInput");
         const text = (input.value || "").trim();
         if (!text) return;
+        // Sent BEFORE the box is cleared and before the line is echoed. The old order did both
+        // first and dropped the send into an empty catch, so a question that never left the
+        // browser was indistinguishable on screen from one he had received and ignored — and
+        // the text was gone from the box too, so retrying meant retyping it.
+        if (!send({ type: "text", value: text })) return void notConnected(text);
         input.value = "";
         // Echoed locally so typing feels immediate. The engine echoes the SPOKEN transcript
         // for voice turns; a typed one never goes through STT, so this is its only echo.
         chatMessage({ type: "transcript", role: "you", value: text });
-        send({ type: "text", value: text });
+        // The thinking pose on this frame rather than one network round trip later.
+        // `engine/turn.py:answer_typed` sets it too and that one is the authority; this is the
+        // optimistic half, and it costs nothing when they agree. A typed WAKE phrase or
+        // dismissal is not a question — the engine answers those with `listening` or the
+        // resting state a moment later, which simply overrides this.
+        setState("thinking");
       });
     }
 
@@ -1611,8 +1694,14 @@
       if (!btn || btn.dataset.wired) continue;
       btn.dataset.wired = "1";
       btn.addEventListener("click", () => {
+        // The box is hidden only once the click is actually on the wire. Hiding it first took
+        // the decision off the screen while the gate went on waiting for an answer it was never
+        // going to get — and a gate that gets no answer declines, in silence.
+        if (!send({ type: "approve", value })) {
+          return void notConnected(value ? "Approve" : "Deny",
+            `The buttons are still here — click again once it reads "live".`);
+        }
         $("chatPending").hidden = true;
-        send({ type: "approve", value });
       });
     }
 
@@ -1644,8 +1733,17 @@
         // Injected as though LB had typed it. The local echo is the same one the form does:
         // a typed line never goes through STT, so nothing on the other end will echo it back.
         const line = `I just uploaded ${out.filename}.`;
+        // The file is already in the inbox at this point — the POST succeeded. If the sentence
+        // that tells him about it cannot be sent, say which of the two happened, because "the
+        // upload worked but he was never told" is a different problem from "the upload failed"
+        // and it is fixed by a different action.
+        if (!send({ type: "text", value: line })) {
+          notConnected(line, `${out.filename} did reach the inbox — ask him to file it once ` +
+                             `the link is back.`);
+          return;
+        }
         chatMessage({ type: "transcript", role: "you", value: line });
-        send({ type: "text", value: line });
+        setState("thinking");
       } catch (err) {
         // On a card, not as a transcript line. It is not something he said, and an upload that
         // failed silently is an upload LB believes went through.

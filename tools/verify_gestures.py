@@ -48,6 +48,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# These ledgers are written from `Engine.ask` and `agents/os_agent.py`, so this harness writes
+# to them the moment it drives a failure — even though it was written before they existed and
+# does not mention them. Redirected to a temp directory BEFORE anything under `tools/` is
+# imported, because both read their location at import time. tasks/lessons.md L22.
+import os                                                             # noqa: E402
+import tempfile                                                       # noqa: E402
+
+os.environ.setdefault("ODDBALL_VAULT_DIR",
+                      tempfile.mkdtemp(prefix="oddball-harness-vault-"))
+
+
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")

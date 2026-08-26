@@ -16,6 +16,12 @@ pydantic>=2.13                       # RouteDecision — the router's structured
 python-dotenv>=1.2                   # GOOGLE_API_KEY out of .env, never out of source
 
 # --- Web agent's loaders, and the text splitter -----------------------------------------
+langchain-core>=0.3                  # @tool, ChatPromptTemplate — imported by name in
+                                     # every agent, and previously only ever arrived
+                                     # TRANSITIVELY via langchain-google-genai. Same
+                                     # shape as the pypdf entry below: a dependency you
+                                     # rely on and do not name is one that disappears
+                                     # when the package that happened to pull it changes.
 langchain-community>=0.4             # DuckDuckGoSearchRun, PyPDFDirectoryLoader
 langchain-text-splitters>=1.1        # RecursiveCharacterTextSplitter
 
@@ -106,29 +112,66 @@ pypdf>=4.0
 # and bouncing now animate the real face and need no new dependency at all.
 # =======================================================================================
 
-# Gesture approval — a thumbs up at the camera instead of typing y (tools/gesture_control.py).
+# Gestures — the camera pointer and the thumbs-up approval.
 #
-# NOTHING IS LISTED HERE, AND THAT IS THE ENTRY. Corrected twice; see D14 then D15.
-#
-# mediapipe does not go in the main venv. It goes in a SEPARATE Python 3.12 venv built by
-#     bash tools/install_gesture_venv.sh
-# and `tools/gesture_control.py` shells out to it for one token per approval.
-#
-# Why, measured on the Pi 2026-08-22:
+# **This block used to say "NOTHING IS LISTED HERE, AND THAT IS THE ENTRY", and it was right
+# at the time.** On the Pi, mediapipe went into a SEPARATE Python 3.12 venv built by
+# `tools/install_gesture_venv.sh`, and `tools/gesture_control.py` shelled out to it for one
+# token per approval. The reason, measured on the Pi 2026-08-22:
 #
 #   mediapipe 1.0.1   on py3.13   installs cleanly, then SIGKILLs at XNNPACK delegate
 #                                 creation. Every vision task. No OOM, 6.4 GB free.
 #   mediapipe 0.10.18 on py3.12   works. Both its APIs work. 88 ms/frame.
 #   mediapipe 0.10.20+            publishes no aarch64 wheel at all.
 #
-# So the only mediapipe that runs here needs a <=3.12 interpreter, and the main venv is 3.13.5
-# because faster-whisper, ctranslate2, piper and onnxruntime were all verified there. Moving
-# 1.9 GB of working audio stack to chase one leaf feature is the wrong trade; a 400 MB sidecar
-# venv is the right one.
+# The only mediapipe that ran there needed a <=3.12 interpreter and the Pi's main venv was
+# 3.13.5, so a 400 MB sidecar was the right trade against moving 1.9 GB of working audio stack.
 #
-# Installing mediapipe into THIS venv is actively harmful, not merely useless: it drags in
-# opencv-contrib-python (111 MB + deps) and makes `--backend` report a backend that will kill
-# the process the moment it is used.
+# **None of that applies here and the whole argument is void.** This workstation is Python
+# 3.12.10, so mediapipe and opencv import in the main interpreter — verified 2026-08-26,
+# `python tools/gesture_pointer.py --check` reports `detector tasks` with no sidecar at all.
+# There is no aarch64 wheel question because there is no aarch64. `install_gesture_venv.sh` was
+# deleted with the rest of the Pi tooling.
 #
-# The sidecar also needs a model file that pip does not carry, 7.8 MB, gitignored:
+# So they are declared, like everything else. The model file pip does not carry is still
+# needed, 7.8 MB, gitignored:
 #     python tools/gesture_control.py --fetch-model
+mediapipe>=0.10.18,<0.11             # hand landmarks. Needs a <=3.12 interpreter; this box is 3.12.10
+opencv-python>=4.10                  # the camera, and the frame conversion feeding mediapipe
+
+# =======================================================================================
+# The face — his window on the desktop (hud/float.py). Added 2026-08-26.
+#
+# PyQt6-WebEngine and NOT pywebview, and the reason is one property rather than taste.
+# `--transparent` is load-bearing: the solo look is the character composited onto the desktop
+# with no rectangle seam, which needs the page transparent AND the window transparent
+# together. pywebview on Windows drives WebView2, whose transparency is a
+# `DefaultBackgroundColor` that does not reliably reach a layered top-level window. Qt does it
+# directly — `WA_TranslucentBackground` plus `page().setBackgroundColor`.
+#
+# It is ~150 MB, which is the single largest thing in this file, and on the Pi that trade
+# could never have been made. It is the first place the new hardware actually bought something.
+#
+# This replaces GTK4 + WebKitGTK, which was never a pip dependency at all — it was
+# `sudo apt install gir1.2-gtk-4.0 gir1.2-webkit-6.0 libwebkitgtk-6.0-4 python3-gi`, because
+# PyGObject is a system package on Debian and building it from source on the Pi is a fight
+# nobody needs. On Windows there is no system package and no fight; it is a wheel.
+# =======================================================================================
+PyQt6>=6.7                           # the window, its flags, and the escape-hatch shortcuts
+PyQt6-WebEngine>=6.7                 # the WebView that renders hud/face-preview.html
+
+# =======================================================================================
+# The GLM / OpenRouter benchmark (tools/benchmark_glm_vs_gemini.py). Added 2026-08-24.
+#
+# NOT INSTALLED BY DEFAULT, AND THAT IS THE ENTRY — same convention as the mediapipe block
+# above. That module imports `openai` by name, so it is named here; it is left commented
+# because nothing on the turn path touches it and the Pi should not carry a second SDK for a
+# measurement tool. The benchmark reports it as UNAVAILABLE rather than crashing when absent.
+#
+#     pip install "openai>=2.0"          # only on the box you are benchmarking from
+#
+# `openai` is the CLIENT, not the provider: OpenRouter serves an OpenAI-compatible API, so the
+# whole GLM integration is base_url="https://openrouter.ai/api/v1" plus OPENROUTER_API_KEY.
+# The key is a CREDENTIAL and lives in .env, which is gitignored and excluded from the deploy.
+#
+# openai>=2.0

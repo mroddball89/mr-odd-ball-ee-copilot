@@ -1,0 +1,34 @@
+{
+  "title": "The destructive-command blocklist was 94% ineffective on Windows, and every harness was green",
+  "taken": "2026-08-26T07:40-04:00",
+  "author": "LB",
+  "hardware": "AMD Ryzen 7 5700X, 32 GB RAM, RX 6600 8GB, Windows 11 Home 10.0.26200, Python 3.12.10",
+  "host": "DESKTOP-3NFU5EK",
+  "conditions": {
+    "branch": "oddball-integration",
+    "measured_against": "tools/os_controller.py FORBIDDEN as it stood before the Windows port, i.e. the Pi's table unchanged",
+    "corpus": "17 destructive commands spanning cmd.exe and PowerShell, chosen as the shapes a confused model actually writes on Windows rather than as translations of the Linux list",
+    "shell_assumption": "subprocess.run(shell=True) on Windows runs cmd.exe via COMSPEC; the model writes PowerShell regardless, so both are represented",
+    "path_check": "rm, dd, mkfs, chmod, bash, sh, wget are NOT on this machine's PATH; curl.exe IS (C:\\Windows\\System32), which is why the Unix spelling of a download still had to be covered"
+  },
+  "what_this_shows": "Migrating the OS route from the Raspberry Pi to Windows silently disables the safety backstop that sits underneath the human approval gate. Every pattern in the blocklist is a Linux command shape — `rm -rf`, `mkfs`, `dd of=/dev/`, `shred`, `chmod 777`, `curl | sh` — and none of them can match anything a Windows shell would run. 16 of 17 destructive Windows commands were reported as ALLOWED, including `format C: /y`, `del /s /q C:\\`, `Remove-Item -Recurse -Force`, `vssadmin delete shadows /all /quiet` and `iwr ... | iex`. The single refusal, `shutdown /s /t 0`, was luck: `shutdown` happens to be spelled the same on both operating systems.",
+  "why_it_matters": "The failure is invisible from every direction anybody normally looks. `refuse()` does not raise, does not warn, and does not return 'I do not know' — it finds no match, returns None, and answers 'allowed'. tools/verify_os_guard.py was green throughout, because it tested Linux strings against a Linux table and both halves of that were still true and had stopped being relevant. This is the exact shape os_controller.py's own docstring was written about: a confident success, which is the one shape nobody escalates. A blocklist is the weaker half of the approval pair by design, but a blocklist that matches nothing is not a weak guard, it is the absence of one, and the system reports no difference between those two states.",
+  "before_after": {
+    "before": "16 of 17 allowed (94%), 17-pattern Linux table, verify_os_guard.py green at 75 checks",
+    "after": "0 of 17 allowed (0%), 33-pattern Windows table selected at import, verify_os_guard.py green at 94 checks including a new section 0 that asserts the running platform HAS a table",
+    "false_positives_after": "0 of 28 ordinary commands wrongly refused, including six deliberate near-misses (`Remove-Item build\\temp.obj`, `del scratch.txt`, `Get-Help Remove-Item`, `Get-Command shutdown`, `Get-Content .\\formatting_notes.md`, `netsh advfirewall show allprofiles`)"
+  },
+  "what_didnt_work": [
+    "Translating the Linux table pattern-by-pattern. It is wrong in both directions: `vssadmin delete shadows` and `iwr | iex` have no Linux equivalent to translate FROM, and roughly half the Linux entries (`mkfs`, `dd of=/dev/`, `chown -R`) have no Windows meaning to translate TO. The Windows table was written fresh against Windows shapes.",
+    "Merging the two tables into one. On Windows the Linux `rm` row starts matching inside unrelated commands and prints the wrong cause, and a refusal that names the wrong reason is how a guard gets switched off in frustration. They are selected, not combined.",
+    "`\\bfirewall\\b` in the netsh pattern. There is no word boundary between 'adv' and 'firewall', so it missed `netsh advfirewall set allprofiles state off` — the modern spelling, and the only one anybody types. Caught by the harness; the first version was wrong."
+  ],
+  "second_finding": "Parameterising the harness exposed a smaller bug in it. Section 4 called `run_command(\"rm -rf /\")` on a hardcoded literal. On Windows that string is not refused, so `run_command` fell through to `subprocess.run` and the harness EXECUTED a command — against the promise in its own first line, 'Nothing is executed by this harness.' It surfaced only as two ordinary assertion failures. The general lesson is that a harness which reaches real execution when a guard MISSES has no way to report that the guard missed; it just goes red somewhere unrelated.",
+  "caveat": "This is a measurement of coverage against a 17-command corpus, not a proof of completeness. A blocklist cannot enumerate every way to destroy a Windows filesystem and this one does not claim to — os_controller.py's docstring is explicit that it stops the realistic failure (a model that has misunderstood the question writing something sweeping and plausible, and a tired person approving it) and not a determined adversary. The corpus is also this machine's PATH on this date: if Git for Windows' usr/bin is later added to PATH, `rm -rf /` becomes reachable from cmd.exe and belongs in the Windows table too.",
+  "verified_by": [
+    "python tools/verify_os_guard.py          94/94",
+    "python tools/verify_os_guard.py --probe  39/39 would run with the list emptied",
+    "python tools/os_controller.py            table: windows (33 patterns)"
+  ],
+  "related": ["tools/os_controller.py", "tools/verify_os_guard.py", "tasks/todo.md — the Windows port"]
+}

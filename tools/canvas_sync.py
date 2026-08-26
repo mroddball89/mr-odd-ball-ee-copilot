@@ -365,8 +365,13 @@ def sync(url: str | None = None, since_days: int = DEFAULT_SINCE_DAYS,
 
 def _summarise(stats: dict) -> str:
     """One or two sentences about a completed sync, for LB rather than for a log."""
-    bits = [f"Synced {stats['kept']} deadline(s) from Canvas across "
-            f"{stats['courses']} course(s)."]
+    # "across 2 course(s)" was read as "you have 2 classes" by someone enrolled in four, which is
+    # a fair reading of what it said. The count is of courses with DATED WORK in the feed, and a
+    # sentence that does not say so invites exactly that inference.
+    bits = [f"Synced {stats['kept']} deadline(s) from Canvas across {stats['courses']} "
+            f"course(s) that currently have dated work in Canvas. A class that has not posted "
+            f"anything with a due date yet does not appear in the feed at all, so this is not a "
+            f"count of your classes."]
     if stats.get("too_old"):
         bits.append(f"{stats['too_old']} already-past event(s) were left out.")
     if stats.get("dropped_syllabus"):

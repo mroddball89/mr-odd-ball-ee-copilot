@@ -1265,3 +1265,789 @@ Not by policy — by what the device can emit.
       pointer event for it. Zoom is a plain wheel, deliberately: Ctrl+scroll would need a
       keyboard capability and that costs the first guarantee.
 - [ ] The two-hand SCALE path has never been exercised on real hands with the pointer running.
+
+---
+
+## Self-awareness and the correction loop (2026-08-25)
+
+LB asked for three things: let him look at the screen, let him know his own state, and let him
+learn from mistakes — his own, and the ones LB points out.
+
+### Plan
+
+- [x] `tools/reflections.py` — the mistake ledger (`vault/reflections.md`). Append, rotate,
+      read back, and match past failures against the current question.
+- [x] `tools/corrections.py` — LB's standing rules (`vault/corrections.md`), plus the free
+      detector that decides a line is a correction rather than a question.
+- [x] `tools/system_state.py` — CPU temperature, load, memory, disk, uptime, which ports are
+      listening, and which capabilities are actually installed. No model, no subprocess.
+- [x] `tools/self_context.py` — compose the three into one bounded block, in priority order.
+- [x] `tools/memory_manager.py` — prepend the block in `format_memory_for_llm()`. **The one
+      seam**: every agent already calls it.
+- [x] `tools/screen_capture.py` — grim / scrot / imagemagick / gnome-screenshot / PowerShell,
+      first available wins. Downscaled JPEG, size-capped, kept on disk.
+- [x] `agents/screen_agent.py` — propose/resume pair, gated like the shell, vision model.
+- [x] `router.py` + `orchestrator/route_hint.py` — the SCREEN route, and the free hint that
+      answers "what's on my screen" without paying for a routing call.
+- [x] `engine/core.py` — intercept corrections above the router and below the gate; dispatch
+      and resume SCREEN; record exceptions and slow turns as reflections.
+- [x] `agents/os_agent.py` — record failed and refused OS actions. They never raise, so the
+      engine's exception hook cannot see them.
+- [x] `agents/quiz_agent.py` — wire it into the seam. It was the one agent that was not.
+- [x] Harnesses: `verify_corrections`, `verify_reflections`, `verify_awareness`,
+      `verify_screen`, each with a `--probe` that proves it bites.
+- [x] Update `verify_engine`, `verify_router`, `verify_agents` for the new route and path.
+- [x] `docs/DECISIONS.md` D29, `docs/DEPLOY.md`, `README.md`, and the AMSI measurement under
+      `media/data/`.
+
+### Review
+
+**What went in.** Five new modules, four new harnesses, and one changed function that reaches
+every agent. 730 checks across the affected harnesses, all green, every probe biting.
+
+**The elegant part.** There is no system prompt in this repo to inject into — seven agents each
+build their own. But all of them already call `format_memory_for_llm()`. Prepending the block
+there reaches every agent, needs no prompt template edited, and reaches the next agent written
+for free. `tools/verify_engine.py` was already monkeypatching that function, which is what
+identified it as the seam rather than a guess.
+
+**Two real bugs the harnesses found, not me.**
+
+1. `quiz_agent.py` did not call the seam function. So every standing correction LB gives would
+   have applied everywhere except quiz grading — including "always spell out the units", in the
+   one place he is being marked on units. Found by `verify_awareness.py` asserting over
+   `agents/*_agent.py` on disk rather than over a list I typed.
+2. "Don't do that" was being filed as the standing rule *"Don't do that"*. It parses as a
+   directive and it is not one — "that" has no referent once the turn scrolls away. It now reads
+   as a bare rebuke and he asks what he should have done instead, and *that* answer becomes the
+   rule. The general form: a phrase that points at the last turn is never a standing instruction.
+
+`verify_router.py` and `verify_agents.py` both went red the moment the SCREEN route existed,
+because each asserts it has been told about every route. Two harnesses doing their job, and the
+reason the new route's negatives were written before it shipped.
+
+**What didn't work, and is worth keeping.**
+
+The Windows screenshot backend — which exists only so the harness can capture a screen on the
+authoring box — was blocked by Windows Defender twice before it ran. The first fix is the one
+every source names (`-File` instead of `-Command`) and it was **not sufficient**. Bisecting found
+the trigger was the JPEG-quality encoder block, not `CopyFromScreen`, which is the call everyone
+assumes is matched. Recorded in `media/data/2026-08-25-screen-capture-amsi.csv` with the four
+variants and their byte counts, because the failure presents as a PowerShell *ParserError* and
+reads exactly like a syntax bug in code that is already correct.
+
+**The judgement call LB should overrule if he disagrees.** The screenshot is **gated by default**
+— he is asked before a frame is captured and sent. It is his desktop and it goes to Google; the
+first frame taken while building this had a browser and a chat window in it, both legible. But he
+*asked*, and a yes/no question in front of "what's on my screen" is ceremony. So
+`ODDBALL_SCREEN_CONFIRM=0` makes it instant and `ODDBALL_SCREEN=0` turns it off entirely. One
+environment variable either way.
+
+### Addendum — two things found after the code was written
+
+**The new file made every old harness a writer to it.** `Engine.ask` and `agents/os_agent.py`
+record failures to `vault/reflections.md`, and several existing harnesses drive failures on
+purpose. So `verify_engine.py` (deliberate 400s) and `verify_launch.py` (an unknown-tool path)
+were appending junk to LB's real ledger — where it would then be injected into every agent prompt
+as things that had "gone wrong". Both harnesses were green throughout; the only thing that found
+it was listing the ledger after a sweep.
+
+Fixed with one override, `ODDBALL_VAULT_DIR`, honoured by both ledgers, plus one line at the top
+of the seven harnesses that can reach a write. Written up as `tasks/lessons.md` **L22**, and the
+sweep now ends by asserting both real ledgers come back empty.
+
+**The documented CLIs did not run.** `python tools/corrections.py --list` — which DEPLOY.md and
+the README both tell LB to type — died with `ModuleNotFoundError: No module named 'orchestrator'`,
+because run as a script the file is not inside a package and the repo root is not on the path.
+Three modules now carry a `if __package__ in (None, "")` guard. All eight documented commands
+were then run and checked.
+
+### Final state
+
+```
+26 harnesses, 12,220 checks, all green
+4 new harnesses, every --probe biting
+both real ledgers empty after a full sweep
+all 8 documented CLI commands run
+```
+
+### Still open
+
+- [ ] **None of this has run on the Pi.** The screen path is proven on Windows through the
+      PowerShell backend; `grim` is selected by the same code and has not been exercised under
+      labwc. That is the check that matters and it is LB's to make: `sudo apt install grim`,
+      then `python tools/verify_screen.py --capture`.
+- [ ] The vision model shares `AGENT_MODEL`'s daily bucket. `ODDBALL_VISION_MODEL` points it at
+      its own 20 requests a day with no code change, and whether that is worth doing depends on
+      how often he actually asks.
+- [ ] `SLOW_TURN_S = 45` is a first guess, unlike the other constants here. It should be set from
+      a week of real `Turnlog` totals on the Pi, not from arithmetic about the router's 9.8 s.
+- [ ] A correction is never *withdrawn* except by editing `vault/corrections.md` by hand. If LB
+      finds himself doing that often, "forget that rule" is the missing verb.
+- [ ] Nothing yet reflects on a *wrong* answer that did not fail — the case where he answers
+      confidently and is simply incorrect. That is what the correction ledger is for, and it
+      needs LB to notice. There is no automatic path to it and probably should not be.
+
+---
+
+## The Windows port — off the Pi, onto the workstation (2026-08-26)
+
+Target: AMD Ryzen 7 5700X, 32 GB RAM, RX 6600, Windows 11. Branch `oddball-integration`.
+Performance constraints are gone; **platform constraints replace them, and they are not the
+same shape.** The Pi's limits were about how much work fit in the budget. Windows' limits are
+about what the operating system will let a process do to another process, and three of the
+five areas below are load-bearing safety properties rather than features.
+
+### What is already portable, and needs nothing
+
+Checked before planning any work, because the fastest port is the one already done:
+
+| Layer | State |
+|---|---|
+| `audio/say.py`, `wake.py`, `stt.py`, `listen.py` | **Already cross-platform.** `sounddevice` is PortAudio; `say.py` already carries Windows-specific handling for MME/DirectSound/WASAPI host-API mismatches and `check_output_settings` resampling. Piper and faster-whisper are pip wheels on both. |
+| `tools/screen_capture.py` | Already has a `_powershell_capture` backend, selected by the same code that selects `grim`. |
+| `engine/`, `agents/`, `orchestrator/`, `router.py` | No OS calls on the turn path. |
+| `main.py` | Already reconfigures stdout to UTF-8 for cp1252 consoles. |
+
+So area 5 (media and audio) is **already complete** and the work there is verification, not code.
+
+### The five areas, re-scoped
+
+#### 1. Autostart — `config/oddball.service` to `config/start_oddball.vbs`
+
+Dead code, as stated. Replaced by a `.bat` that starts the backend and the face, plus a `.vbs`
+one-liner that runs the `.bat` with no console window — the batch file alone leaves a black
+`cmd.exe` rectangle on screen forever, which is not a background service.
+
+- [ ] `config/start_oddball.bat` — starts `main.py` and `hud/float.py`, logs to `data/`
+- [ ] `config/start_oddball.vbs` — the silent wrapper for `shell:startup`
+- [ ] `tools/install_autostart.ps1` — install / remove / status, mirroring `install_autostart.sh`
+- [ ] Delete `config/oddball.service`, `config/oddball-face.desktop`, `tools/wait_for_display.sh`
+
+**The boot race does not disappear, it changes shape.** `hud/float.py`'s `_keep_trying()` exists
+because the face's HTTP GET raced the server's bind (2026-08-22). `shell:startup` gives even
+less ordering than systemd did, so `_keep_trying` is carried across unchanged and is the *only*
+thing preventing the same bug. Nothing in this port may remove it.
+
+#### 2. The face — GTK4/WebKitGTK to PyQt6 + QtWebEngine
+
+`hud/float.py` is GTK4 + WebKitGTK. Neither exists usefully on Windows.
+
+**PyQt6-WebEngine, not pywebview.** The decision turns on one property: `--transparent` is
+load-bearing, not cosmetic. The solo look is the character composited onto the desktop with no
+rectangle seam, and it needs the *page* transparent and the *window* transparent together.
+pywebview on Windows drives WebView2, whose transparency story is a `DefaultBackgroundColor`
+that does not reliably reach a layered top-level window. Qt does it directly:
+`WA_TranslucentBackground` on the window, `page().setBackgroundColor(Qt.transparent)` on the
+view. PyQt6 is already installed on this box; only `PyQt6-WebEngine` is missing.
+
+Mapping, one to one:
+
+| GTK4 / labwc | Qt6 / Win32 |
+|---|---|
+| `win.set_decorated(False)` | `Qt.FramelessWindowHint` |
+| labwc rule: always-on-top | `Qt.WindowStaysOnTopHint` (`WS_EX_TOPMOST`) |
+| labwc rule: skip taskbar | `Qt.Tool` |
+| `view.set_background_color(RGBA 0,0,0,0)` | `WA_TranslucentBackground` + `page().setBackgroundColor` |
+| `Gtk.EventControllerKey` in CAPTURE phase | `QShortcut` on the window |
+| `load-failed` / `load-changed` | `loadFinished(bool)` |
+
+- [ ] `hud/float.py` rewritten on Qt6, same CLI flags, `_keep_trying` preserved
+- [ ] **Click-through.** A frameless always-on-top window swallows every click inside its
+      rectangle, including the large fraction of it that is transparent nothing.
+      `WS_EX_LAYERED | WS_EX_TRANSPARENT` via `ctypes.windll.user32.SetWindowLongPtrW` makes the
+      transparent pixels pass clicks to the desktop underneath. Behind `--click-through` and OFF
+      by default, because a window that cannot be clicked also cannot be closed by mouse — the
+      same reasoning as `add_escape_hatch`, which stays.
+- [ ] `PyQt6-WebEngine` added to `requirements.txt` with the reasoning above
+
+#### 3. Gestures — `/dev/uinput` to `SendInput`, and the guarantee that does not survive
+
+**Read `tools/gesture_pointer.py`'s security header before touching this.** Four guarantees.
+Three port cleanly. One does not, and pretending otherwise is the failure this repo keeps
+writing lessons about.
+
+| Guarantee | On the Pi | On Windows |
+|---|---|---|
+| 2 — press and release never co-located (`CLICK_GUARD_PX`) | pure logic | **unchanged** |
+| 3 — only `BTN_LEFT` exists | device capability | emission chokepoint |
+| 4 — inert while a security prompt is up (`PAUSE_FILE`) | pure logic | **unchanged** |
+| 1 — **cannot type**, so cannot answer the approval gate | `EV_KEY` declares no keyboard key; kernel-enforced | **downgraded** |
+
+Guarantee 1 was enforced by the kernel: the device physically had no keyboard capability, so no
+bug in that file could type a `y` into `agents/os_agent.py`'s approval prompt. Windows has no
+user-mode equivalent — `SendInput` is one call that takes mouse *or* keyboard structures, and
+any process that can move the cursor can also type.
+
+**So the plan does not use `pyautogui` or `pynput`, and that is a deliberate departure from the
+brief.** Both are single libraries that can move, click, right-click and type; with either one
+imported, guarantee 1 becomes "we were careful about which functions we called" — a code review,
+re-run on every future edit, standing in for something the kernel used to guarantee.
+
+Instead: `tools/win_input.py`, a small `ctypes` binding to `SendInput` that declares **only**
+`MOUSEINPUT` and never `KEYBDINPUT`. That buys back as much as Windows allows:
+
+- The keyboard struct is not defined in the process, so there is no function to call by mistake.
+  Guarantee 1 becomes **grep-auditable** — one file, one `INPUT` union member — rather than
+  kernel-enforced. Weaker than uinput, and the docstring says so in those words.
+- `MOUSEEVENTF_MOVE` without `MOUSEEVENTF_ABSOLUTE` is a **relative** delta, which is exactly
+  what `REL_X`/`REL_Y` were. The port is arithmetically identical; no coordinate rework, and
+  `--gain` keeps its measured meaning.
+- `MOUSEEVENTF_RIGHTDOWN` is never referenced. Guarantee 3 holds.
+
+It is also the smaller dependency: pyautogui pulls Pillow, pytweening, pyscreeze and mouseinfo
+for features this deliberately refuses to have.
+
+- [ ] `tools/win_input.py` — `SendInput`, mouse-only, with the honest downgrade documented
+- [ ] `tools/gesture_pointer.py` — `Pointer._move` / `_button` / `wheel` retargeted; every guard
+      above them untouched. `--check` reports the Windows preconditions.
+- [ ] `tools/verify_pointer.py` — it already fakes `_move`/`_button`, so the guard tests should
+      pass unchanged. **If they need editing, a guarantee moved, and that is the finding.**
+- [ ] The mediapipe sidecar venv (`tools/install_gesture_venv.sh`) is **not needed here**: this
+      box is Python 3.12.10 and `mediapipe` and `cv2` already import in the main interpreter. The
+      sidecar's whole reason was the Pi's 3.13 venv. Keep the shell-out path working, skip it
+      when the in-process import succeeds.
+
+#### 4. The app catalogue — XDG `.desktop` to the Start Menu, **not** a hardcoded table
+
+The brief asks for `C:\Program Files\KiCad\8.0\bin\kicad.exe` and similar. That is the exact
+thing `tools/app_catalogue.py` exists to refuse, and its docstring records the measurement:
+`~/oddball/hardware/apps.py` was a hand-written table of three rows, and a `which` sweep on
+2026-08-21 found one of the three already missing. A curated list is a second copy of the truth
+and it drifts. Hardcoding a version number (`\8.0\`) drifts on the next KiCad update.
+
+**Windows keeps the same list the Pi did, in a different place.** The Start Menu shortcut tree
+is the direct analogue of the XDG desktop-entry database — the list the OS itself draws its menu
+from:
+
+    %ProgramData%\Microsoft\Windows\Start Menu\Programs    ==  /usr/share/applications
+    %AppData%\Microsoft\Windows\Start Menu\Programs        ==  ~/.local/share/applications
+
+Enumerated on this machine while planning: **68 shortcuts**, user shadowing system exactly as
+XDG specifies. The mapping is close to exact:
+
+| `.desktop` | `.lnk` |
+|---|---|
+| `Name=` | the filename stem — "KiCad 8.0", "Arduino IDE", "OpenSCAD" |
+| `Exec=` | the shortcut's target, resolved by Windows |
+| `Categories=` | the containing Start Menu folder ("Accessories", "Autodesk") |
+| `NoDisplay=true` | no analogue; excluded by folder instead |
+| user shadows system | same, same order |
+
+So "every app, current and future" stays true: install KiCad 9 and he opens KiCad 9, with no
+edit here. All four resolution tiers, `ROLES`, `ALIASES`, the ambiguity refusal and the
+whole-word phrase matching are **untouched** — only the loader changes.
+
+- [ ] `tools/app_catalogue.py` — `load_catalogue()` picks a backend by platform; `parse_entry`
+      keeps the XDG path, new `parse_shortcut` for `.lnk`
+- [ ] `Categories` from the Start Menu folder; `ROLES["browser"]` additionally consulted against
+      the registry's `UrlAssociations\http\UserChoice`, which names the **default** browser — a
+      better answer than the Pi's "there are two, which did you mean"
+- [ ] `SESSION_ENDING` rewritten for Windows: `shutdown.exe`, `logoff.exe`, `diskpart.exe`, and
+      the `Administrative Tools` folder wholesale
+- [ ] `tools/app_launcher.py` — `systemd_run_argv` becomes `os.startfile` on the `.lnk`, which
+      makes Windows resolve the target, working directory and arguments itself. `find_display`
+      (a Wayland socket probe) collapses to a `GetSystemMetrics(SM_CMONITORS)` check; the
+      `no-display` outcome kind survives, because a headless RDP session is real.
+- [ ] `KINDS` and `agents/os_agent.py::_SPEECH` are **unchanged** — the vocabulary of outcomes
+      was never platform-specific, which is the payoff for having made it a flat table.
+
+#### 5. Media and audio — verification only
+
+- [ ] `python audio/wake.py --list-devices` and `python audio/say.py --list-devices` on this box
+- [ ] Set `[wake].device` in `config/oddball.toml` — it is currently `"C270"`, the Pi's webcam mic
+- [ ] Re-measure the wake threshold. `[wake].threshold = 0.76` was fitted to the C270, and wake
+      has been scoring **0.17–0.28** against it. A different microphone is a different
+      distribution: the number must be re-fitted, not inherited.
+
+### The area the brief did not list, and it is the one that matters most
+
+**`tools/os_controller.py`'s blocklist is 100% Linux syntax and will silently stop working.**
+
+Every pattern in `FORBIDDEN` is a Linux command shape: `rm -rf`, `mkfs`, `dd of=/dev/`, `shred`,
+`chmod 777`, `curl | sh`, `cat ~/.ssh/id_rsa`. Point `subprocess.run(shell=True)` at `cmd.exe`
+and **not one of them can match anything a Windows shell would run.** The blocklist does not
+fail loudly — it matches nothing, returns `None`, and reports "allowed" for every command.
+`tools/verify_os_guard.py` stays green throughout, because it tests Linux strings.
+
+That is a confident success on a safety backstop, which is the precise failure mode
+`os_controller.py`'s own docstring was written about.
+
+The Windows shapes that need the same treatment:
+
+| Destroying the filesystem | Taking the machine away | Credentials |
+|---|---|---|
+| `del /s /q`, `rd /s /q` | `shutdown /s`, `/r`, `/f` | `type ...\.env` |
+| `format`, `diskpart` | `Stop-Computer`, `Restart-Computer` | `.ssh\id_rsa` |
+| `Remove-Item -Recurse -Force` | `Stop-Service oddball` | `cmdkey /list` |
+| `cipher /w`, `vssadmin delete shadows` | `bcdedit`, `bootrec` | `Get-Content $PROFILE` |
+| `Format-Volume`, `Clear-Disk` | `taskkill /f` on his own process | |
+
+Plus one shape with no Linux equivalent: `iwr ... | iex` / `Invoke-Expression (Invoke-WebRequest
+...)`, which is PowerShell's `curl | sh` and is the most common real-world Windows attack shape.
+
+And one decision to make explicitly: **`shell=True` on Windows runs `cmd.exe`, not PowerShell.**
+Two shells means two syntaxes means two blocklists. Recommend pinning to PowerShell — the shell
+the model will write for, and the one LB actually uses — and blocking `cmd`/`cmd.exe` invocation
+from inside it, rather than trying to be total over both.
+
+- [ ] `FORBIDDEN` rewritten for Windows; the Linux table kept and selected by platform, so the
+      Pi stays runnable from the same tree
+- [ ] `normalise()` — Windows **is** case-insensitive, unlike the current comment, which
+      deliberately does not fold case. `RM` is not `rm` on Linux; `DEL` *is* `del` here.
+- [ ] `tools/verify_os_guard.py` — a Windows corpus, and a `--probe` that fails if the running
+      platform's table is empty
+
+### Order of execution
+
+1. `tools/win_input.py` + `gesture_pointer.py` — the safety-critical one, done first and slowly
+2. `os_controller.py` blocklist — the hole above, before anything can reach a shell
+3. `app_catalogue.py` + `app_launcher.py` — the Start Menu backend
+4. `hud/float.py` on Qt6
+5. The autostart scripts
+6. Audio verification and the wake-threshold re-fit
+7. Full harness sweep; `docs/DEPLOY.md` rewritten; **D30** written up in `docs/DECISIONS.md`
+
+### Open questions for LB
+
+- **`pyautogui` was asked for and is not in the plan.** The reasoning is above; if the
+  grep-auditable `SendInput` chokepoint is more ceremony than the feature is worth, say so and
+  it becomes three lines of pyautogui — but then guarantee 1 should be struck from the header
+  rather than left there untrue.
+- **Does the Pi stay runnable?** Every item above is written to keep both platforms working from
+  one tree. If the Pi is genuinely retired, roughly 400 lines of Wayland handling can be deleted
+  outright and several files get much shorter. Cheaper to keep than to re-add.
+- **`cmd.exe` or PowerShell** for the OS route's shell.
+
+### Review — session 1 of the port (2026-08-26)
+
+Three of the five areas are done and proven on this box, plus the one the brief did not list.
+Two areas remain. All 27 harnesses green, 1,299 checks.
+
+#### Done
+
+- [x] **Area 3 — gestures.** `tools/win_input.py` (new): `SendInput` via `ctypes`, mouse only.
+      `gesture_pointer.py`'s three emission methods now call a backend adapter, so every guard
+      above them is platform-free; `_UInputMouse` wraps evdev behind the same four methods.
+      `--check` reports the Windows preconditions and verifies the union has one member.
+      **17/17 in `verify_pointer.py`, with sections 2–4 running the real, unmodified guard
+      code.** The click guard holds at 160 px across all 120 drag lengths on Windows.
+- [x] **Area 4 — the app catalogue.** Start Menu backend: `start_menu_dirs`, `shortcut_target`
+      (a dependency-free MS-SHLLINK reader), `parse_shortcut`, `load_start_menu`.
+      `load_catalogue()` dispatches by platform; `resolve()`, `ROLES`, `ALIASES` and the
+      ambiguity refusal are untouched and shared. **36 applications discovered on this box.**
+      `verify_launch.py` 238/238 with a new section 7 covering the Windows backend against
+      synthesized `.lnk` fixtures — which means the Pi can prove the Windows reader still works.
+- [x] **Area 1 — autostart.** `config/start_oddball.bat`, `config/start_oddball.vbs`,
+      `tools/install_autostart.ps1` (install / status / remove). Path arithmetic verified from
+      `config\`. `status` runs clean. **`install` deliberately not run** — it writes to LB's
+      startup folder and that is his call.
+- [x] **The blocklist hole the brief did not list.** `os_controller.FORBIDDEN` now selects
+      `_WINDOWS` (33 patterns) or `_LINUX` (17, verbatim) at import. `normalise()` folds case
+      on Windows only. `active_table_name()` added. `verify_os_guard.py` 94/94 with a new
+      section 0 asserting the running platform has a non-empty table.
+
+#### Not done, and why
+
+- [ ] **Area 2 — the face on Qt6.** `PyQt6-WebEngine` is not installed and it is a ~150 MB
+      download. Not installed unprompted. Everything else about the rewrite is specified in
+      the plan above; it is the one remaining piece of real code.
+- [ ] **Area 5 — audio.** Already cross-platform, so the work is measurement: list the devices
+      on this box, set `[wake].device` (still `"C270"`, the Pi's webcam mic), and **re-fit
+      `[wake].threshold`**, which is 0.76 fitted to a microphone that is not here.
+
+#### What the measurements said
+
+**The blocklist was 94% ineffective and every harness was green.**
+`media/data/2026-08-26-windows-blocklist-gap.csv` + `.meta.json`. 16 of 17 destructive Windows
+commands passed the pre-port blocklist — `format C: /y`, `del /s /q C:\`, `Remove-Item -Recurse
+-Force`, `vssadmin delete shadows`, `iwr | iex`. The one refusal, `shutdown /s /t 0`, was luck:
+the word is spelled the same on both systems. After: 0 of 17 pass, and 0 of 28 ordinary
+commands are wrongly refused.
+
+**The hardcoded-path table would have scored one in three, again.** Measured against LB's own
+three examples: KiCad **not installed**, Firefox **not installed**, VS Code installed at
+`C:\Users\ironi\AppData\Local\Programs\Microsoft VS Code\Code.exe` — a per-user path, not the
+`C:\Program Files` one anybody would have written down. The Start Menu reader finds VS Code and
+answers "no such application" for the other two, which is the honest answer a hardcoded path
+cannot give. Same score the Pi's `apps.py` got with `nautilus`, five years of hindsight apart.
+
+**"The browser" got BETTER on Windows.** The Pi found Firefox and Chromium and had to ask
+which. Windows records a default browser in the registry, so `_default_browser_target()` reads
+it and `resolve("the browser")` returns Microsoft Edge outright.
+
+#### What didn't work, or was wrong first
+
+- **`pyautogui` / `pynput`, as specified in the brief.** Not used. Both are single libraries
+  that can move, click, right-click AND type, and `gesture_pointer.py`'s guarantee 1 — it
+  cannot type, so it cannot answer the approval prompt in `agents/os_agent.py` — was
+  kernel-enforced on the Pi by a uinput device that declared no keyboard capability. Windows
+  has no equivalent. `win_input.py` declares only `MOUSEINPUT` and never `KEYBDINPUT`, which
+  reduces the guarantee to one union member somebody would have to add a struct to defeat.
+  **It is still a downgrade** and is documented as one in that file's header rather than
+  glossed. This is the open question for LB.
+- **`dict(os.environ)` loses Windows' case-insensitivity.** `os.environ["AppData"]` works;
+  `dict(os.environ)["AppData"]` raises, because the plain dict has the uppercase key. The
+  symptom was a catalogue of **zero applications on a machine with 68 shortcuts, with no error
+  anywhere** — `load_start_menu` iterated an empty directory list and succeeded. The XDG reader
+  never hit this only because XDG variable names are already uppercase.
+- **`\bfirewall\b` does not match `advfirewall`.** No word boundary between "adv" and
+  "firewall", so the pattern missed the only spelling anybody types. The harness caught it.
+- **`verify_os_guard.py` was executing a command.** Section 4 called
+  `run_command("rm -rf /")` on a literal. On Windows that is not refused, so it fell through
+  to `subprocess.run` — against the promise in the harness's own first line, "Nothing is
+  executed by this harness." It surfaced only as two unrelated-looking assertion failures.
+  The general shape: **a harness that reaches real execution when a guard MISSES has no way to
+  report that the guard missed.**
+- **Exact-match exclusion let an uninstaller into the catalogue.** Four bare `Uninstall`
+  shortcuts were correctly dropped and `Uninstall Node.js` was not, so `resolve("uninstall")`
+  found exactly one hit and offered to run it. Now matched as a prefix.
+- **Raw docstrings.** Three modules gained `\P`, `\|` and `\.` inside prose and threw
+  `SyntaxWarning` on import. Windows paths in documentation need `r"""`.
+
+#### Still open
+
+- [ ] **`cmd.exe` or PowerShell** for the OS route. `shell=True` runs `cmd.exe`; the model
+      writes PowerShell. The Windows table covers both, which is correct but is a wider surface
+      than pinning one shell would be.
+- [ ] **No restart-on-failure.** The Pi's unit had `Restart=on-failure` / `RestartSec=5`.
+      `shell:startup` has nothing equivalent — if he falls over at 3am he stays down until the
+      next logon. Task Scheduler is the upgrade path; deliberately not taken yet, because a
+      scheduled task is far harder for LB to see and disable than a shortcut in a folder.
+- [ ] **38 of 68 shortcuts carry no readable target**, so the "is it actually installed" check
+      is skipped for them. They still launch (`os.startfile` resolves an IDList fine). Refusing
+      to launch them would break every Control Panel entry, so the gap is accepted and marked.
+- [ ] **Pointer gain must be re-fitted.** `POINTER_GAIN = 900` was measured under libinput.
+      Windows applies its own acceleration curve to relative motion, and it is non-linear.
+- [ ] **Nothing has been run end-to-end.** No harness starts the assistant. `main.py --text`,
+      then `--voice`, then the face, in that order, is the check that matters.
+- [ ] The Pi has not been re-tested since the split. Both tables and both catalogue readers are
+      kept and unit-tested from Windows, but `_LINUX` and `_load_xdg` have not run on Linux
+      since the port.
+
+### Review — session 2: the prune, PowerShell, and the face on Qt (2026-08-26)
+
+LB's three answers: **PowerShell**, **prune the Pi**, **keep `win_input.py`**. All five areas
+are now done. **27 harnesses green, 12,272 checks.**
+
+#### The prune, measured
+
+```
+677 lines   6 files deleted outright
+            config/oddball.service, config/oddball-face.desktop,
+            tools/wait_for_display.sh, tools/install_autostart.sh,
+            tools/install_gesture_venv.sh, stage_install.sh
+
+~330 lines  Linux paths removed from live modules
+            os_controller._LINUX (53)      app_catalogue XDG reader (163)
+            gesture_pointer evdev (75)     screen_capture grabbers (31)
+
+261 lines   app_launcher.py rewritten (193 in) — the systemd-run argv builder,
+            Display's four Wayland fields, _unit_name, PINNED_PATH, TERMINALS
+```
+
+**Every removal fails loudly.** `os_controller`, `app_catalogue` and `gesture_pointer` raise on
+import off Windows, naming what was deleted and where to restore it from. That constraint came
+straight from L23: the blocklist's gap was invisible *because* an irrelevant table returned
+"allowed" instead of erroring, and deleting the Linux branches would have recreated exactly
+that hazard. `verify_os_guard` asserts the import guard exists.
+
+#### Area 2 — the face, on PyQt6 + QtWebEngine
+
+Runs. Frameless, always-on-top, out of the taskbar, transparent, and `--click-through` via
+`WS_EX_LAYERED | WS_EX_TRANSPARENT`. Verified against `tools/face_stage.py` on 8766: the page
+loaded first try, and against a dead port the retry loop backed off 1s → 2s as designed.
+
+`_keep_trying()` survived the port **unchanged and had to**. It exists because the face's HTTP
+GET races the server's bind, and `shell:startup` gives even *less* ordering than systemd did —
+no `After=`, no `ExecStartPre`. It is now the only thing preventing that bug.
+
+`--click-through` is off by default. A window the mouse passes through cannot be closed by
+mouse either, so the escape hatch (Escape / Ctrl+Q / F11) is bound before anything else — the
+same reasoning that put it there originally. It also warns if paired with `?chat=1`, which it
+would make untypeable.
+
+#### Area 5 — audio, and the thing the device list actually said
+
+The C270 **is on this box**, and is the system default input. So the memory-note framing was
+wrong in a useful way: the low wake scores are not a different-microphone problem, they follow
+the C270 itself. The Bose Flex 2 is also connected here, so the HFP trap `[wake].device` was
+pinned against is live on this machine too — the pin's reasoning survives the port intact.
+
+What did break: **`device = "C270"` no longer resolves.** PortAudio exposes one physical device
+once per host API, and Windows has four, so it matched MME, DirectSound, WASAPI and WDM-KS and
+`sounddevice` refused to guess. Now `"C270 HD WebCam), Windows WASAPI"` — WASAPI chosen because
+it opens the C270 at its native 48000 Hz, an exact 3:1 decimation to the wake loop's 16000,
+where MME and DirectSound report 44100 and resample.
+
+#### What didn't work, or was wrong first
+
+- **Three textual checks defeated by this repo's own prose.** `source.split('"""')[-1]` takes
+  only the file tail, because every function docstring splits it too. A grep for `shell=True`
+  matched seven comments explaining why it is *not* used. A regex for `^\s*import (\w+)`
+  reported `a` and `his` as undeclared dependencies, from sentences like "import a second
+  copy". All three now use `ast`. In a codebase where comments outnumber statements, a textual
+  check about code is a check about prose.
+- **A harness anchored on code shape, not on a claim.** The `shell=False` check bracketed the
+  source between `if _IS_WINDOWS:` and `else:`. Deleting the Linux branch removed both markers
+  and the check *crashed* rather than passing or failing.
+- **`ROLES` lost five of its seven rows**, and this is a genuine capability loss, not a
+  cleanup. On the Pi they were read off `Categories=`, which genuinely says what a program IS.
+  Windows Start Menu folders are named after **vendors** — "Autodesk", "Git", "NVIDIA" — and
+  not one of LB's 68 shortcuts sits in a folder naming a role. Keeping `editor`, `terminal`,
+  `calculator`, `file manager` would have kept four rows that can never match while still
+  occupying the role tier and blocking the name tiers that *would* have found the program.
+  `browser` survives because the registry answers it.
+- **The free-launch path regressed, silently, and the harness caught it.** On the Pi
+  `vlc.desktop` gave `entry_id == "vlc"` — one stable lowercase token per app, feeding
+  `launch_intent._targets` for free. A Windows shortcut has no such id, so "VLC media player"
+  yields no bare "vlc", and *"fire up vlc"* and *"open code"* stopped being free launches and
+  fell through to the paid router for no reason a person could see. Fixed by admitting single
+  words that are not in `DESCRIPTOR` or `ROLES` — and the harness immediately caught the first
+  attempt letting *"open the player"* launch VLC, which is how `player`, `viewer`, `suite`,
+  `tool`, `client` and `reader` came to be added to `DESCRIPTOR`.
+- **`dict(os.environ)` drops Windows' case-insensitivity** (session 1, still the best example):
+  a catalogue of zero applications on a machine with 68 shortcuts, with no error anywhere.
+- **The key-missing message gave bash commands beside a Windows path.** `read -rs KEY && ... &&
+  chmod 600 C:\Users\...`. A wrong instruction is worse than none — it sends the reader looking
+  for a shell they do not have. Now PowerShell, using `Read-Host -AsSecureString` so the key
+  does not land in PSReadLine's history file, which `os_controller` refuses to read for exactly
+  that reason.
+- **Two dependencies were undeclared and one was mine.** `PyQt6`/`PyQt6-WebEngine` (added this
+  session and never declared) and `langchain-core`, imported by name in every agent and only
+  ever arriving transitively through `langchain-google-genai`. `cv2` and `mediapipe` are now
+  declared too: the sidecar-venv argument was entirely about the Pi's 3.13 interpreter, and
+  this box is 3.12.10 where both import in-process.
+
+#### Still open
+
+- [ ] **No `.env` on this machine, so nothing has run end to end.** `main.py --text` stops at
+      the key check. That is LB's to supply — the message now gives the PowerShell recipe. Until
+      then `--voice`, the face against the live orchestrator, and a real `launch_app` through
+      the approval gate are all unverified together.
+- [ ] **Re-fit `[wake].threshold`.** Still 0.76. Same microphone as the Pi, so the low scores
+      follow the hardware, not the platform — but the room, the distance and the WASAPI 48 kHz
+      path are all different. Measure before trusting it.
+- [ ] **Autostart has no restart-on-failure.** The Pi's unit had `Restart=on-failure` /
+      `RestartSec=5` and gave up after 3 failures in 5 minutes. `shell:startup` has nothing
+      equivalent: if he falls over at 3am he stays down until the next logon. Task Scheduler is
+      the upgrade path, deliberately not taken yet because a scheduled task is much harder for
+      LB to see and disable than a shortcut in a folder.
+- [ ] **`POINTER_GAIN = 900` is still the libinput figure.** Windows applies its own
+      acceleration curve to relative motion and it is not linear. Needs re-fitting on the
+      desktop.
+- [ ] **38 of 68 shortcuts carry no readable target**, so the "is it installed" guard is skipped
+      for them. They launch correctly; the card says the check was skipped rather than implying
+      it passed.
+- [ ] `tools/measure_face.py` and `tools/live_test_gestures.py` still carry Wayland/labwc
+      handling. Both are measurement tools off the turn path, so they were left for now — but
+      `measure_face.py` counts `labwc` processes and will report zeros here.
+- [ ] `docs/DEPLOY.md` and `README.md` still describe the Pi throughout. They are the next
+      thing to rewrite, and they are what LB reads when something breaks at 2am.
+
+### Review — session 3: the role map and the documentation purge (2026-08-26)
+
+**27 harnesses green, 12,280 checks.** Both docs rewritten and every command in them run.
+
+#### 1. `PROGRAM_ROLES` — the role tier, restored
+
+`ROLES` had dropped to two rows in the prune, because Windows Start Menu folders are named
+after vendors and cannot say what a program *is*. It is now 34 spoken phrases over 12 role
+tokens, fed by `PROGRAM_ROLES`: **65 executable stems → role tokens**.
+
+**Keyed on the executable, not the display name**, and that is the whole durability argument.
+A Start Menu name carries a version — "KiCad 8.0", "Creality Print 7.2", "Python 3.12
+(64-bit)" — and goes stale on the next update, which is precisely the failure mode of
+hardcoding `C:\Program Files\KiCad\8.0\bin\kicad.exe`. `kicad.exe` has been `kicad.exe` for
+twenty years.
+
+This is a curated table in a module whose docstring refuses curated tables, and the note above
+it draws the line explicitly, the same way `ALIASES` already did:
+
+> The table this module refuses says **which apps exist**, and went stale the moment one was
+> installed. `PROGRAM_ROLES` says **what kind of thing** a program is, *if* it is here. It
+> claims nothing about what exists — "the schematic editor" with KiCad uninstalled resolves to
+> nothing, exactly as "eeschema" does.
+
+A tool not in the table still resolves by name and still launches; it is only unreachable by
+role. That graceful degradation is why the table can stay short, which is what LB asked for.
+
+Working on the real machine:
+
+```
+'the editor'     -> AMBIGUOUS: OpenCode, Visual Studio Code
+'the ide'        -> AMBIGUOUS: Arduino IDE, OpenCode, Visual Studio Code
+'the cad program'-> AMBIGUOUS: Autodesk Fusion, OpenSCAD
+'the slicer'     -> AMBIGUOUS: Anycubic Slicer Next, Creality Print 7.2, CrealityPrint, OrcaSlicer
+'the terminal'   -> AMBIGUOUS: Windows PowerShell, Windows PowerShell (x86)
+'the browser'    -> Microsoft Edge          <- resolved outright, from the registry
+```
+
+Ambiguity is reported, never guessed. Four slicers means he asks.
+
+**Two harness checks were added that are worth more than the table itself**, because they catch
+the way a two-sided map rots:
+
+- every token in `PROGRAM_ROLES` must have a `ROLES` phrase reaching it — otherwise a program
+  carries a category nobody can ask for, which *looks* like coverage
+- every `ROLES` phrase must point at a token some program can carry (`WebBrowser` excepted; it
+  comes from the registry)
+
+**One exclusion was wrong and is fixed.** `windows powershell` was in `EXCLUDED_FOLDERS`
+alongside `administrative tools`, and it should not have been: that folder holds four ordinary
+shells, and excluding it made "open the terminal" resolve to nothing on a machine with several.
+The system folders are excluded because their contents end sessions or edit the registry —
+`Registry Editor`, `services`, `RecoveryDrive`, `Disk Cleanup`. A shell does neither, and what
+gets *typed* into one is `os_controller`'s business, not the catalogue's. (`startup` stays
+excluded, which is also what stops him launching himself.)
+
+#### 2. The documentation purge
+
+**`docs/DEPLOY.md`: 1,320 lines → 590, rewritten from scratch.** It was tarballs, staged pip
+installs, `apt` packages, udev rules, a systemd unit, and a boot race against a Wayland
+compositor. None of that exists now — **there is no deploy step, because he runs where he is
+authored**, and that is the single largest thing the port bought.
+
+What it documents now: the box and the 3.12 constraint (and that upgrading to 3.13 breaks
+gestures at XNNPACK delegate creation, so it will look like a crash rather than a missing
+dependency); the key, the model files, autostart and its missing restart-on-failure; the Qt
+face and why not pywebview; every labwc rule and what replaced it; the audio host-API problem;
+PowerShell and each flag's reason; the blocklist and the day it was 94% useless; the Start Menu
+catalogue; the gesture guarantee that is weaker here; ports; and the two harness lessons.
+
+**`README.md`: surgical, not rewritten.** Most of it is routing, agents and gates — accurate
+and unchanged by the port, and rewriting it wholesale would have destroyed good content to no
+purpose. Seven passages changed: the header (plus a new "What runs where" table), the OS route
+row, the security-gate paragraph, the screenshot backend, the memory line, Setup, and one
+measurement now labelled as Pi-era and not re-measured.
+
+**Every command in both files was run**, and every `path/to/file` reference cross-checked
+against the filesystem. Two apparent misses are correct: `install_gesture_venv.sh` is named in
+past tense as a deleted file, and `os_controller.FORBIDDEN` is a symbol.
+
+#### What was wrong first
+
+- **A stale count, caught by checking rather than trusting.** The docs said "38 of 68
+  shortcuts"; un-excluding the PowerShell folder made it 70 raw shortcuts, and the figure that
+  actually matters for the launcher's guard was never the raw one — it is **14 of the 41
+  applications he can open** that carry no readable target. Corrected in 8 places across 4
+  files. A doc with wrong numbers is worse than no doc, and this one had been wrong for two
+  sessions because nobody re-ran the count after changing what was excluded.
+
+#### Still open — unchanged, and all of it needs the machine
+
+- [ ] **`.env`, then end to end.** LB is doing this now. Nothing has run past the key check.
+- [ ] **Re-fit `[wake].threshold`** (0.76, scores 0.17–0.28) and **`POINTER_GAIN`** (900, still
+      the libinput figure).
+- [ ] **No restart-on-failure** in `shell:startup`. Task Scheduler is the upgrade path.
+- [ ] `tools/measure_face.py` and `tools/live_test_gestures.py` still carry labwc handling.
+      Off the turn path; `measure_face.py` will report zeros here.
+
+### Handover note — a bug found in the last ten minutes (2026-08-26)
+
+Checking the calibration tooling before LB used it turned up two things.
+
+**1. `python audio/wake.py --meter` did not run at all.** The pin to WASAPI, added earlier the
+same day, made `mic_frames()` fail on every open:
+
+```
+sounddevice.PortAudioError: Error opening InputStream: Invalid sample rate [PaErrorCode -9997]
+```
+
+WASAPI is the only Windows host API that refuses a rate the hardware does not natively support.
+`SAMPLE_RATE_HZ` is 16000 (openWakeWord's requirement) and the C270's native rate is 48000. MME
+and DirectSound are shims that resample silently, which is why this never surfaced until the
+device was pinned. Fixed with `_wasapi_settings()`, which passes
+`sd.WasapiSettings(auto_convert=True)` when — and only when — the device is on WASAPI.
+
+**The comment justifying the pin was wrong, and that is the more useful half.** It said WASAPI
+opened the C270 at 48000 for "an exact 3:1 decimation" to 16000. That was reasoning, not
+measurement: nothing in this repo decimates, and the stream did not open for it to try. WASAPI
+resamples too — the same thing MME was doing invisibly — and what it actually buys is "not a
+shim, better converter", which is a smaller claim. Corrected in `config/oddball.toml` and
+`docs/DEPLOY.md`, both marked as corrections rather than quietly edited.
+
+`audio/say.py` never had the bug: it was written on Windows, met the same refusal on the output
+side, and already carries `check_output_settings` with a resample fallback. `audio/wake.py` was
+written for the Pi's ALSA, where one name meant one device and every rate was accepted.
+
+**2. `config/oddball.toml` referenced a script that does not exist.** The threshold comment
+pointed at `tools/tune_threshold.py`, deleted at some earlier point. `python audio/wake.py
+--meter` is the live tool — it prints a running score, a peak, and a recommended threshold —
+and the comment now says so.
+
+Verified after the fix: the meter runs, scores frames, and reports
+`peak score 0.004 against threshold 0.76 - never fired`, which is correct for a silent room.
+TTS confirmed separately: 2.43 s of audio, 107 KB WAV.
+
+**The general shape, for the third time in this port:** a claim that was reasoned rather than
+measured. The Start Menu role map was measured, the blocklist gap was measured, and this one
+was not — it was inferred from what WASAPI *ought* to do with a native rate. Running the
+command is what found it, and it took ten seconds.
+
+### Go-live attempt — blocked on the key, and it found two bugs (2026-08-26)
+
+**`.env` does not exist on this machine.** Checked four places: no `.env` in the repo (only
+`.env.example`), no `GOOGLE_API_KEY` in the shell environment, and no user or machine
+environment variable. So `main.py` cannot start and he is not live.
+
+The startup sequence was run anyway — `wscript config\start_oddball.vbs`, exactly what logon
+does — and it found two real defects that only appear on that path.
+
+**1. The autostart threw away the one message that explained the failure.**
+
+First run: the face was on screen, the assistant was not, and `data/oddball.log` contained only
+the batch file's own header. `main.py` had printed a perfectly good multi-line explanation of
+the missing key and **not one byte of it was written anywhere.**
+
+Two causes stacked. `pythonw.exe` has no console, so its stdout and stderr handles are invalid
+unless redirected; and a redirection written on a `start` line binds to `start` itself, not to
+the process it launches. Fixed by wrapping each launch in `cmd /c "... >> log 2>&1"`, which
+puts the redirection inside the child.
+
+That is the worst shape a startup failure can have: **the program said exactly what was wrong
+and the plumbing discarded it.** Same family as the `Outcome` work — a producer that states the
+result, and a consumer that loses it.
+
+**2. The first fix broke both launches, and the log said so.**
+
+`^` line-continuations inside `cmd /c "..."` do not survive: a caret continues a line for the
+BATCH parser, and the text after `cmd /c` is a quoted string handed to a second parser that
+never sees it. The command split in half and cmd tried to run `--log` as a program —
+`'--log' is not recognized as an internal or external command`. Both launches are single lines
+now, with a comment saying why they cannot be wrapped.
+
+**3. Logs are UTF-8; `Get-Content` on PS 5.1 reads ANSI.** Em-dashes came back as `â€"`, so a
+correct log looked corrupted. `-Encoding utf8` added to `install_autostart.ps1` and to both
+places in `docs/DEPLOY.md` that tell the reader to read a log. Ω, µ and ° would have had the
+same problem, and those are most of what this thing prints.
+
+**Also split the logs.** `oddball.log` is the assistant, `face.log` is the window. They
+interleave badly — the face writes a retry line every few seconds while the server loads
+models, burying the assistant's startup output at exactly the moment it is being read.
+
+### Verified working, without a key
+
+- **The `.env` pipeline.** Proven end to end with a throwaway key: `load_dotenv` reads the
+  file, `_key_problem` accepts a well-formed key, `engine.models` imports, and `Engine()`
+  constructs the router chain, every agent and every tool. The throwaway file was deleted
+  immediately; `.env` is absent and gitignored.
+- **The autostart path.** `config/start_oddball.vbs` → `.bat` → two processes, no console
+  window, both logging correctly.
+- **The face, live.** Starts from the autostart path and sits retrying with the designed
+  backoff — 1s, 2s, 3s, 4s — waiting for port 8765. Exactly what it is supposed to do when the
+  server is not up yet, and the reason `_keep_trying()` survived the port.
+- 27 harnesses, 12,280 checks.
+
+### The one remaining step is LB's
+
+```powershell
+$k = Read-Host 'paste the key' -AsSecureString
+[Runtime.InteropServices.Marshal]::PtrToStringAuto(
+  [Runtime.InteropServices.Marshal]::SecureStringToBSTR($k)) |
+  ForEach-Object { "GOOGLE_API_KEY=$_" } |
+  Set-Content -Encoding utf8 .env
+
+python main.py --text                       # cheapest first check
+wscript config\start_oddball.vbs            # then the full rig
+```

@@ -17,7 +17,7 @@ to be" both land on HARDWARE without anybody maintaining a phrase list.
 
 ## UTILITY is the exception, and it is deliberate
 
-Ten routes, and one of them costs nothing: `UTILITY` is answered by `orchestrator/instant.py`
+Eleven routes, and one of them costs nothing: `UTILITY` is answered by `orchestrator/instant.py`
 from lookup tables — the time, the date, a unit conversion, a physical constant, what a word
 means. D2's claim was that most of what you ask a desk assistant needs no intelligence at all,
 and that claim survived the merge. It is now an argument for a route rather than for a tier.
@@ -44,6 +44,7 @@ class AgentRoute(str, Enum):
     PERSONA = "persona"      # added for the merge — Mr Odd Ball himself
     UTILITY = "utility"      # added for the merge — the free, instant answers
     ACADEMIC = "academic"    # coursework and syllabi, grounded in LB's own uploaded PDFs
+    SCREEN = "screen"        # look at the desktop and say what is on it
     GENERAL = "general"
 
 
@@ -79,6 +80,12 @@ Available Agents:
   grading or late-work policy, what a course covers. Grounded in the user's own uploaded
   syllabi and his live Canvas calendar, not general study help. ALSO refreshing that calendar:
   "sync Canvas", "update my schedule", "refresh my deadlines".
+- SCREEN: what is ON the display right now. "What am I looking at", "what does that error
+  say", "read that dialog to me", "why is this window complaining". He takes a screenshot and
+  describes it. Choose this only when the answer is something VISIBLE on the desktop at this
+  moment — a question about how a program works is GENERAL or FIRMWARE, and a question about a
+  file's contents is HARDWARE or ACADEMIC. "What's on my screen" is SCREEN; "what's on my amp
+  schematic" is HARDWARE, because that is a file he can read without looking at the display.
 - GENERAL: anything that fits nowhere above — and the route that FILES a document the user has
   just uploaded through the chat panel, whether it is a syllabus, a datasheet or a schematic.
 
@@ -100,6 +107,9 @@ Routing notes:
   to the machine and they are not: the only thing being updated is his coursework calendar, and
   ACADEMIC is the route that can do it. OS is for the Pi itself — its temperature, its files,
   its applications.
+- **SCREEN is for the display, OS is for the machine.** "What's on the screen" is SCREEN;
+  "what's the CPU temperature" is OS. Both are about this Pi and they are not the same
+  question — one is answered by looking at pixels, the other by reading a sensor.
 - ACADEMIC is about what a COURSE requires, not what the user knows — "when is the midterm due"
   or "what does the syllabus say about late homework" is ACADEMIC. "Test me on this" or "quiz me
   on filters" is QUIZ even in an academic context, because the user wants to be evaluated, not
