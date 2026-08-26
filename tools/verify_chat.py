@@ -25,6 +25,7 @@ the turn loop knows how to drain.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import re
@@ -219,6 +220,113 @@ async def run() -> None:
     await asyncio.sleep(0.4)
     check(len(bridge._history) == HISTORY,
           f"the replay buffer is capped at {HISTORY}", f"{len(bridge._history)}")
+
+    # =====================================================================================
+    section("5. who owns the inbound queue — STRUCTURAL checks on run_voice.py")
+    # =====================================================================================
+    #
+    # Read this section knowing what it is: assertions about the SHAPE of `_typed_thread`, not
+    # about its behaviour. It is a nested closure inside `main()`, built from a bridge, a turn,
+    # a detector and three events, so there is no seam to drive it through from here — and
+    # inventing one would mean testing the seam.
+    #
+    # Shape is still worth pinning, because both bugs it guards were shape:
+    #
+    #   * The `in_turn` test sat BELOW the `type != "text"` filter, so an `approve` was dropped
+    #     before it could be handed back. The gate and this loop both drain every ~0.2s, so
+    #     whenever this loop won the race the click vanished and the gate ran to its timeout —
+    #     and a timed-out gate declines. An Approve button that sometimes does nothing, on the
+    #     path that runs shell commands.
+    #   * `put_nowait` sat bare in the drain loop, so `queue.Full` escaped both loops and ENDED
+    #     the thread. After that, typing did nothing at all for the rest of the session.
+    #
+    # Parsed, not grepped. This file already learned that lesson once — see the note in
+    # section 3 about the check that went red on a comment describing the rule.
+
+    run_voice_src = (Path(__file__).resolve().parents[1] / "engine" / "run_voice.py")
+    tree = ast.parse(run_voice_src.read_text(encoding="utf-8"))
+    typed = next((n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "_typed_thread"), None)
+    check(typed is not None, "run_voice.py still has a _typed_thread to reason about")
+
+    if typed is not None:
+        def mentions(node, name: str) -> bool:
+            return any(isinstance(x, ast.Name) and x.id == name for x in ast.walk(node))
+
+        loop = next((n for n in ast.walk(typed) if isinstance(n, ast.While)), None)
+        check(loop is not None, "and it still drains in a while loop")
+
+        owner_ifs = [n for n in ast.walk(loop) if isinstance(n, ast.If) and mentions(n.test, "in_turn")]
+        text_ifs = [n.lineno for n in ast.walk(loop) if isinstance(n, ast.If)
+                    and any(isinstance(c, ast.Constant) and c.value == "text"
+                            for c in ast.walk(n.test))]
+        check(bool(owner_ifs) and bool(text_ifs), "both the ownership test and the type filter exist")
+        if owner_ifs and text_ifs:
+            # THE check. Ownership is decided before the batch is filtered by type, so a message
+            # this loop does not want is still handed back rather than consumed.
+            check(min(n.lineno for n in owner_ifs) < min(text_ifs),
+                  "the in_turn ownership test comes BEFORE the type filter",
+                  f"in_turn at line {min(n.lineno for n in owner_ifs)}, "
+                  f"'text' filter at line {min(text_ifs)} — an approve drained while a gate is "
+                  f"open must go back on the queue, not be skipped off it")
+
+            owner = min(owner_ifs, key=lambda n: n.lineno)
+            check(any(isinstance(s, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == "conversation_until"
+                              for t in s.targets)
+                      for s in ast.walk(owner)),
+                  "and a typed line closes the conversation window instead of waiting it out",
+                  "in_turn stays SET for the whole of an open conversation, so without this a "
+                  "question typed just after a spoken one waits up to conversation_s")
+
+        def handles_full(node: ast.Try) -> bool:
+            for handler in node.handlers:
+                if handler.type is None:
+                    return True
+                for x in ast.walk(handler.type):
+                    if isinstance(x, ast.Attribute) and x.attr == "Full":
+                        return True
+                    if isinstance(x, ast.Name) and x.id in ("Exception", "BaseException"):
+                        return True
+            return False
+
+        guarded = [(t.lineno, t.end_lineno) for t in ast.walk(typed)
+                   if isinstance(t, ast.Try) and handles_full(t)]
+        puts = [c.lineno for c in ast.walk(typed) if isinstance(c, ast.Call)
+                and isinstance(c.func, ast.Attribute) and c.func.attr == "put_nowait"]
+        check(bool(puts) and all(any(lo <= p <= hi for lo, hi in guarded) for p in puts),
+              "every put_nowait is inside a try that catches a full queue",
+              f"put_nowait at {puts}, guarded ranges {guarded} — a bare one here kills the "
+              f"thread, and typing stays dead for the rest of the session")
+
+        check(loop is not None and any(isinstance(s, ast.Try) for s in loop.body),
+              "the drain loop body is wrapped, so one bad message cannot end the channel",
+              "this is the channel that works when the microphone does not")
+
+        # The one that was actually killing it on the Pi, 2026-08-24. `_listen_thread` calls
+        # `stop.set()` when the audio device goes away — correct for everything that reads
+        # audio. The typed channel looped on that same event, so a microphone that stopped
+        # enumerating ended the channel built to survive a microphone that stops enumerating.
+        # It exited 0.08s after start, having drained nothing, with the socket still up.
+        check(loop is not None and not mentions(loop.test, "stop"),
+              "the typed channel does NOT end when the microphone thread sets `stop`",
+              f"loop condition is {ast.unparse(loop.test) if loop is not None else '?'} — the "
+              f"channel that exists BECAUSE the microphone is unreliable cannot be shut down "
+              f"by the microphone being unreliable")
+        check(loop is not None and mentions(loop.test, "closing"),
+              "it ends on `closing`, which only the shutdown path sets")
+
+    listen = next((n for n in ast.walk(tree)
+                   if isinstance(n, ast.FunctionDef) and n.name == "_listen_thread"), None)
+    if listen is not None:
+        # And the other half of that contract: losing the microphone must not set `closing`.
+        for handler in (h for n in ast.walk(listen) if isinstance(n, ast.Try) for h in n.handlers):
+            names = {x.value.id for x in ast.walk(handler)
+                     if isinstance(x, ast.Attribute) and isinstance(x.value, ast.Name)}
+            if "stop" in names:
+                check("closing" not in names,
+                      "a lost microphone sets `stop` and never `closing`",
+                      "the audio threads end; the typed channel carries on")
 
     server.close()
     await server.wait_closed()

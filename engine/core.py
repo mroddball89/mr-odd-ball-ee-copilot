@@ -167,6 +167,16 @@ class Engine:
         self.last = t
         text = (text or "").strip()
 
+        # Tell the self-context block what is being asked, so `tools/reflections.py` can put the
+        # failures that bear on THIS question in front of the agent rather than the six most
+        # recent ones. Set here because this is the one entry point both channels come through;
+        # see `tools/self_context.py` for why it is module state rather than an argument.
+        try:
+            from tools import self_context
+            self_context.set_question(text)
+        except Exception:                              # noqa: BLE001
+            LOG.debug("could not set the self-context question", exc_info=True)
+
         # Nothing said WHILE a gate is open is an answer to the gate, and the answer is no.
         # This ordering is load-bearing and was got wrong first time: the empty check used to
         # come first and returned "I didn't catch that" while leaving `pending` set — so the
@@ -186,6 +196,23 @@ class Engine:
                 return self._resolve_pending(text, t)
             if self.mode == "quiz":
                 return self._quiz_turn(text, t)
+
+            # A correction outranks the router, and the ORDER here is load-bearing.
+            #
+            # Below the gate, because "no, don't" while a permission question is open is a
+            # decline and must stay one — `_resolve_pending` already reads anything that is not
+            # a clear yes as no, and stealing that line would leave the gate open.
+            #
+            # Below quiz mode, because "wrong" is a plausible thing to say to a quiz question
+            # and `_quiz_turn` owns every utterance while the mode is on.
+            #
+            # Above `_routed_turn`, because a correction is not a question: routing it would
+            # spend a Gemini call to send "that was wrong" to the persona agent, which would
+            # apologise charmingly and forget it.
+            correction = self._correction(text)
+            if correction is not None:
+                return self._record_correction(correction, text, t)
+
             return self._routed_turn(text, t)
         except Exception as exc:                       # noqa: BLE001 — the answer path never dies
             LOG.exception("turn failed")
@@ -209,13 +236,166 @@ class Engine:
                 for model in named:
                     quota.note(model, exc)
                 t.extras.append(f"quota latched: {','.join(named) if named else 'none (unnamed model)'}")
+
+            self._reflect_on_failure(text, t, exc)
             return Response(
                 speech=_failure_line(exc),
                 cards=[Card(CardKind.ERROR, type(exc).__name__, str(exc))],
                 route=t.route,
             )
         finally:
+            self._reflect_on_slowness(text, t)
             LOG.info("%s", t.line())
+
+    # --- learning from what went wrong -------------------------------------------------
+
+    def _reflect_on_failure(self, text: str, t: Turnlog, exc: Exception) -> None:
+        """Record an exception in `vault/reflections.md`. **Never raises.**
+
+        This is the broadest of the reflection hooks and catches what the narrow ones miss: any
+        agent, any tool, any model call that got as far as raising. It runs INSIDE the existing
+        `except` rather than around it, so the sentence LB hears is unchanged and the ledger is
+        a side effect of an answer that already worked.
+
+        A quota exhaustion is deliberately NOT recorded. It is not a mistake — it is a budget
+        running out, it will be true for every turn until midnight, and writing it down would
+        fill the ledger with two hundred identical entries and push out the ones that mean
+        something. `engine/quota.py` already latches it where it belongs.
+        """
+        try:
+            from engine import quota
+            if quota.is_daily_exhaustion(exc):
+                return
+
+            from tools import reflections
+            reflections.note(
+                kind=f"turn-failed/{t.route or 'unrouted'}",
+                what=f"answer {text[:120]!r}" + (f" via the {t.route} agent" if t.route else ""),
+                why=f"{type(exc).__name__}: {exc}",
+                lesson="")
+        except Exception:                              # noqa: BLE001
+            LOG.debug("could not record a reflection for this failure", exc_info=True)
+
+    def _reflect_on_slowness(self, text: str, t: Turnlog) -> None:
+        """Record a turn that took far too long, even if it eventually answered.
+
+        **A slow success is the failure nobody escalates**, and it is the one LB actually asked
+        to be recorded — "a task takes longer than expected" was his third case. It is also the
+        one with no error to catch: the turn worked, the log line scrolled past, and the only
+        record that it took ninety seconds was a number nobody was reading.
+
+        Not recorded when the turn already failed: `_reflect_on_failure` has written a better
+        entry, and a timeout logged twice under two headings reads as two problems.
+        """
+        try:
+            from tools import reflections
+
+            if t.total_s < reflections.SLOW_TURN_S:
+                return
+            if any(e.startswith("error ") for e in t.extras):
+                return
+
+            reflections.note(
+                kind="slow-turn",
+                what=f"answer {text[:120]!r} via the {t.route or 'unrouted'} path",
+                why=f"it took {t.total_s:.0f} seconds — {t.route_s:.0f}s to route and "
+                    f"{t.agent_s:.0f}s in the agent",
+                lesson="prefer the free path for this kind of question where one exists")
+        except Exception:                              # noqa: BLE001
+            LOG.debug("could not record a reflection for this slow turn", exc_info=True)
+
+    # --- corrections -------------------------------------------------------------------
+
+    def _correction(self, text: str):
+        """Is LB correcting him? Returns a `Correction`, or None. **Never raises.**
+
+        Wrapped rather than called directly so that a failure in the detector cannot take the
+        answer path with it. `corrections.detect` already swallows its own exceptions; this
+        catches the import, which is the part that can fail on a half-deployed box.
+        """
+        try:
+            from tools.corrections import detect
+            return detect(text)
+        except Exception:                              # noqa: BLE001
+            LOG.exception("correction detection unavailable; answering the turn normally")
+            return None
+
+    def _last_exchange(self) -> str:
+        """What he had just done, for the correction's Context line. "" when there is nothing.
+
+        Read from the conversation log rather than remembered on `self`, so a correction still
+        lands with its context after a restart — LB coming back to the Pi and saying "that was
+        wrong" about this morning's answer is a real thing, and an engine that only remembers
+        the current process would file it against nothing.
+        """
+        try:
+            from tools.memory_manager import load_history
+
+            for message in reversed(load_history()):
+                if message.get("role") == "assistant":
+                    said = " ".join(str(message.get("content", "")).split())
+                    return f'I had just said: "{said[:300]}"'
+        except Exception:                              # noqa: BLE001
+            LOG.debug("could not read the previous turn for context", exc_info=True)
+        return ""
+
+    def _record_correction(self, correction, text: str, t: Turnlog) -> Response:
+        """Write the correction down and say so. **Costs no API call.**
+
+        The whole point of this path is that it is free and immediate. LB correcting him is the
+        moment a turn must not fail, must not wait on a network round trip, and must not be
+        rate-limited — a rebuke that gets answered with "I'm being rate limited" is the worst
+        possible reply to it. So nothing here touches a model: the rule is LB's own words,
+        sliced out of what he said, and the acknowledgement is a fixed sentence.
+
+        See `tools/corrections.py` for why no model is allowed to paraphrase the rule.
+        """
+        from tools import corrections
+        from tools.memory_manager import add_message
+
+        t.route = "correction"
+        t.extras.append("correction")
+        add_message("user", text)
+
+        saved = corrections.record(correction, context=self._last_exchange())
+
+        if saved is None:
+            # NEVER claim the save happened. `knowledge_vault.VAULT_INSTRUCTION` forbids exactly
+            # this lie for the vault, and it matters more here: LB believing a rule is recorded
+            # when it is not means he stops repeating it and it never takes effect.
+            t.extras.append("correction NOT saved")
+            speech = "You're right, and I couldn't write it down. The reason's on the screen."
+            cards = [Card(CardKind.ERROR, "Correction NOT saved",
+                          f"Could not write to {corrections.LEDGER}. The rule is not in force. "
+                          f"Check the log for the cause — most likely file permissions.")]
+        elif saved.rule:
+            speech = "Got it. I've written that down and I won't do that again."
+            # The rule is echoed aloud only when it survives the speakability filter — a rule
+            # containing a path reads as "slash home slash l b" and is worse than not repeating
+            # it. The card always carries it verbatim, so nothing is lost either way.
+            from engine.split import is_speakable
+            echo = f"The rule is: {' '.join(saved.rule.split())}"
+            if is_speakable(echo) is None:
+                speech = f"Got it, I've written that down. {echo}"
+            cards = [Card(CardKind.MARKDOWN, "Correction saved",
+                          f"**Rule:** {saved.rule}\n\n"
+                          f"In force from the next answer onward. "
+                          f"{len(corrections.active_rules())} standing rule(s) in "
+                          f"`{corrections.LEDGER.name}`.")]
+        else:
+            # A bare rebuke carries no rule, and a ledger entry that says only "that was wrong"
+            # is close to useless as a standing instruction. Asking is not deflection — it is
+            # the one question that turns this into something he can actually follow, and LB's
+            # answer will itself be detected as a directive and filed as its own rule.
+            t.extras.append("rebuke — no rule yet")
+            speech = ("You're right, and I've noted it. What should I have done instead?")
+            cards = [Card(CardKind.MARKDOWN, "Correction saved",
+                          f"**Noted:** {saved.said}\n\nNo rule yet — tell him what to do "
+                          f"instead and that becomes the standing rule.")]
+
+        add_message("assistant", speech)
+        return Response(speech=speech, cards=cards, route="correction",
+                        raw=f"Correction recorded: {correction.rule or correction.said}")
 
     # --- the three paths ---------------------------------------------------------------
 
@@ -452,6 +632,14 @@ class Engine:
             from agents.web_agent import propose_web_search
             return self._gate(propose_web_search(text), route.value, t)
 
+        if route is AgentRoute.SCREEN:
+            # Gated like OS and WEB, and it needed no new machinery to be: a screenshot is an
+            # action that leaves the machine, which is what `Pending` is for. `screen_agent`
+            # returns an ungated Response when ODDBALL_SCREEN_CONFIRM=0, and `_gate` passes
+            # that straight through — the off switch lives in one place.
+            from agents.screen_agent import propose_screen_look
+            return self._gate(propose_screen_look(text), route.value, t)
+
         if route is AgentRoute.FIRMWARE:
             # The Response form, not the string form: it carries the Sources card naming which
             # datasheet and page grounded the answer, and an ungrounded answer that looks
@@ -539,6 +727,9 @@ class Engine:
         if pending.kind == "os":
             from agents.os_agent import resume_os_action
             return resume_os_action(pending)
+        if pending.kind == "screen":
+            from agents.screen_agent import resume_screen_look
+            return resume_screen_look(pending)
         from agents.web_agent import resume_web_search
         return resume_web_search(pending)
 

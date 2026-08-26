@@ -14,17 +14,27 @@ Holds the camera open, reads `GestureRecognizer.track()` every frame, and turns 
 a virtual mouse. A pinch grabs, moving the pinch drags, two pinches scroll. That is the whole
 feature.
 
-## Why a kernel virtual device and not a Wayland client
+## Two backends, because two operating systems say no in different ways
 
-This Pi runs **labwc**, a Wayland compositor, and Wayland deliberately forbids one client from
-moving another client's windows - a security property of the display server, not a gap to patch.
-`wmctrl` reaches only XWayland windows; `wtype` does keyboard and no pointer; `ydotool` is not
-packaged for this Debian at all.
+**On the Pi (labwc/Wayland).** Wayland deliberately forbids one client from moving another
+client's windows - a security property of the display server, not a gap to patch. `wmctrl`
+reaches only XWayland windows; `wtype` does keyboard and no pointer; `ydotool` is not packaged
+for that Debian at all. So this goes UNDER the compositor instead of arguing with it.
+`evdev.UInput` creates a virtual input device in the kernel, and labwc sees an ordinary mouse -
+indistinguishable from the real one, on native Wayland and XWayland windows alike.
+`/dev/uinput` is root-only as shipped; `docs/DEPLOY.md` records the udev rule that opens it to
+the `input` group.
 
-So this goes UNDER the compositor instead of arguing with it. `evdev.UInput` creates a virtual
-input device in the kernel, and labwc sees an ordinary mouse - indistinguishable from the real
-one, working on native Wayland and XWayland windows alike. `/dev/uinput` is root-only as
-shipped; `docs/DEPLOY.md` records the one udev rule that opens it to the `input` group.
+**On Windows.** There is no compositor to go under and no capability model to lean on:
+`SendInput` moves the cursor and that is the whole story. `tools/win_input.py` is the emitter,
+and it is a much more careful file than that makes it sound, because guarantee 1 below is the
+one thing the Pi got from the kernel for free and Windows does not offer at all. Read its
+header before touching it.
+
+Both backends present the same four methods - `move`, `button`, `wheel`, `close` - so
+everything below this line, including every guard, is platform-free. That is deliberate: a
+safety property that has to be re-read on two code paths is a safety property with two chances
+to be wrong.
 
 # ==========================================================================================
 # THE SECURITY MODEL - read this before changing anything below
@@ -39,15 +49,28 @@ So it cannot press buttons. Not by policy, and not by a list of windows it decli
 **by what the device is physically able to emit.** Four guarantees, in descending order of how
 much they would hurt to lose:
 
-## 1. The device has no keys, so it cannot type
+## 1. It cannot type - and on Windows this is WEAKER than it was on the Pi
 
-`CAPABILITIES` below declares `REL_X`, `REL_Y`, `REL_WHEEL` and `BTN_LEFT`. That is the entire
-device. It has **no `EV_KEY` capability for any keyboard key**, so there is no code path -
-including a bug in this file - by which it can type a character.
+This matters more than anything else here, because the security gate in `agents/os_agent.py`
+is a terminal prompt reading `input()`. Approving it means typing `y` and pressing Enter. A
+pointer that cannot type cannot answer it, however wrong the rest of this file goes.
 
-That matters more than anything else here, because the security gate in `agents/os_agent.py` is
-a terminal prompt reading `input()`. Approving it means typing `y` and pressing Enter. A device
-that cannot type cannot answer it, however wrong the rest of this file goes.
+**On the Pi it was enforced by the kernel.** `capabilities()` below declares `REL_X`, `REL_Y`,
+`REL_WHEEL` and `BTN_LEFT`. That is the entire device. It has **no `EV_KEY` capability for any
+keyboard key**, so there is no code path - including a bug in this file - by which it can type
+a character. The guarantee did not depend on this code being correct.
+
+**On Windows it is enforced by inspection instead, and that is a real downgrade.** `SendInput`
+is one call that takes mouse structures or keyboard structures; there is no capability to
+withhold. What `tools/win_input.py` does instead is refuse to declare the keyboard struct at
+all, so typing is not something this process can do wrong - it is something this process has
+no vocabulary for. `python tools/win_input.py --check` prints the union's members and one
+member is the proof.
+
+That is the smallest surface the guarantee reduces to on this platform. It is not the same
+promise, and the difference is written down rather than glossed: on the Pi a bug could not
+type; on Windows an *edit* could. Guarantees 2, 3 and 4 are unaffected - they were always
+logic in this file, and they run identically on both.
 
 ## 2. A press and a release can never happen in the same place, so it cannot click
 
@@ -123,13 +146,28 @@ WHEEL_GAIN = 4.0
 MAX_JUMP_PX = 320.0
 
 
-def capabilities():
-    """The whole device. Deliberately tiny - see guarantees 1 and 3."""
-    from evdev import ecodes as e
-    return {
-        e.EV_REL: [e.REL_X, e.REL_Y, e.REL_WHEEL],
-        e.EV_KEY: [e.BTN_LEFT],
-    }
+def open_backend():
+    """The one place the operating system is chosen.
+
+    Returns:
+        Something with `move(dx, dy)`, `button(down)`, `wheel(notches)` and `close()`.
+
+    Raises:
+        RuntimeError: with an actionable sentence naming what to install or which udev rule to
+                      add. Never a bare ImportError - a gesture daemon that dies on
+                      "No module named evdev" has told LB nothing he can act on.
+    """
+    if sys.platform != "win32":                                        # pragma: no cover
+        # LOUD. The evdev/uinput backend was DELETED 2026-08-26, not disabled. It matters more
+        # here than anywhere else in the prune: the uinput device was what made guarantee 1
+        # kernel-enforced, and a stub that quietly did nothing would leave this file's header
+        # making four security claims with nothing behind any of them.
+        raise RuntimeError(
+            f"the gesture pointer is Windows-only since 2026-08-26 and this is {sys.platform}. "
+            f"The evdev backend was deleted; restore `capabilities()` and `_UInputMouse` from "
+            f"git history to run it on the Pi.")
+    from tools.win_input import MouseOnlyInput
+    return MouseOnlyInput()
 
 
 class Pointer:
@@ -148,9 +186,7 @@ class Pointer:
         self.armed = 0.0              # pixels travelled during this pinch, before pressing
         if dry_run:
             return
-        from evdev import UInput
-        self.ui = UInput(capabilities(), name="oddball-gesture-pointer", version=0x1)
-        LOG.info("virtual pointer at %s", self.ui.device.path)
+        self.ui = open_backend()
 
     # -- raw emission ----------------------------------------------------------------------
     def _move(self, dx: float, dy: float) -> None:
@@ -163,18 +199,13 @@ class Pointer:
             print(f"    move {dx:+5d} {dy:+5d}"
                   f"{'  [dragging]' if self.down else ''}")
             return
-        from evdev import ecodes as e
-        self.ui.write(e.EV_REL, e.REL_X, dx)
-        self.ui.write(e.EV_REL, e.REL_Y, dy)
-        self.ui.syn()
+        self.ui.move(dx, dy)
 
     def _button(self, down: bool) -> None:
         if self.dry_run:
             print(f"    button {'DOWN' if down else 'UP'}")
         else:
-            from evdev import ecodes as e
-            self.ui.write(e.EV_KEY, e.BTN_LEFT, 1 if down else 0)
-            self.ui.syn()
+            self.ui.button(down)
         self.down = down
 
     # -- the guarded interface the loop uses -----------------------------------------------
@@ -214,9 +245,7 @@ class Pointer:
         if self.dry_run:
             print(f"    wheel {clicks:+d}")
             return
-        from evdev import ecodes as e
-        self.ui.write(e.EV_REL, e.REL_WHEEL, clicks)
-        self.ui.syn()
+        self.ui.wheel(clicks)
 
     def close(self) -> None:
         try:
@@ -238,27 +267,38 @@ def write_state(motion, paused: bool) -> None:
         pass                                        # a state file is a convenience, not a duty
 
 
+def _check_windows() -> bool:
+    """The Windows preconditions. There is only one, and it is not about permissions.
+
+    Nothing has to be installed and no device node has to exist - `SendInput` is in `user32`
+    on every Windows box. What IS worth printing is the state of guarantee 1, because on this
+    platform it is a property of the code rather than of the kernel, and a check that does not
+    look at it is checking the easy half.
+    """
+    from tools import win_input
+
+    if not win_input.available():
+        print(f"  SendInput        UNAVAILABLE - {win_input.why_unavailable()}")
+        return False
+    print("  SendInput        present (user32)")
+
+    # Guarantee 1, verified rather than asserted. One union member means no keyboard struct.
+    members = [name for name, _ in win_input._INPUTUNION._fields_]
+    if members == ["mi"]:
+        print("  keyboard struct  absent - the pointer has no vocabulary for typing")
+    else:
+        # Not a warning. A second union member means somebody added the ability to type to a
+        # daemon whose header promises it cannot, and that is a failed check, not a note.
+        print(f"  keyboard struct  PRESENT - INPUT union has {members}, so guarantee 1 is "
+              f"BROKEN. See the header of tools/win_input.py.")
+        return False
+    return True
+
+
 def check() -> int:
     """Can this box do it at all? Prints what is missing and how to fix it."""
-    ok = True
     print()
-    try:
-        import evdev                                # noqa: F401
-        print("  evdev            present")
-    except ImportError:
-        ok = False
-        print("  evdev            MISSING - uv pip install --python .venv-gesture/bin/python evdev")
-
-    node = Path("/dev/uinput")
-    if not node.exists():
-        ok = False
-        print("  /dev/uinput      MISSING - sudo modprobe uinput")
-    elif not os.access(node, os.W_OK):
-        ok = False
-        print(f"  /dev/uinput      NOT WRITABLE by {os.environ.get('USER', 'you')} - see "
-              f"docs/DEPLOY.md for the udev rule")
-    else:
-        print("  /dev/uinput      writable")
+    ok = _check_windows()
 
     try:
         import tools.gesture_control as gc

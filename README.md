@@ -1,11 +1,31 @@
 # Mr Odd Ball — EE Copilot
 
-A specialised Electrical Engineering copilot for **LB**, built to run on a Raspberry Pi 5.
-A Gemini router reads each question and hands it to the one agent that should answer it.
+A specialised Electrical Engineering copilot for **LB**. He listens for his name, answers out
+loud, and floats on the desktop as an animated face. A Gemini router reads each question and
+hands it to the one agent that should answer it.
 
-> **This tag (`v0-terminal`) is the engine as it ran in the terminal**, before Mr Odd Ball's
-> voice, personality and animated face were merged in. It is kept so the original is always
-> recoverable. Integration work happens on the `oddball-integration` branch.
+**Runs on Windows 11.** He lived on a Raspberry Pi 5 until 2026-08-26 and now runs on LB's
+workstation (Ryzen 7 5700X, 32 GB, RX 6600). The Linux code was **deleted, not disabled** —
+`tools/os_controller.py`, `tools/app_catalogue.py` and `tools/gesture_pointer.py` raise on
+import off Windows, deliberately, so that nothing can quietly degrade into a guard that allows
+everything. Restore from git history (or the `v0-terminal` tag) if the Pi ever comes back.
+
+> The `v0-terminal` tag is the engine as it ran in the terminal, before the voice, personality
+> and animated face were merged in. It is kept so the original is always recoverable.
+> Work happens on the `oddball-integration` branch.
+
+## What runs where
+
+| | |
+|---|---|
+| **Shell** | `powershell.exe -NoProfile -NonInteractive`, invoked as an argv — never `shell=True`, which would put `cmd.exe` in front of it |
+| **Face** | PyQt6 + QtWebEngine, frameless and always-on-top, optionally click-through via `WS_EX_LAYERED` |
+| **Apps** | the Start Menu shortcut tree, read as this platform's desktop-entry database |
+| **Audio** | `sounddevice`/PortAudio on WASAPI; Piper TTS and faster-whisper, both local |
+| **Gestures** | `SendInput` through `ctypes`, mouse-only by construction |
+| **Autostart** | a shortcut in `shell:startup` → `config/start_oddball.vbs` |
+
+`docs/DEPLOY.md` is the long version, and is what to read when something breaks.
 
 ## How it routes
 
@@ -23,26 +43,59 @@ When nothing free matches, `router.py` uses Pydantic structured output
 | `FIRMWARE` | `agents/firmware_agent.py` | C/C++, RTOS, registers, datasheets |
 | `HARDWARE` | `agents/hardware_agent.py` | PCB trace width via IPC-2221 (`tools/trace_calculator.py`); reads your own KiCad schematics and boards (`tools/kicad_parser.py`) |
 | `MATH` | `agents/math_agent.py` | writes and runs Python in a REPL sandbox |
-| `OS` | `agents/os_agent.py` | runs terminal commands on the Pi, and opens desktop applications (`tools/app_launcher.py`) — **asks first**, for both |
+| `OS` | `agents/os_agent.py` | runs PowerShell commands on this PC, and opens desktop applications (`tools/app_launcher.py`) — **asks first**, for both |
 | `QUIZ` | `agents/quiz_agent.py` | tutor mode; grades conceptually, not word-for-word |
 | `WEB` | `agents/web_agent.py` | DuckDuckGo search — **asks first** |
 | `ACADEMIC` | `agents/academic_agent.py` | coursework deadlines from your **live Canvas feed** (`tools/canvas_sync.py`), and course policies from your syllabus notes in the vault. Canvas owns the dates; the notes own everything else |
+| `SCREEN` | `agents/screen_agent.py` | takes a screenshot and says what is on it — *"what am I looking at"*, *"what does that error say"* — **asks first** (`tools/screen_capture.py`) |
 | `UTILITY` | `orchestrator/instant.py` | the free lookups, when the router is reached anyway |
 | `PERSONA` | `agents/persona_agent.py` | chit-chat and jokes — Mr Odd Ball himself |
 | `GENERAL` | `agents/persona_agent.py` | anything outside the scope — **and files whatever you upload** (`tools/file_manager.py`), whichever kind of document it turns out to be |
 
-## The two security gates
+## The three security gates
 
-`OS` and `WEB` are the only routes that can touch the system or the network, and neither acts
-without approval. The exact command, query or argv is shown on a card **before** the question is
-asked, and nothing runs without a clear yes — silence, a mumble and a refusal all decline.
-`tools/os_controller.py` also holds a 19-pattern blocklist and a 15-second timeout, applied even
-after approval.
+`OS`, `WEB` and `SCREEN` are the only routes that can touch the system, the network, or your
+display, and none of them acts without approval. The exact command, query or argv is shown on a
+card **before** the question is asked, and nothing runs without a clear yes — silence, a mumble
+and a refusal all decline. `tools/os_controller.py` also holds a **33-pattern blocklist** and a
+15-second timeout, applied even after approval.
 
-Opening an application goes through the same gate, and the argv on the card comes from the
-machine's own desktop entry rather than from anything a model wrote — so what is approved, what
-is spoken and what is shown are the same thing. Launched apps get their own transient systemd
-unit, which is what lets them survive a restart of the assistant.
+> **The blocklist is platform-specific, and it has been wrong once.** Every pattern was Linux
+> syntax until 2026-08-26, and pointed at a Windows shell it matched *nothing* — 16 of 17
+> destructive commands (`format C: /y`, `del /s /q C:\`, `vssadmin delete shadows`) were
+> reported as allowed, while every harness stayed green. It does not fail loudly: it finds no
+> match and answers "allowed". The measurement is in
+> `media/data/2026-08-26-windows-blocklist-gap.csv` and the lesson is **L23**. The module now
+> refuses to import off Windows for exactly this reason.
+
+Opening an application goes through the same gate, and what is on the card comes from the
+machine's own Start Menu entry rather than from anything a model wrote — so what is approved,
+what is spoken and what is shown are the same thing. Launched apps are handed to Explorer via
+`os.startfile`, so they are not children of the assistant and survive a restart of it.
+
+**The screenshot gate is the one you may want to switch off**, and it is the only one that says
+so. A frame of your desktop goes to Gemini, and your desktop may have a terminal with a key in
+the scrollback — so the default is to ask. But you are the one who asked to be looked at, so
+`ODDBALL_SCREEN_CONFIRM=0` makes it instant and `ODDBALL_SCREEN=0` turns the route off entirely.
+Frames are kept in `data/screen/` (gitignored) so you can open the exact image that was sent
+rather than take it on trust.
+
+## Looking at the screen
+
+Ask *"what's on my screen"*, *"what am I looking at"* or *"read that error"* and he takes one
+frame, downscales it, and describes what is actually in it. `orchestrator/route_hint.py` answers
+those phrasings with **no routing call at all**, so getting to the screen costs one API call
+rather than two.
+
+He is describing **one still frame**. He cannot watch the screen, cannot see what changed, and
+cannot click, type or scroll — the prompt says so, because a model shown a screenshot will
+otherwise happily offer to press the button in it.
+
+The backend is PowerShell's `System.Drawing` capture, and it needs nothing installed. The
+`gnome-screenshot` are tried as X11 fallbacks, and Windows works too so the harness can run on
+the authoring box. With none of them installed he says he cannot see the screen instead of
+failing in a way that looks like a bug. `python tools/verify_screen.py --backends` says which
+one this machine would use.
 
 ## Reading your KiCad files
 
@@ -69,21 +122,124 @@ See `docs/DECISIONS.md` (D9) for why `kiutils` rather than a hand-rolled parser,
 
 ## Memory
 
-`tools/memory_manager.py` logs the last 40 messages to `sd_card_memory.json` on the Pi's SD
+`tools/memory_manager.py` logs the last 40 messages to `sd_card_memory.json` on the local
 card and injects them into every agent prompt as `{chat_history}`. It also watches a **15-day
 clock** — once the oldest message in the log passes that age, every answer carries a reminder
 to copy the file to an external drive before the card is the only copy.
 
-## Setup
+That same function carries three more things in front of the conversation log, and because every
+agent already calls it, every agent gets them. `tools/self_context.py` composes the block.
+
+## Correcting him, and having it stick
+
+**Tell him he got something wrong and he writes it down, permanently, in your own words.**
+
+> **You:** Always use absolute paths instead.
+> **Him:** Got it, I've written that down. The rule is: Always use absolute paths instead.
+
+The rule goes into `vault/corrections.md` and is injected into **every agent prompt from the next
+turn onward**, above everything else in the prompt, stated as overriding his own judgement. Typed
+or spoken, it works the same way — `engine/core.py` catches it at the one entry point both
+channels come through.
+
+It costs **no API call**. The rule is a slice of your raw sentence, never a model's paraphrase of
+it, so paths and part numbers survive intact and it still works with the quota gone — which
+matters, because being annoyed at him is exactly the moment a turn must not fail.
+
+A bare *"that was wrong"* carries no rule — "that" means nothing in tomorrow's prompt — so he
+records it and asks what he should have done instead. Your answer becomes the rule.
 
 ```bash
-python -m venv venv
-venv/bin/pip install -r requirements.txt      # Windows: venv\Scripts\pip
-cp .env.example .env                          # then add your key from aistudio.google.com/apikey
-python main.py
+python tools/corrections.py --list      # every standing rule, numbered
+python tools/corrections.py --prompt    # exactly what every agent is being told right now
 ```
 
-`.env` is gitignored and must stay that way.
+That second one is what to reach for when he starts behaving oddly. A rule you forgot you gave is
+the first thing to suspect. To withdraw one, delete its entry from the file.
+
+## Learning from his own mistakes
+
+`vault/reflections.md` is the other half, and deliberately a **separate file**: a correction is an
+instruction and is obeyed, a recorded failure is evidence and is considered. Merging them would
+either soften your rules into suggestions or harden one timeout into a refusal.
+
+He writes to it himself when a command errors, the blocklist refuses something, an app is not
+installed, a turn raises, or **a turn takes longer than 45 seconds even though it worked** — the
+slow success being the failure nobody escalates. Before answering, the failures that look like
+what you just asked are put in front of him, matched on shared words with identifiers like
+`ECE350` weighted double.
+
+```bash
+python tools/reflections.py --list
+python tools/reflections.py --similar "open firefox"
+```
+
+Both ledgers are plain Markdown under `vault/`, gitignored like the rest of it, created on first
+write, and safe to edit by hand.
+
+## Knowing what he is
+
+`tools/system_state.py` puts his own CPU temperature, load average, free memory, disk space,
+uptime, which ports are listening (8765 for the face and its WebSocket, 8767 for uploads) and
+which capabilities are actually installed into every prompt. So "how hot are you" is answered
+without a tool call, and an answer given while the CPU is at 81 °C is allowed to mention it.
+
+Every reading is a `/proc` or `/sys` read cached for 15 seconds plus two loopback connects — no
+model, no subprocess. **Anything unreadable is stated as unreadable rather than omitted**, because
+an assistant that confidently reports a temperature it never read is worse than one that says it
+cannot see the sensor. The capability list is derived from which modules exist on disk, so
+deleting a tool removes the claim.
+
+```bash
+python tools/system_state.py            # temperature, load, memory, ports, capabilities
+python tools/self_context.py "open firefox"   # the whole block, as one agent prompt sees it
+```
+
+`ODDBALL_SELF_CONTEXT=0` turns all three blocks off; `ODDBALL_STATE=0` drops only the machine
+state and leaves your rules in place.
+
+## Setup
+
+```powershell
+python -m venv venv
+venv\Scripts\pip install -r requirements.txt
+python main.py --text                         # typing. No audio hardware, no HUD.
+python main.py                                # voice: wake word, ears, voice, face
+```
+
+**Needs Python 3.12.** Not 3.13: `mediapipe` — the hand tracker behind the gesture pointer and
+the thumbs-up approval — publishes no wheel that works on it. Everything else is happy on
+either, so this is the one version constraint in the project and it comes from one package.
+
+The Gemini key goes in `.env`, which is gitignored and must stay that way. Paste it without
+letting it reach your shell history, which PSReadLine keeps in plain text forever:
+
+```powershell
+$k = Read-Host 'paste the key' -AsSecureString
+[Runtime.InteropServices.Marshal]::PtrToStringAuto(
+  [Runtime.InteropServices.Marshal]::SecureStringToBSTR($k)) |
+  ForEach-Object { "GOOGLE_API_KEY=$_" } |
+  Set-Content -Encoding utf8 .env
+```
+
+Get a key from [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — the free tier
+is 20 requests per model per day, which is what the free-tier routing above exists to protect.
+
+**To have him start with Windows:**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\install_autostart.ps1 install
+powershell -ExecutionPolicy Bypass -File tools\install_autostart.ps1 status
+```
+
+That puts a shortcut in `shell:startup` pointing at `config/start_oddball.vbs`, which runs
+`config/start_oddball.bat` with no console window. `remove` takes it back out.
+
+**To check everything still works** — 27 harnesses, ~12,300 checks, no API key required:
+
+```powershell
+Get-ChildItem tools\verify_*.py | ForEach-Object { python $_.FullName }
+```
 
 ## Uploading documents — the paperclip
 
@@ -112,7 +268,8 @@ project — is unpacked into the project folder, with any member pointing outsid
 reported.
 
 **An index rebuild runs in the background**, because it loads torch and re-embeds everything
-under `data/` — measured on the Pi at **11.4 s before it embeds anything**, then 14.4 ms per
+under `data/` — measured on the Pi at **11.4 s before it embeds anything** (not re-measured
+since the move to Windows, where it will be substantially faster), then 14.4 ms per
 chunk, and the per-chunk part multiplies by your whole library rather than by the new file. He
 is prompted to say a document is *being indexed*, never that it is ready, and never to promise
 you a duration; ask him whether it is done and he checks. A KiCad file needs no rebuild at all —

@@ -34,11 +34,23 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import ast
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# These ledgers are written from `Engine.ask` and `agents/os_agent.py`, so this harness writes
+# to them the moment it drives a failure — even though it was written before they existed and
+# does not mention them. Redirected to a temp directory BEFORE anything under `tools/` is
+# imported, because both read their location at import time. tasks/lessons.md L22.
+import os                                                             # noqa: E402
+import tempfile                                                       # noqa: E402
+
+os.environ.setdefault("ODDBALL_VAULT_DIR",
+                      tempfile.mkdtemp(prefix="oddball-harness-vault-"))
+
 
 for _stream in (sys.stdout, sys.stderr):
     try:
@@ -104,6 +116,7 @@ ROUTE_TARGETS = {
     AgentRoute.PERSONA:  ("agents.persona_agent",  "run_persona_agent"),
     AgentRoute.UTILITY:  ("orchestrator.instant",  "Router"),
     AgentRoute.ACADEMIC: ("agents.academic_agent", "run_academic_agent_response"),
+    AgentRoute.SCREEN:   ("agents.screen_agent",   "propose_screen_look"),
     AgentRoute.GENERAL:  ("agents.persona_agent",  "run_persona_agent"),
 }
 
@@ -163,44 +176,129 @@ for mod_name, attr in TOOLS.items():
     except Exception as exc:                                          # noqa: BLE001
         check(False, f"{mod_name}.{attr}", f"{type(exc).__name__}: {exc}")
 
-# ...and that the Pi's staged installer would actually INSTALL them.
+# ...and that requirements.txt names everything the code imports.
 #
-# `stage_install.sh` groups packages by hand so a resolver backtrack is isolated to one group.
-# The cost of hand-grouping is drift: a package added to requirements.txt and not added there
-# is installed **nowhere**, and nothing reports it — the venv builds clean and the gap surfaces
-# later as a spoken error on the one route that needed it.
+# **This replaced a check about `stage_install.sh` on 2026-08-26, when that file was deleted
+# with the rest of the Pi tooling.** The old check proved that every package in
+# requirements.txt appeared in one of the installer's hand-written stages — the Pi needed the
+# install split into groups so a pip resolver backtrack stayed isolated to one group, and the
+# cost of hand-grouping was drift. It caught `sympy` and `kiutils` missing from every stage in
+# 2026-08-21, which on a fresh Pi meant every derivative question answered
+# "ModuleNotFoundError".
 #
-# That is not hypothetical. `sympy` and `kiutils` were both missing from every stage when this
-# check was written (2026-08-21), which on a fresh box means every derivative question answers
-# "ModuleNotFoundError" and every KiCad question answers with an install instruction. This is
-# the same failure shape as the sympy bug in this file's docstring, one layer earlier.
+# Windows needs no staging: `pip install -r requirements.txt` resolves in one pass on a box
+# with 32 GB. So that check has nothing left to check, and deleting it outright would quietly
+# drop the class of bug it was FOR — a dependency that is used and not declared.
 #
-# Read ONLY the `run` lines, never the whole file. Searching the raw text was the first
-# version and it was vacuous: this script's own header comment explains why sympy matters, so
-# `"sympy" in text` was true with the install line deleted. Mutation-testing it — removing
-# sympy from its stage — is what exposed that, and the check stayed green. A check that cannot
-# go red is not a check, which is the lesson this file already teaches about the sandbox.
+# This is that class of bug, caught from the other end. The old check asked "is everything
+# declared also installed?"; this asks "is everything IMPORTED also declared?", which is the
+# half that actually bites now: `pypdf` was relied on transitively through langchain-community
+# for months before anything named it, and it would have vanished the day that package changed
+# its own dependencies.
+#
+# Third-party imports only — the standard library and this repo's own packages are not
+# dependencies. The list of local packages is read from the filesystem rather than hardcoded,
+# so a new top-level package does not silently become a "missing dependency".
 _root = Path(__file__).resolve().parents[1]
-_reqs = (_root / "requirements.txt").read_text(encoding="utf-8")
-_stages = "\n".join(
-    line for line in (_root / "stage_install.sh").read_text(encoding="utf-8").splitlines()
-    if line.strip().startswith("run "))
 
-_wanted = []
+# BOTH files. `requirements-rag.txt` is the optional vector-store extra, and reading only the
+# main file reported `langchain_chroma` — declared there, used by tools/vector_db.py — as an
+# undeclared dependency. A check that cries wolf about a package that IS declared gets muted,
+# and a muted check is the one that misses the real one next to it.
+_reqs = "\n".join(
+    (_root / name).read_text(encoding="utf-8")
+    for name in ("requirements.txt", "requirements-rag.txt")
+    if (_root / name).exists())
+
+def _norm_dist(name: str) -> str:
+    """pip is case-insensitive and treats `-` and `_` as the same character."""
+    return name.strip().strip("\"'").lower().replace("-", "_")
+
+
+_declared = set()
 for _line in _reqs.splitlines():
-    _line = _line.split("#")[0].strip()
-    if not _line:
+    _bare = _line.split("#")[0].strip()
+    if _bare:
+        _name = re.split(r"[<>=!~\[;]", _bare)[0].strip()
+        if _name:
+            _declared.add(_norm_dist(_name))
         continue
-    # Name is everything before the first version specifier or extras bracket.
-    _name = re.split(r"[<>=!~\[;]", _line)[0].strip()
-    if _name:
-        _wanted.append(_name)
 
-_uncovered = [p for p in _wanted if p not in _stages]
-check(not _uncovered,
-      "every requirements.txt package appears in a stage_install.sh stage",
-      "" if not _uncovered else
-      f"INSTALLED NOWHERE on a fresh Pi: {', '.join(_uncovered)} — add them to a stage")
+    # A COMMENTED `pip install` line is still a declaration — it is this repo's convention for
+    # a package that must be installed by hand, and the convention is load-bearing rather than
+    # sloppy. Two packages depend on it:
+    #
+    #   openwakeword   installed with `--no-deps`, because it declares tflite-runtime as a
+    #                  hard dependency. `--no-deps` cannot be expressed in a requirements line
+    #                  at all, so the instruction is the only place it can live.
+    #   openai         deliberately NOT installed: it is only for the GLM benchmark, and
+    #                  requirements.txt says so in as many words. That module reports
+    #                  UNAVAILABLE rather than crashing when it is absent.
+    #
+    # Reading these keeps the check honest in BOTH directions. Ignoring them made it red about
+    # two packages whose absence is a documented decision, and a check that is red for a
+    # correct state is a check that gets muted — taking the real findings next to it with it.
+    _m = re.search(r"pip install\s+(?:--[\w-]+\s+)*[\"']?([A-Za-z0-9._-]+)", _line)
+    if _m:
+        _declared.add(_norm_dist(re.split(r"[<>=!~\[;]", _m.group(1))[0]))
+
+
+# Import name != distribution name for a handful of packages. This map is the ONLY hardcoded
+# part, and it is small on purpose: an entry here is a claim that two names mean one package,
+# which is exactly the kind of thing that goes stale, so each one is a package this repo
+# actually imports.
+_IMPORT_TO_DIST = {
+    "yaml": "pyyaml",
+    "PIL": "pillow",
+    "cv2": "opencv_python",
+    "dotenv": "python_dotenv",
+    "fitz": "pymupdf",
+    "serial": "pyserial",
+    "sklearn": "scikit_learn",
+    "dateutil": "python_dateutil",
+    "piper": "piper_tts",
+}
+# Entries are only for packages whose IMPORT name genuinely differs from their DISTRIBUTION
+# name. Anything that matches after lowercasing and folding `-` to `_` must NOT be listed:
+# `langchain_core` was mapped to `langchain` here and that was simply wrong — it made the
+# check look for a package this repo does not use, and go red about one that was correctly
+# declared two lines above it. A synonym table is a second copy of the truth; keep it minimal
+# and let the normal rule do the work.
+
+_local = {p.name for p in _root.iterdir() if p.is_dir() and (p / "__init__.py").exists()}
+_local |= {p.stem for p in _root.glob("*.py")}
+
+# Parsed with `ast`, NOT with a regex over the source. The regex version was written first and
+# it read prose: this repo's docstrings are long and explanatory, so lines like "import a
+# second copy" and "import his own module" were matched, and the check reported `a` and `his`
+# as undeclared dependencies. A module name is a thing the parser knows and a pattern only
+# guesses at, and in a codebase whose comments outnumber its statements the guess loses.
+_undeclared: set[str] = set()
+for _py in sorted(_root.glob("*.py")) + sorted(_root.glob("*/*.py")):
+    if "verify_" in _py.name or _py.parent.name in ("tests", "raw_downloads", "media"):
+        continue
+    try:
+        _tree = ast.parse(_py.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:
+        continue
+    _mods: set[str] = set()
+    for _node in ast.walk(_tree):
+        if isinstance(_node, ast.Import):
+            _mods.update(a.name.split(".")[0] for a in _node.names)
+        elif isinstance(_node, ast.ImportFrom) and _node.level == 0 and _node.module:
+            _mods.add(_node.module.split(".")[0])
+    for _mod in _mods:
+        if _mod in _local or _mod in sys.stdlib_module_names:
+            continue
+        _dist = _IMPORT_TO_DIST.get(_mod, _mod).lower().replace("-", "_")
+        if _dist not in _declared:
+            _undeclared.add(f"{_mod} (in {_py.relative_to(_root)})")
+
+check(not _undeclared,
+      "every third-party module the code imports is declared in requirements.txt",
+      "" if not _undeclared else
+      f"IMPORTED BUT NOT DECLARED: {', '.join(sorted(_undeclared)[:6])} — a dependency you "
+      f"rely on and do not name is one that disappears when whatever pulled it changes")
 
 # =========================================================================================
 section("3. the tools can actually DO their job")
@@ -255,11 +353,24 @@ for q, why in [("what time is it", "time"), ("what does i2c stand for", "define"
     check(r.handled, f"UTILITY answers {q!r} with no API call", f"intent={r.intent}")
 
 # The OS blocklist is live in the deployed tool, not just in its own harness.
-from tools.os_controller import refuse                                # noqa: E402
+#
+# Both probes follow the PLATFORM, because the table does (2026-08-26). The pair used to be
+# `rm -rf /` and a thermal-zone read, hardcoded — and on Windows the first of those is not a
+# refusal, so this check went red while reporting a problem it did not have: the blocklist
+# was live, it simply was not the Linux one. The generic version of that mistake is the whole
+# subject of `tools/os_controller.py`'s docstring, and `active_table_name()` exists so the
+# question can be asked properly rather than guessed at from a string.
+from tools.os_controller import active_table_name, refuse              # noqa: E402
 
-check(refuse("rm -rf /") is not None, "the OS blocklist is live")
-check(refuse("cat /sys/class/thermal/thermal_zone0/temp") is None,
-      "and still allows the things he is actually asked to do")
+_DANGEROUS, _ORDINARY = {
+    "windows": ("del /s /q C:\\", "Get-CimInstance Win32_Processor"),
+    "linux": ("rm -rf /", "cat /sys/class/thermal/thermal_zone0/temp"),
+}[active_table_name()]
+
+check(refuse(_DANGEROUS) is not None,
+      f"the OS blocklist is live ({active_table_name()} table)", _DANGEROUS)
+check(refuse(_ORDINARY) is None,
+      "and still allows the things he is actually asked to do", _ORDINARY)
 
 # The academic calendar. This one is on the TURN PATH — `engine/core.py` checks it on every
 # routed question — so "it does not raise when the file is absent" is a property the whole

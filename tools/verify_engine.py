@@ -121,6 +121,22 @@ _mem.check_for_backup_reminder = lambda: False
 _mem.format_memory_for_llm = lambda: "No previous memory."
 sys.modules["tools.memory_manager"] = _mem
 
+# Same reasoning as the memory stub above, and it had to be learned the same way. `Engine.ask`
+# records every failed turn in `vault/reflections.md`, and section 5 drives failures on purpose —
+# so a plain run of this harness was appending its own deliberate 400s to LB's real ledger, where
+# they would then be injected into every agent prompt as things that had "gone wrong".
+#
+# Redirected at MODULE scope, not inside a section, because the leak is in section 5 and in the
+# os_agent hook, both of which run before any section that could set it up. Never restored: the
+# process exits, and a restore here would only create a window where it could leak again.
+import tempfile                                                       # noqa: E402
+
+from tools import reflections as _reflections                         # noqa: E402
+
+_REFLECT_TMP = Path(tempfile.mkdtemp(prefix="oddball-engine-reflections-"))
+_reflections.VAULT_DIR = _REFLECT_TMP
+_reflections.LEDGER = _REFLECT_TMP / "reflections.md"
+
 
 # =========================================================================================
 section("1. the OS gate suspends — nothing runs until asked")
@@ -348,6 +364,118 @@ check(r3.route == "utility" and "quota" not in r3.speech.lower(),
 _quota.clear()
 check(any(c.kind == CardKind.ERROR for c in r.cards),
       "and the detail goes on an error card, not into his mouth")
+
+# =========================================================================================
+section("6. a correction is caught HERE, above the router and below the gate")
+# =========================================================================================
+
+# `tools/verify_corrections.py` proves the detector and the ledger. This section proves the one
+# thing only the engine can: that a correction is intercepted at the right point in `ask()`.
+# The ordering is the whole property — one place too high and it eats a permission answer, one
+# place too low and it costs a Gemini call to be forgotten by the persona agent.
+
+import shutil                                                         # noqa: E402
+
+from tools import corrections                                         # noqa: E402
+
+_real_ledger, _real_vault = corrections.LEDGER, corrections.VAULT_DIR
+_tmp = Path(tempfile.mkdtemp(prefix="oddball-engine-corrections-"))
+corrections.VAULT_DIR = _tmp
+corrections.LEDGER = _tmp / "corrections.md"
+
+# The reflection ledger was redirected at module scope — see the note beside the memory stub.
+# Asserted here rather than there so the failure shows up in a section rather than at import.
+check(_reflections.LEDGER.parent == _REFLECT_TMP,
+      "the reflection ledger is redirected too, NOT just the corrections one",
+      "section 5 drives failures on purpose; unredirected they land in LB's real ledger and "
+      "are then injected into every agent prompt")
+
+ROUTED: list[str] = []
+
+
+def _counting_router(query):
+    ROUTED.append(query)
+    return FakeDecision(AgentRoute.PERSONA)
+
+
+try:
+    corrections.clear()
+    core.router_agent = _counting_router
+    eng = Engine()
+
+    ROUTED.clear()
+    r = eng.ask("Always use absolute paths.")
+    check(r.route == "correction", "a correction is routed to 'correction'", f"got {r.route!r}")
+    check(ROUTED == [], "...and the paid router was NEVER called",
+          f"router saw {ROUTED}")
+    check(r.pending is None, "...and no gate was opened")
+    check("written that down" in r.speech.lower(),
+          "he says he wrote it down", r.speech)
+    rules = corrections.active_rules()
+    check(len(rules) == 1 and "absolute paths" in rules[0].rule,
+          "...and it really is in the ledger", f"got {[x.rule for x in rules]}")
+
+    # The acknowledgement is spoken, so it has to survive the speech filter like anything else.
+    from engine.split import is_speakable                             # noqa: E402
+    check(is_speakable(r.speech) is None, "the acknowledgement is speakable", r.speech)
+
+    # A bare rebuke has no rule, and asking is the useful answer rather than a deflection.
+    r = eng.ask("That was wrong.")
+    check(r.route == "correction", "a bare rebuke is a correction too")
+    check("?" in r.speech, "...and he asks what he should have done instead", r.speech)
+    check(ROUTED == [], "...still with no router call")
+
+    # ---- the ordering, which is what this section is really for -------------------------
+
+    # ABOVE the router: an ordinary question is unaffected and still routes.
+    ROUTED.clear()
+    r = eng.ask("tell me about operational amplifiers")
+    check(ROUTED == ["tell me about operational amplifiers"],
+          "an ordinary question still reaches the router", f"router saw {ROUTED}")
+    check(r.route != "correction", "...and is not mistaken for a correction")
+
+    # BELOW the gate: "don't do that" with a permission question open is a DECLINE. If the
+    # correction check ran first it would swallow the answer and leave the gate open, and the
+    # next thing LB said about anything at all would be consumed as its answer.
+    install_os_fakes()
+    route_to(AgentRoute.OS)
+    EXECUTED.clear()
+    eng = Engine()
+    r = eng.ask("check the cpu temperature")
+    check(r.pending is not None, "a gate is open")
+    before = len(corrections.active_rules())
+    r = eng.ask("no, don't do that")
+    check(EXECUTED == [], "...'no, don't do that' does not run the command")
+    check(eng.pending is None, "...and CLOSES the gate rather than leaving it open",
+          "a gate that stays open eats the next thing he says, whatever it is about")
+    check(r.route == "os", "...answered as a decline, not as a correction", f"got {r.route!r}")
+    check(len(corrections.active_rules()) == before,
+          "...and nothing was filed as a standing rule")
+
+    # BELOW quiz mode: "wrong" is a plausible thing to say to a quiz question, and the quiz
+    # owns every utterance while it is on.
+    core.router_agent = _counting_router
+    eng = Engine()
+    eng.mode = "quiz"
+    eng.quiz_item = {"question": "What is Ohm's law?", "answer": "V = I R"}
+    before = len(corrections.active_rules())
+    try:
+        r = eng.ask("that was wrong")
+        check(r.route == "quiz", "in quiz mode, 'that was wrong' stays a quiz answer",
+              f"got {r.route!r}")
+    except Exception as exc:                                          # noqa: BLE001
+        # The quiz grader is a real agent and there is no key here; reaching it at all is the
+        # property under test, and it can only be reached by NOT being intercepted.
+        check("correction" not in str(exc).lower(),
+              "in quiz mode, 'that was wrong' reaches the quiz grader, not the ledger",
+              f"{type(exc).__name__}")
+    check(len(corrections.active_rules()) == before,
+          "...and nothing was filed while the quiz had the turn")
+finally:
+    corrections.LEDGER, corrections.VAULT_DIR = _real_ledger, _real_vault
+    shutil.rmtree(_tmp, ignore_errors=True)
+
+check(corrections.LEDGER == _real_ledger, "the real ledger path was restored afterwards")
 
 # =========================================================================================
 

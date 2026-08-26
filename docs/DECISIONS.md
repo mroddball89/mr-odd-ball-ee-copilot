@@ -2589,3 +2589,233 @@ synthetic hands written this morning were all upright, because the classifier on
 upright; they passed, and agreed with it all the way to the camera. The rotation sweep exists
 now because the photograph did what the tests could not — it varied something the author had
 not thought to vary. Ask what your fixtures hold constant.
+
+---
+
+## D28 — "Typing doesn't always trigger a response" was three bugs, and none was a queue
+
+LB reported that typing into the chat panel sometimes did nothing, and asked for typed input to
+be pushed into the processing queue with zero delay, at the same priority as a voice command.
+
+**The premise was already true.** A typed line has never gone through a waiting state: it skips
+the wake word entirely, and `engine/run_voice.py`'s typed thread calls the same `Engine.ask()`
+that speech reaches. `engine/turn.py:answer_typed` already sets the thinking pose before routing.
+There was no queue to jump and no delay to remove. `engine/server.py` — named in the request as
+the backend entry point — is the file-upload endpoint, and its own docstring already explains
+why it is not the chat server.
+
+The lines were not being delayed. They were being **dropped**, in three separate places.
+
+### 1. The browser was sending into a socket that had been closed for hours
+
+`wireChat(ws)` runs on every `onopen`, but each block inside it is guarded by a `dataset.wired`
+flag so its listeners attach exactly once — right, or a reconnect would send every line twice.
+The consequence was not: the one submit handler closed over the `ws` it was wired with, and after
+any reconnect it kept sending into the first socket for the life of the page.
+
+Nothing showed, because of an asymmetry in one API. `send()` on a **CONNECTING** socket throws
+`InvalidStateError`; on a **CLOSED** socket the spec says to discard the data. So the `catch {}`
+never fired, and the line had already been echoed into the transcript. Typing looked like it had
+worked and he looked like he was ignoring it.
+
+On the Pi the face window starts at 13:19:27 and the engine at 13:19:29 — **the window comes up
+two seconds before the thing it connects to**, so the retry path is not an edge case here, it is
+the normal path. One `systemctl --user restart oddball` puts every open panel into this state.
+
+`send()` now reads a live `socket` variable, tests `readyState` instead of catching, and returns
+whether the message went. A line that cannot be sent stays in the box, is not echoed, and says so
+on a card. The same applies to Approve/Deny — the buttons now stay up until the click is on the
+wire, because a gate that gets no answer declines, in silence.
+
+### 2. The typed thread was eating the Approve clicks it was supposed to hand back
+
+The `in_turn` ownership test sat BELOW the `type != "text"` filter, so an `approve` was skipped
+off the queue before it could be handed back. The gate and the typed thread both drain every
+~0.2s; whenever the thread won that race the click vanished and the gate ran to its timeout —
+which declines. An Approve button that silently does nothing, some of the time, on the path that
+runs shell commands. Ownership is now decided before the batch is filtered by type.
+
+Two more in the same loop: `put_nowait` sat bare, so `queue.Full` escaped both loops and ended
+the thread permanently; and `in_turn` stays SET for the whole 25s of an open conversation, so a
+question typed just after a spoken one bounced for up to 25 seconds. Typing now closes the voice
+window — typing IS the decision to stop talking.
+
+### 3. And the one that was actually live: the microphone was killing the typed channel
+
+Covered in `tasks/lessons.md` L21. `_listen_thread` sets `stop` when the audio device goes away,
+and the typed channel looped on `stop`. On 2026-08-24 the C270 stopped enumerating, the channel
+exited 0.08s after start, and 8 hours of log held 24 spoken turns and **zero** typed lines. The
+channel that exists because the microphone is unreliable was being shut down by the microphone
+being unreliable. `stop` now ends the audio threads; `closing` ends the typed channel.
+
+Losing the microphone also now says so on the panel, instead of only in a traceback in a log file
+nobody was tailing. Same rule as `turn.py`'s `GATE_RETRY_LINE`: a silent failure is
+indistinguishable from a crash.
+
+### What proves it
+
+`tools/verify-chat-send.mjs` executes the rig's own wiring — sliced out of `face-preview.html`
+and run against a stub DOM and a stub WebSocket that reproduces the CONNECTING/CLOSED asymmetry.
+It takes a path, so it runs against an old copy too, which is the only way to know the checks
+fail on the bug rather than passing on everything: **against `HEAD` it reports 7 failures**,
+including the reported symptom — the line typed after a reconnect arrives nowhere, and is echoed
+into the transcript anyway.
+
+`tools/verify_chat.py` gained a structural section over `run_voice.py`'s AST — parsed, not
+grepped, for the reason section 3 of that file already records. All three of its ordering checks
+fail against `HEAD`.
+
+Verified on the Pi with the microphone still missing, which is the condition that matters:
+
+```
+21:23:56  typed wake: 'hey mr odd ball'
+21:24:19  typed question: 'what time is it'
+21:24:19  turn: route 0ms -> utility | agent 0.00s | total 0.00s | free:time
+```
+
+thinking → route chip → answer → speaking, with live mouth values, and no API call spent.
+
+## D29 — Three ways of knowing himself, and only one of them is an instruction
+
+LB asked for three things that sound like one: look at the screen, know your own state, and learn
+from your mistakes — including the mistakes he points out. They landed as five new modules and
+one changed function, and the interesting decisions were about **what is allowed to override
+what**, not about any of the plumbing.
+
+### There is no system prompt, and there did not need to be one
+
+The obvious implementation is a base system prompt with the new context in it. This repo has no
+such thing: seven agents each build their own prompt, and the firmware agent's has retrieval in it
+while the persona agent's has none. Adding three blocks to seven templates is seven places to
+drift, and the eighth agent written next month silently would not have them.
+
+But **every agent already calls `tools.memory_manager.format_memory_for_llm()`** and interpolates
+it as `{chat_history}`. `tools/verify_engine.py` already monkeypatches it, which is the proof the
+repo already treats it as where shared context enters a prompt. So `tools/self_context.py`
+composes the block and that one function prepends it. One function changed, seven agents affected,
+no prompt template touched.
+
+`tools/verify_awareness.py` section 4 asserts the seam end to end — not that the block *can* be
+built, but that the function the agents actually call returns it. It found the eighth agent
+immediately: **`quiz_agent.py` was the one that did not call it**, so "always spell out the units"
+applied to every route except the one where LB is being marked on units. A rule with a hole in it
+is not a rule.
+
+### Corrections and reflections are two files, and merging them would break both
+
+    vault/corrections.md   what LB told him was wrong. An INSTRUCTION. Overrides everything.
+    vault/reflections.md   what went wrong on its own. A DATUM. To be considered.
+
+The temptation is one "learnings" file. It is wrong in both directions at once: it would soften
+LB's rules into suggestions, and harden a single timeout into a prohibition. "The last time you
+tried this it timed out" is worth knowing and is not an order. "Always use absolute paths" is an
+order and is not evidence.
+
+The preamble orders them — corrections, then mistakes, then machine state — and **truncation cuts
+from the end**, so under pressure the rule survives and the CPU temperature is what is lost.
+`--probe` on that harness inverts the order and shows LB's standing rule being the thing that gets
+cut, which is the failure nobody would ever notice: nothing errors, the answers just quietly stop
+obeying him.
+
+### No model touches a correction, and that is the point
+
+The natural design hands the correction to Gemini and asks it to distil a rule. Refused twice
+over. **Quota**: D3 measured 20 requests per model per day, and spending one to rewrite a sentence
+LB already wrote clearly is the worst trade in the repo — spent at exactly the moment he is
+annoyed, which is the moment a turn must not fail or be rate limited. **Authority**: his words are
+the rule, and a paraphrase that drifts is an instruction that quietly became something else.
+
+So the rule is a slice of the **raw** text, not the normalised text — `normalise()` strips the
+slash, which would turn "always use absolute paths like /home/lb" into "…like homelb". Detection
+runs on the normalised form because that is what matching needs; extraction runs on the original
+because that is what he said. The whole path costs zero API calls and works with the key missing.
+
+### Where the correction check sits in `ask()`, and why each neighbour matters
+
+    gate open?     -> resolve it.   "no, don't do that" while a gate is open is a DECLINE.
+    quiz mode?     -> quiz turn.    "wrong" is a plausible answer to a quiz question.
+    a correction?  -> record it.    free, instant, no router.
+    otherwise      -> route it.
+
+One place higher and it eats a permission answer, leaving the gate open — and an open gate consumes
+the next thing LB says about anything at all, which is a bug `tools/verify_engine.py` already
+caught once in a different guise. One place lower and a rebuke costs a Gemini call to reach the
+persona agent, which apologises charmingly and forgets it.
+
+### The matcher refuses more than it claims, and two of the refusals are features
+
+`--probe` loosens the anchors and **15 of 27 ordinary lines get filed as corrections**. Two of
+those are not merely noise, they are existing behaviour being stolen: *"remember that I'm using
+the 2N3904"* is `persona_agent`'s archetypal `save_to_vault` case, and *"never mind"* is ordinary
+speech. So the whole `remember` family is absent from the directive list and "never mind" is on a
+deny list. D38 for the eighth time — the danger is never the rule that fails to match.
+
+One case is worth stating because it looks like a miss and is not: **"Don't do that" produces no
+rule.** It opens with a directive marker, and read that way it yields the standing rule *"Don't do
+that"*, where "that" has no referent once the turn scrolls away. Read as a bare rebuke it yields no
+rule and a question back — "what should I have done instead?" — whose answer is itself detected as
+a directive and filed properly. A phrase that points at the last turn is never a standing
+instruction.
+
+### The screenshot is gated, and it is the one gate LB should be able to switch off
+
+The frame goes to Gemini. The first capture taken while building this had a browser and a chat
+window in it, both legible at half scale, so the privacy cost is measured rather than assumed. It
+reuses `Pending` exactly as the shell does — `engine/core.py` needed one dispatch line and no new
+machinery.
+
+The counter-argument is real too: **he asked.** So the gate is the default and
+`ODDBALL_SCREEN_CONFIRM=0` removes it, `ODDBALL_SCREEN=0` disables the route entirely. That is the
+only gate in this repo it is reasonable to turn off, because LB is both the thing being protected
+and the one asking.
+
+Frames land in `data/screen/`, gitignored — **not** `media/captures/`, which is tracked and holds
+the vlog's evidence shots. His desktop is not evidence, and it is not committable.
+
+### Windows Defender blocks the screenshot, and not for the reason everyone says
+
+Measured 2026-08-25, `media/data/2026-08-25-screen-capture-amsi.csv`. The PowerShell backend exists
+only so the harness can capture a screen on the authoring box (D7); the Pi uses `grim` and none of
+this touches it. Two changes were needed and only one is the well-known one:
+
+| variant | result |
+|---|---|
+| `powershell -Command <script>` | BLOCKED — `ScriptContainedMaliciousContent` |
+| `powershell -File tmp.ps1`, same script | **still BLOCKED** |
+| `-File`, with the JPEG encoder block removed | 208,886 bytes |
+| `-File`, no encoder block, `SCALE=0.5` | **70,080 bytes** — the shipped form |
+
+The received wisdom names `CopyFromScreen` and the `-Command` versus `-File` distinction.
+Bisecting found the actual trigger was `ImageCodecInfo::GetImageEncoders` plus `EncoderParameter`
+— the *quality setting*, not the screen grab. And the failure presents as a PowerShell
+**ParserError**, which reads like a syntax bug and sends you rewriting code that was already
+correct. Dropping the explicit quality costs nothing: .NET's default produces a smaller file than
+the setting was aiming for.
+
+### What it costs on the turn path
+
+Nothing that needs a model. Two small ledger reads, four `/proc` reads cached for 15 seconds, and
+two loopback connects with a 50 ms timeout. No subprocess — `vcgencmd get_throttled` would report
+under-voltage, which is the most valuable Pi fact there is and is *deliberately absent*, because a
+fork and exec on every question is a worse trade than a fact LB can ask for.
+
+Each block bounds itself and `self_context.MAX_CHARS` bounds the sum, because "each of three things
+is individually reasonable" is exactly how a context window gets eaten a little every day until
+answers get worse and nobody can say when it started.
+
+### What proves it
+
+```
+python tools/verify_corrections.py   124/124    --probe: 15/27 questions eaten without the anchors
+python tools/verify_reflections.py    41/41     --probe: 4/4 questions pull in unrelated failures
+python tools/verify_awareness.py      61/61     --probe: LB's rule is what truncation cuts
+python tools/verify_screen.py         61/61     --probe: confirms the gate is what stops the upload
+python tools/verify_engine.py        125/125    section 6 pins the correction's place in ask()
+python tools/verify_router.py        189/189    section 3b, plus 7 new SCREEN negatives
+python tools/verify_agents.py         55/55     SCREEN reaches a real, importable target
+```
+
+`verify_router.py` and `verify_agents.py` both went red the moment the SCREEN route existed,
+because each asserts it has been told about every route. That is two harnesses doing exactly the
+job they were written for, and it is why the negatives for the new route were written before it
+shipped rather than after something broke.

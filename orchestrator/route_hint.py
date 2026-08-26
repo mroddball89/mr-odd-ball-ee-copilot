@@ -61,12 +61,13 @@ from orchestrator.instant import _has, normalise
 
 LOG = logging.getLogger("oddball.hint")
 
-__all__ = ["look_up", "known_courses", "ACADEMIC", "OS"]
+__all__ = ["look_up", "known_courses", "ACADEMIC", "OS", "SCREEN"]
 
-# The two route values this module can name. Spelled as literals rather than imported from
+# The three route values this module can name. Spelled as literals rather than imported from
 # `router.AgentRoute` for the reason in the docstring; verify_router.py pins them to the enum.
 ACADEMIC = "academic"
 OS = "os"
+SCREEN = "screen"
 
 
 # --- the hard precondition -----------------------------------------------------------------
@@ -90,6 +91,46 @@ _UPLOAD_MARKERS = (
 _NOT_THIS_MACHINE = (
     "esp32", "esp8266", "arduino", "stm32", "atmega", "attiny", "msp430", "nrf52",
     "teensy", "rp2040", "pico", "fpga", "microcontroller", "mcu", "dev board",
+)
+
+
+# Naming a document, an instrument or a board makes "what am I looking at" a question about
+# that thing rather than about the desktop. Same shape as `_NOT_THIS_MACHINE` above and the same
+# call: cheaper to hand the whole turn to the paid router than to reason about it here.
+#
+# "screen" itself is in this list, which looks like a contradiction and is the important entry:
+# an oscilloscope has a screen, a multimeter has a display, and `_SEEING` must not claim
+# "what does the screen on the scope say". The phrases below carry "the screen" / "my screen"
+# with a possessive, and this catches the rest.
+_NOT_THE_DISPLAY = (
+    "datasheet", "data sheet", "schematic", "pdf", "syllabus", "netlist", "gerber",
+    "multimeter", "oscilloscope", "scope", "logic analyzer", "bench supply",
+    "lcd", "oled", "seven segment", "7 segment", "display module", "hdmi cable",
+    "esp32", "arduino", "stm32", "breadboard",
+)
+
+
+# --- SCREEN --------------------------------------------------------------------------------
+
+# Looking at the desktop. Every one of these is a request to LOOK, in the present tense, at
+# something the display is showing right now -- which is what separates SCREEN from OS.
+#
+# Bare "screen" and bare "display" are deliberately absent, exactly as `_STATS` refuses a bare
+# "temperature". "The output is on the screen" is a sentence Mr Odd Ball says himself several
+# times a session (see `agents/os_agent._SPEECH`), and it is in the conversation log that gets
+# fed back to him -- a bare match would route his own words.
+_SEEING = (
+    "whats on the screen", "what is on the screen", "whats on my screen",
+    "what is on my screen", "whats on the display", "whats on my display",
+    "what am i looking at", "what am i seeing", "what do you see",
+    "what can you see", "can you see my screen", "can you see the screen",
+    "look at my screen", "look at the screen", "look at my display",
+    "take a screenshot", "grab a screenshot", "screenshot my screen",
+    "read the screen", "read my screen", "read whats on the screen",
+    "read the error on the screen", "read that dialog", "read the dialog",
+    "describe my screen", "describe the screen", "whats this on my screen",
+    "whats this window", "what does that window say", "what does this window say",
+    "whats that error on the screen", "look at whats on my screen",
 )
 
 
@@ -210,7 +251,8 @@ def look_up(text: str) -> "str | None":
         text: the raw utterance. Normalised here, so callers pass what was said or typed.
 
     Returns:
-        An `AgentRoute` **value** ("academic" / "os"), or None to let the paid router decide.
+        An `AgentRoute` **value** ("academic" / "os" / "screen"), or None to let the paid
+        router decide.
         None is the overwhelmingly common answer and is the correct one for anything that
         needs judgement -- see the module docstring for what is deliberately absent.
     """
@@ -221,6 +263,15 @@ def look_up(text: str) -> "str | None":
     # A new upload is GENERAL whatever it contains. Checked first, and it wins outright.
     if any(_has(flat, m) for m in _UPLOAD_MARKERS):
         return None
+
+    # Before ACADEMIC and OS: "what am I looking at" is a request to LOOK, and neither of the
+    # other two can look at anything. Refused outright when a document or an instrument is
+    # named, on the same principle that refuses a stat question that names an ESP32.
+    if any(_has(flat, p) for p in _SEEING):
+        if any(_has(flat, d) for d in _NOT_THE_DISPLAY):
+            return None
+        LOG.info("hint screen: %r", flat)
+        return SCREEN
 
     if any(_has(flat, p) for p in _SYNC + _POLICY + _DUE):
         LOG.info("hint academic: %r", flat)

@@ -77,6 +77,7 @@ def _listen_thread(
     gate: MicGate | None = None,
     in_turn: threading.Event | None = None,
     frames_q: "queue.Queue[np.ndarray] | None" = None,
+    on_mic_lost=None,
 ) -> None:
     """Pull frames from the mic and route them, until told to stop.
 
@@ -128,7 +129,14 @@ def _listen_thread(
                 on_detect(det)
     except Exception:
         LOG.exception("microphone stopped")
+        # `stop`, not `closing`: this ends the threads that read audio and nothing else. The
+        # typed channel is the fallback for exactly this failure and has to outlive it.
         stop.set()
+        if on_mic_lost is not None:
+            try:
+                on_mic_lost()
+            except Exception:                                          # noqa: BLE001
+                LOG.exception("could not report the microphone loss to the panel")
 
 
 def _turn_thread(turn, jobs: "queue.Queue[object | None]", on_finished) -> None:
@@ -318,6 +326,19 @@ async def main(argv: list[str] | None = None) -> int:
             LOG.exception("could not read the inbox; carrying on")
 
     stop = threading.Event()
+    # `stop` means "stop pulling frames", and the microphone thread sets it ITSELF when the
+    # device goes away — which is right for everything that reads audio and wrong for the one
+    # thread that does not.
+    #
+    # Measured on the Pi 2026-08-24: the C270's microphone stopped enumerating, `mic_frames`
+    # raised `no such input device 'C270'` 0.08s after start, and `_listen_thread` set `stop`.
+    # The typed channel looped on `while not stop.is_set()` and therefore exited before it had
+    # drained a single message. **The one channel built to survive a dead microphone was being
+    # killed by the dead microphone** — silently, with the WebSocket still up and the panel
+    # still accepting text, which is exactly "typing doesn't always trigger a response".
+    #
+    # So the two meanings are now two events. This one is only ever set by the shutdown path.
+    closing = threading.Event()
     idle_handle: asyncio.TimerHandle | None = None
 
     # Conversation mode. Monotonic deadline; 0 means no conversation is open. Written by the
@@ -510,61 +531,114 @@ async def main(argv: list[str] | None = None) -> int:
             from orchestrator.instant import is_sleep, is_wake      # noqa: PLC0415
 
             nonlocal conversation_until
-            while not stop.is_set():
-                messages = bridge.drain_inbound()
-                if not messages:
-                    time.sleep(0.2)
-                    continue
 
-                for msg in messages:
-                    if msg.get("type") != "text":
-                        continue                      # `approve` belongs to whoever is gating
-                    text = str(msg.get("value", "")).strip()
-                    if not text:
-                        continue
+            def hand_back(batch: list[dict]) -> None:
+                """Return a drained batch to the queue for whoever actually owns it.
 
-                    # A turn already running owns the gate, and _wait_for_typed_answer is
-                    # draining for it. Putting this back is what stops the two racing for the
-                    # same message.
-                    if in_turn.is_set():
-                        bridge.inbound.put_nowait(msg)
+                Never raises, and that is the point. `put_nowait` straight onto a full queue was
+                doing exactly that: `queue.Full` had nothing around it to catch it, so it
+                escaped the message loop AND the while loop and ended this thread. After which
+                typing did nothing at all — not intermittently, permanently, for the rest of the
+                session — with nothing in the log to say the channel had gone.
+                """
+                for held in batch:
+                    try:
+                        bridge.inbound.put_nowait(held)
+                    except queue.Full:
+                        LOG.warning("inbound full while handing a message back — dropped %r",
+                                    str(held.get("value"))[:40])
+
+            # `closing`, NOT `stop` — see where `closing` is defined. A microphone that has
+            # gone away is the reason to keep this loop running, not a reason to end it.
+            while not closing.is_set():
+                try:
+                    messages = bridge.drain_inbound()
+                    if not messages:
                         time.sleep(0.2)
                         continue
 
-                    if is_wake(text):
-                        LOG.info("typed wake: %r", text)
-                        bridge.say_line("you", text)
-                        bridge.play_gesture("startle")
-                        bridge.set_state("listening")
-                        # Open the conversation window, so typing the wake phrase leaves him
-                        # awake and listening exactly as the spoken one does.
-                        if conversation_s > 0:
-                            conversation_until = time.monotonic() + conversation_s
-                            loop.call_soon_threadsafe(rearm)
+                    # A turn already running owns this queue — `_wait_for_typed_answer` is
+                    # draining it for a permission gate, and BOTH an `approve` click and a typed
+                    # yes/no belong to that gate rather than to this loop. So the whole batch
+                    # goes back untouched.
+                    #
+                    # This test used to sit below the `type != "text"` filter, which dropped
+                    # `approve` on the floor before it could ever be handed back. The gate and
+                    # this loop both drain every ~0.2s, so whenever this loop won the race the
+                    # click vanished and the gate ran to its timeout — and a timed-out gate
+                    # declines. That is an Approve button that silently does nothing, some of
+                    # the time, on the path that runs shell commands.
+                    if in_turn.is_set():
+                        hand_back(messages)
+                        # A typed line must not have to wait out the conversation window.
+                        # `in_turn` stays SET for the whole of it — `turn_finished` re-arms a
+                        # listening pass every `listen.wait_s` of silence rather than clearing
+                        # it — so without this, a question typed just after a spoken one bounced
+                        # between here and the queue for up to `conversation_s` (25s) before it
+                        # was looked at. Closing the window makes the pass in flight the last
+                        # one, which bounds the wait to a single capture.
+                        #
+                        # Typing IS the decision to stop talking, so ending the voice window on
+                        # it is the honest reading and not just an expedient one. It does mean a
+                        # gate answered by typing leaves him at rest rather than in conversation.
+                        if any(m.get("type") == "text" for m in messages):
+                            conversation_until = 0.0
+                        time.sleep(0.2)
                         continue
 
-                    if is_sleep(text):
-                        LOG.info("typed dismissal: %r", text)
-                        bridge.say_line("you", text)
-                        conversation_until = 0.0
-                        if detector is not None:
-                            detector.reset()
-                        bridge.set_state(rest)
-                        continue
+                    for i, msg in enumerate(messages):
+                        # Re-checked per message, not only per batch: the wake word can fire
+                        # between two messages of one drain, and the rest of the batch then
+                        # belongs to that turn.
+                        if in_turn.is_set():
+                            hand_back(messages[i:])
+                            break
+                        if msg.get("type") != "text":
+                            continue              # an `approve` with no gate open is nothing
+                        text = str(msg.get("value", "")).strip()
+                        if not text:
+                            continue
 
-                    # Anything else is a question, and it is answered whether or not he is
-                    # awake. Typing is already deliberate — making it require a wake phrase
-                    # first would be ceremony, not safety.
-                    LOG.info("typed question: %r", text)
-                    try:
-                        in_turn.set()             # claim the gate drain for this turn
-                        turn.answer_typed(text)
-                    except Exception:             # noqa: BLE001
-                        LOG.exception("typed turn failed")
-                    finally:
-                        in_turn.clear()
-                        bridge.set_state(rest if conversation_until <= time.monotonic()
-                                         else "listening")
+                        if is_wake(text):
+                            LOG.info("typed wake: %r", text)
+                            bridge.say_line("you", text)
+                            bridge.play_gesture("startle")
+                            bridge.set_state("listening")
+                            # Open the conversation window, so typing the wake phrase leaves him
+                            # awake and listening exactly as the spoken one does.
+                            if conversation_s > 0:
+                                conversation_until = time.monotonic() + conversation_s
+                                loop.call_soon_threadsafe(rearm)
+                            continue
+
+                        if is_sleep(text):
+                            LOG.info("typed dismissal: %r", text)
+                            bridge.say_line("you", text)
+                            conversation_until = 0.0
+                            if detector is not None:
+                                detector.reset()
+                            bridge.set_state(rest)
+                            continue
+
+                        # Anything else is a question, and it is answered whether or not he is
+                        # awake. Typing is already deliberate — making it require a wake phrase
+                        # first would be ceremony, not safety.
+                        LOG.info("typed question: %r", text)
+                        try:
+                            in_turn.set()         # claim the gate drain for this turn
+                            turn.answer_typed(text)
+                        except Exception:         # noqa: BLE001
+                            LOG.exception("typed turn failed")
+                        finally:
+                            in_turn.clear()
+                            bridge.set_state(rest if conversation_until <= time.monotonic()
+                                             else "listening")
+                except Exception:                 # noqa: BLE001
+                    # This loop is the channel that works when the microphone does not, so it
+                    # does not get to die of one bad message. Log what happened and take the
+                    # next one — a thread that exits here takes typing with it and says nothing.
+                    LOG.exception("typed channel raised — carrying on")
+                    time.sleep(0.2)
 
         threading.Thread(target=_typed_thread, name="typed", daemon=True).start()
 
@@ -641,10 +715,26 @@ async def main(argv: list[str] | None = None) -> int:
         if args.no_gate:
             LOG.warning("--no-gate: the microphone stays open while he speaks. He can hear "
                         "himself; this is for measurement only.")
+        def mic_lost() -> None:
+            """Say on the panel that the ears are gone, and that typing still reaches him.
+
+            A microphone that vanishes is invisible from the chat panel: the WebSocket stays up,
+            the box still takes text, his face still animates, and he simply never answers
+            anything you say. Measured 2026-08-24 — the C270 stopped enumerating and the only
+            trace was a traceback in a log file nobody was tailing.
+
+            This is the shape of failure this project keeps rediscovering; `turn.py`'s
+            GATE_RETRY_LINE exists for the same reason, and its note is the rule: a silent
+            failure is indistinguishable from a crash. Three lines end it.
+            """
+            bridge.set_state(rest)
+            bridge.say_line("oddball", "My microphone has gone away, so I cannot hear you. "
+                                       "Type to me instead — everything works that way.")
+
         thread = threading.Thread(
             target=_listen_thread,
             args=(detector, device, on_detect, stop, None if args.no_gate else gate,
-                  in_turn if full_turn else None, frames_q if full_turn else None),
+                  in_turn if full_turn else None, frames_q if full_turn else None, mic_lost),
             name="mic",
             daemon=True,
         )
@@ -678,7 +768,10 @@ async def main(argv: list[str] | None = None) -> int:
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:
+        # Both, and only here. `stop` ends the audio threads; `closing` ends the typed channel,
+        # which has no other reason to stop and must outlive a microphone failure.
         stop.set()
+        closing.set()
         server.close()
         if upload_server is not None:
             # `shutdown()` blocks until serve_forever has returned, which is why the server was

@@ -29,7 +29,12 @@ test of two of them.
 everything above them — the arming, the guard, the ordering — is the real code. A mock that
 reimplemented the guard would prove nothing about the guard.
 
-Needs `evdev`, so it runs on the Pi and skips on the Windows authoring box.
+Runs on BOTH platforms, and section 1 is a different test on each — deliberately, because the
+mechanism enforcing guarantee 1 is different. On the Pi the kernel refuses to emit a keystroke
+the device never declared. On Windows nothing refuses anything, and the guarantee is that
+`tools/win_input.py` does not know how to build a keyboard event; section 1 there checks the
+code rather than the kernel, and says so in its own heading. Sections 2, 3 and 4 are pure logic
+and are byte-for-byte the same test on both.
 """
 
 from __future__ import annotations
@@ -107,11 +112,16 @@ def recorder(gp):
     return Recorder
 
 
-def run(gp) -> None:
-    from evdev import ecodes as e
-    Recorder = recorder(gp)
+def _cannot_type_linux(gp) -> None:
+    """Guarantee 1 on the Pi, where the KERNEL enforces it.
 
-    section("1. it has no keys, so it cannot type")
+    The device's declared capabilities are the whole proof. Nothing above them is consulted,
+    because nothing above them can matter: a capability that was never declared cannot be
+    emitted however wrong the daemon goes.
+    """
+    from evdev import ecodes as e
+
+    section("1. it has no keys, so it cannot type  [kernel-enforced]")
     caps = gp.capabilities()
     keys = caps.get(e.EV_KEY, [])
     check(list(keys) == [e.BTN_LEFT], "the only EV_KEY code declared is BTN_LEFT",
@@ -129,6 +139,64 @@ def run(gp) -> None:
           "the relative axes are exactly X, Y and WHEEL", str(caps.get(e.EV_REL)))
     check(e.EV_ABS not in caps,
           "no absolute axes, so it cannot warp the pointer to a fixed screen position")
+
+
+def _cannot_type_windows(gp) -> None:
+    """Guarantee 1 on Windows, where NOTHING enforces it and this file is the enforcement.
+
+    **This section is not the same test as the Linux one and must not be read as if it were.**
+    On the Pi the question is "what did the kernel agree to emit?" and the answer is binding.
+    Here the question is "what does this process know how to build?", and the answer binds only
+    until somebody edits `tools/win_input.py`. That is a genuine downgrade, it is written up in
+    that file's header, and the reason it is checked here anyway is that an inspection nobody
+    automates is an inspection that stops happening.
+
+    So: the INPUT union has exactly one member, no keyboard struct is defined anywhere in the
+    module, and no right/middle button constant exists to pass. Three ways of asking the same
+    question, because the answer is worth more than the tidiness.
+    """
+    from tools import win_input
+
+    section("1. it has no vocabulary for typing  [inspection, NOT kernel-enforced]")
+
+    members = [name for name, _ in win_input._INPUTUNION._fields_]
+    check(members == ["mi"],
+          "the INPUT union has exactly one member, and it is the mouse one",
+          f"members: {members} — a second member is how typing would arrive")
+
+    # The struct itself, not just the union tag. A KEYBDINPUT defined but unreferenced is a
+    # loaded gun on the table: the next edit only has to name it.
+    check(not hasattr(win_input, "KEYBDINPUT"),
+          "no KEYBDINPUT struct is defined in the module at all",
+          "so there is nothing to fill in, even by mistake")
+
+    # Guarantee 3, by the same means. No constant, no context menu.
+    absent = [n for n in ("MOUSEEVENTF_RIGHTDOWN", "MOUSEEVENTF_RIGHTUP",
+                          "MOUSEEVENTF_MIDDLEDOWN", "MOUSEEVENTF_MIDDLEUP")
+              if hasattr(win_input, n)]
+    check(not absent,
+          "no right or middle button constant exists, so it cannot open a context menu",
+          f"unexpectedly present: {absent}" if absent else "none of the four is defined")
+
+    # MOUSEEVENTF_ABSOLUTE is the Windows analogue of EV_ABS: it would let the pointer warp to
+    # a fixed screen position rather than travel there, which defeats the click guard outright
+    # — a warp has no travel, so `since_press` never grows and the displacement never fires.
+    check(not hasattr(win_input, "MOUSEEVENTF_ABSOLUTE"),
+          "no absolute-motion constant, so it cannot warp past the click guard",
+          "every move is a relative delta, which is what CLICK_GUARD_PX counts")
+
+    check(win_input.MouseOnlyInput.__dict__.keys() >= {"move", "button", "wheel", "close"},
+          "the emitter offers exactly move / button / wheel / close",
+          "the same four the evdev backend offers, so the guards above are platform-free")
+
+
+def run(gp) -> None:
+    Recorder = recorder(gp)
+
+    if sys.platform == "win32":
+        _cannot_type_windows(gp)
+    else:
+        _cannot_type_linux(gp)
 
     section("2. it cannot click")
     p = Recorder()
@@ -241,11 +309,35 @@ def probe(gp) -> int:
     finally:
         gp.DRAG_ARM_PX = saved_arm
 
-    from evdev import ecodes as e
-    caps = dict(gp.capabilities())
-    caps[e.EV_KEY] = [e.BTN_LEFT, e.KEY_Y, e.KEY_ENTER]
-    print(f"    +KEY_Y    -> a device with keys could type 'y' at the approval prompt")
-    bitten.append("a keyboard capability would defeat the terminal gate entirely")
+    if sys.platform == "win32":
+        # The Windows weakening is an EDIT, not a runtime flag, which is the whole point of
+        # the downgrade. Simulate it the way it would really arrive: a second union member.
+        import ctypes
+
+        from tools import win_input
+
+        class _KEYBDINPUT(ctypes.Structure):
+            _fields_ = [("wVk", ctypes.c_ushort)]
+
+        class _WidenedUnion(ctypes.Union):
+            _fields_ = [("mi", win_input.MOUSEINPUT), ("ki", _KEYBDINPUT)]
+
+        saved_union = win_input._INPUTUNION
+        try:
+            win_input._INPUTUNION = _WidenedUnion
+            members = [n for n, _ in win_input._INPUTUNION._fields_]
+            print(f"    +ki       -> the INPUT union becomes {members}")
+            if members != ["mi"]:
+                bitten.append("a keyboard struct in the union would defeat the terminal gate "
+                              "entirely, and only this check stands between it and LB")
+        finally:
+            win_input._INPUTUNION = saved_union
+    else:
+        from evdev import ecodes as e
+        caps = dict(gp.capabilities())
+        caps[e.EV_KEY] = [e.BTN_LEFT, e.KEY_Y, e.KEY_ENTER]
+        print(f"    +KEY_Y    -> a device with keys could type 'y' at the approval prompt")
+        bitten.append("a keyboard capability would defeat the terminal gate entirely")
 
     print()
     for b in bitten:
@@ -260,12 +352,15 @@ if __name__ == "__main__":
                     help="weaken each guarantee and show the harness catching it")
     args = ap.parse_args()
 
-    try:
-        import evdev                                                      # noqa: F401
-    except ImportError:
-        print("\n  evdev is not installed here — this runs on the Pi.\n"
-              "    uv pip install --python .venv-gesture/bin/python evdev\n")
-        raise SystemExit(0)
+    # Sections 2, 3 and 4 are pure logic and run anywhere. Only section 1 needs a backend,
+    # because only section 1 is a claim about what the operating system will emit.
+    if sys.platform != "win32":
+        try:
+            import evdev                                                  # noqa: F401
+        except ImportError:
+            print("\n  evdev is not installed here — this runs on the Pi.\n"
+                  "    uv pip install --python .venv-gesture/bin/python evdev\n")
+            raise SystemExit(0)
 
     import tools.gesture_pointer as gp
 
