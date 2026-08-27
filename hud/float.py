@@ -112,7 +112,8 @@ from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWidgets import QApplication, QMainWindow
+from PyQt6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMainWindow,
+                             QPushButton, QSizeGrip, QVBoxLayout, QWidget)
 
 # His stage colour, from the rig's own `--stage` token. The window paints this so a
 # non-transparent view has something to composite onto, and so the edges of the window match
@@ -213,7 +214,27 @@ class Face(QMainWindow):
             self.setStyleSheet(f"QMainWindow {{ background: {STAGE}; }}")
 
         self.view = QWebEngineView(self)
-        self.setCentralWidget(self.view)
+
+        if decorated:
+            # A real title bar exists; nothing to build.
+            self.setCentralWidget(self.view)
+        else:
+            # A column: our own drag bar, then the page. The bar is a SIBLING of the view,
+            # never an overlay on top of it — see `_build_drag_bar` for why that distinction
+            # is the whole design.
+            shell = QWidget(self)
+            column = QVBoxLayout(shell)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(0)
+            column.addWidget(self._build_drag_bar(shell))
+            column.addWidget(self.view, 1)
+            self.setCentralWidget(shell)
+            if transparent:
+                # The shell must not paint either, or it puts an opaque sheet between the
+                # translucent window and the transparent page — which looks exactly like
+                # --transparent having stopped working.
+                shell.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                shell.setStyleSheet("background: transparent;")
 
         page = self.view.page()
         # The page half of the transparency. `Qt.GlobalColor.transparent` rather than a
@@ -301,6 +322,92 @@ class Face(QMainWindow):
             shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
             shortcut.activated.connect(handler)
 
+    def _build_drag_bar(self, parent: QWidget) -> QWidget:
+        """A slim bar across the top that behaves like a title bar.
+
+        ## Why this exists at all
+
+        A frameless window has no caption, so there is nothing for Windows to let you drag.
+        The obvious fix — override `mousePressEvent` on the window — reaches almost none of
+        the surface, because **`QWebEngineView` is a native child window**: it renders in its
+        own process, owns its own HWND, and takes its own mouse events. Events over the page
+        never arrive at the QMainWindow at all. That is why the first attempt used Ctrl+drag,
+        and why Ctrl+drag was the wrong answer: LB asked to move it like a normal window, and
+        a modifier is not normal.
+
+        A bar that is a SIBLING of the view, occupying its own strip of the layout, is not
+        covered by that native window and gets its own events like any ordinary widget. This
+        is what VS Code, Discord and Slack all do, and for exactly this reason.
+
+        It is deliberately NOT an invisible overlay stretched over the page. An overlay would
+        be draggable everywhere and would also swallow every click meant for the chat box and
+        the paperclip — trading one broken interaction for another.
+
+        ## What it gives back
+
+            drag          move the window, via startSystemMove() so it snaps like a real one
+            double-click  maximise / restore, which is what a title bar does
+            X             close
+
+        Kept visually quiet — 28px, translucent, no app icon — because it sits above a
+        character whose whole point is not having a frame. On a transparent window it reads as
+        a soft strip rather than a chrome bar.
+        """
+        bar = QWidget(parent)
+        bar.setFixedHeight(28)
+        bar.setObjectName("dragbar")
+        bar.setStyleSheet(
+            "#dragbar { background: rgba(16,20,28,0.34);"
+            "           border-top-left-radius: 10px; border-top-right-radius: 10px;"
+            "           border-bottom: 1px solid rgba(255,255,255,0.07); }"
+            "QLabel { color: rgba(220,228,242,0.72); font: 11px 'Segoe UI'; }"
+            "QPushButton { color: rgba(220,228,242,0.72); border: none;"
+            "              background: transparent; font: 13px 'Segoe UI'; }"
+            "QPushButton:hover { background: rgba(232,90,90,0.55); color: white; }")
+
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(10, 0, 0, 0)
+        row.setSpacing(0)
+
+        label = QLabel("Mr Odd Ball", bar)
+        row.addWidget(label)
+        row.addStretch(1)
+
+        close = QPushButton("\u2715", bar)          # ✕
+        close.setFixedSize(34, 28)
+        close.setToolTip("close  (Ctrl+Q)")
+        close.setCursor(Qt.CursorShape.ArrowCursor)
+        close.clicked.connect(self.close)
+        row.addWidget(close)
+
+        # The drag itself. `startSystemMove()` hands the whole gesture to Windows, so it
+        # snaps to edges and to other windows exactly as dragging a real title bar does —
+        # and this file keeps no position state at all, which is the point of using it.
+        def press(event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                handle = self.windowHandle()
+                if handle is not None:
+                    handle.startSystemMove()
+                    event.accept()
+                    return
+            QWidget.mousePressEvent(bar, event)
+
+        def double_click(event):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.showNormal() if self.isMaximized() else self.showMaximized()
+                event.accept()
+
+        bar.mousePressEvent = press
+        bar.mouseDoubleClickEvent = double_click
+        bar.setCursor(Qt.CursorShape.SizeAllCursor)
+        # The label spans most of the bar and would otherwise eat the press before the bar
+        # sees it — a QLabel does not propagate mouse events to its parent by default.
+        label.mousePressEvent = press
+        label.mouseDoubleClickEvent = double_click
+
+        self._drag_bar = bar
+        return bar
+
     def _add_frameless_controls(self) -> None:
         """Give a frameless window the two things the title bar was providing.
 
@@ -323,8 +430,6 @@ class Face(QMainWindow):
           including snapping. The Ctrl is what lets a plain click still reach the page, so
           the chat box keeps working; a bare drag would have to be stolen from the view.
         """
-        from PyQt6.QtWidgets import QSizeGrip
-
         self._grip = QSizeGrip(self)
         self._grip.setFixedSize(18, 18)
         self._grip.setToolTip("drag to resize")
@@ -343,13 +448,17 @@ class Face(QMainWindow):
         self._position_grip()
 
     def mousePressEvent(self, event):                                  # noqa: N802
-        """Ctrl+drag moves the window. Anything else falls through to the page."""
+        """Ctrl+drag also moves the window, from anywhere the page does not cover.
+
+        Kept as a SECOND way in, not the only one. It was the only one briefly, and that was
+        a mistake: it reaches only the pixels `QWebEngineView` does not own, and a modifier is
+        not how anybody expects to move a window. `_build_drag_bar` is the answer; this stays
+        because it costs three lines and occasionally catches a window whose bar is off-screen.
+        """
         if (event.button() == Qt.MouseButton.LeftButton
                 and event.modifiers() & Qt.KeyboardModifier.ControlModifier):
             handle = self.windowHandle()
             if handle is not None:
-                # Windows takes the drag from here, so it snaps and feels native. There is no
-                # position bookkeeping in this file at all, which is the point of using it.
                 handle.startSystemMove()
                 event.accept()
                 return
