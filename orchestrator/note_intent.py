@@ -142,6 +142,37 @@ FILLER: frozenset[str] = frozenset({
     "just", "quickly", "quick", "for", "me", "lets", "let", "will", "and", "then",
 })
 
+# Indirect openings — the polite preamble LB actually uses in front of the imperative.
+#
+# **Found in `captures/`, not invented.** On 2026-08-28 at 08:49 and 08:50, ten minutes before
+# asking for this feature, he said into the microphone:
+#
+#     "can you save a note for me in the vault"      matched, but stored "in the vault"
+#     "i need to add a note to the vault"            missed entirely
+#
+# The second one opens with "i need to", which `_drop_filler` cannot reach because FILLER is
+# word-by-word and "i", "need" and "to" are not in it — and must not be. **"I take notes in
+# Python" is a statement**, and a bare "i" in FILLER would strip it down to "take notes in
+# python", match the `_NEW` opener, and file a note saying "in python".
+#
+# So these are PHRASES, matched at the start and nowhere else, exactly like the openers below.
+# A phrase cannot do what a bare word does: "i need to" appears at the front of a request and
+# "i take" does not appear at the front of anything here.
+_PREAMBLE: tuple[str, ...] = (
+    "i need to", "i need you to", "i want to", "i want you to", "i would like to",
+    "i would like you to", "id like to", "id like you to", "i have to", "i gotta",
+    "im going to", "i am going to", "im gonna", "let me", "help me", "i should",
+    "do me a favor and", "do me a favour and", "go ahead and", "if you could",
+)
+
+# "…in the vault", "…to my vault". A DESTINATION that names the vault itself rather than a
+# folder in it — so it is removed from the content and leaves the folder alone. Without this,
+# "can you save a note for me in the vault" stores a note whose entire body is "in the vault".
+#
+# Deliberately not a `_FOLDER_PATTERNS` entry: those capture a folder NAME, and matching this
+# there would file the note into `vault/vault/`.
+_VAULT_TAIL = re.compile(r"\b(?:in|into|to|inside|under)\s+(?:the|my)\s+vault\b", re.IGNORECASE)
+
 # Openers that make the utterance a QUESTION or a request for information, whatever follows.
 # Checked before every table below and refused outright — "what notes do I have" is the one
 # exception and is listed as a LIST opener in full, so it matches as a phrase rather than
@@ -495,6 +526,19 @@ def look_up(q) -> "NoteRequest | None":
     if not words:
         return None
 
+    # Filler, then preamble, then filler again — "can you help me take a note" needs all three
+    # passes ("can you" is filler, "help me" is a preamble, and nothing is left over). Bounded,
+    # so a pathological utterance cannot spin here.
+    for _ in range(3):
+        lead = " ".join(words)
+        stripped = next((lead[len(p) + 1:] for p in sorted(_PREAMBLE, key=len, reverse=True)
+                         if lead.startswith(p + " ")), None)
+        if stripped is None:
+            break
+        words = _drop_filler(stripped.split())
+    if not words:
+        return None
+
     # Anchor 1: a question is never a command, whatever it goes on to say.
     if words[0] in _REQUEST_OPENERS:
         return None
@@ -531,7 +575,11 @@ _LEADING_FOLDER = re.compile(
 def _build(op: str, opener: str, rest_flat: str, raw: str,
            from_folder: bool = False) -> "NoteRequest | None":
     """Turn a matched opener and its remainder into a request. None to refuse after all."""
-    rest_raw = _slice_after(raw, opener)
+    # Applied before anything else reads the remainder. "…in the vault" says WHERE, and every
+    # branch below would otherwise treat it as what it is looking for — content, a folder name,
+    # or a note's title.
+    rest_raw = " ".join(_VAULT_TAIL.sub(" ", _slice_after(raw, opener)).split())
+    rest_flat = " ".join(_VAULT_TAIL.sub(" ", rest_flat).split())
 
     if from_folder:
         hit = _LEADING_FOLDER.match(rest_raw)

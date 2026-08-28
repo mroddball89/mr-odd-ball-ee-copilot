@@ -212,6 +212,73 @@ for utterance, why in NOT_NOTES:
           "" if found is None else f"was read as {found.op} ({why})")
 
 # =========================================================================================
+section("2b. LB's own recorded speech — the corpus that was not invented")
+# =========================================================================================
+#
+# Transcribed from `captures/`, which `engine/run_voice.py --save-captures` writes after every
+# wake. **These are what he actually said into the microphone**, `tiny.en`'s spelling and all —
+# including the two note attempts at 08:49:50 and 08:50:47 on 2026-08-28, ten minutes before he
+# asked for this feature. He had tried it by voice, it had not worked, and he typed instead.
+#
+# Both failed against the matcher as first written: one stored a note whose entire body was
+# "in the vault", and the other was missed outright because it opens with "i need to". Neither
+# could have been found by the invented corpus in section 1 — that is L15, and this section is
+# the fix for it.
+#
+# **Copied in rather than read from `captures/`**, because `.gitignore:93` excludes `captures/**`.
+# A harness reading that directory would pass on this machine and pass vacuously on a fresh
+# clone, which is the same L15 failure wearing the other hat.
+
+SPOKEN_NOTES: list[tuple[str, str]] = [
+    ("can you save a note for me in the vault", "captures/084950 — 2026-08-28 08:49:50"),
+    ("i need to add a note to the vault", "captures/085047 — 2026-08-28 08:50:47"),
+]
+
+for utterance, where in SPOKEN_NOTES:
+    found = ask(utterance)
+    check(found is not None and found.op == NEW, f"{utterance!r} is a note", where)
+    check(found is not None and not found.content,
+          "and carries NO content — he was starting one, not dictating it, so he gets asked",
+          "" if found is None else f"content={found.content!r}")
+
+# Every other thing he said in those three days. None of it is about the notebook, and the
+# matcher must leave all of it alone — 25 real negatives against 29 invented ones above.
+SPOKEN_OTHER: list[str] = [
+    "battery 80 yes dbsk chop 3 and a few",
+    "i think a little bit backwards today so",
+    "he s got a company with ben he s got a",
+    "elbow",
+    "do you have skgop 3 nfu 5vk",
+    "available",
+    "family home yes k t o p 3 nsu 5dk",
+    "sink my schedule",
+    "thank you",
+    "go to sleep",
+    "i think my schedule",
+    "sick mass schedule",
+    "what s 20 plus 20",
+    "that s 20 times 20",
+    "does electricity flow from positive to n",
+    "so",
+    "cool",
+    "to meet them",
+    "i ll see you in the next video",
+    "we ll see you in the next one",
+]
+
+_taken = [u for u in SPOKEN_OTHER if ask(u) is not None]
+check(not _taken,
+      f"and none of the other {len(SPOKEN_OTHER)} things he really said is read as a note",
+      f"taken: {_taken}")
+
+# The bare-word trap the preamble list exists to avoid. "i" cannot go in FILLER.
+for statement in ("i take notes in python", "i need to know the trace width for 5 amps",
+                  "i want to delete the temp files", "i should read the datasheet"):
+    check(ask(statement) is None,
+          f"{statement!r} survives the preamble strip untouched",
+          "a bare 'i' in FILLER would turn the first of these into a note saying 'in python'")
+
+# =========================================================================================
 section("3. the temp vault is real, and it is NOT LB's")
 # =========================================================================================
 
