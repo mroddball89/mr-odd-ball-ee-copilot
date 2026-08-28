@@ -284,7 +284,7 @@ powershell -ExecutionPolicy Bypass -File tools\install_autostart.ps1 status
 That puts a shortcut in `shell:startup` pointing at `config/start_oddball.vbs`, which runs
 `config/start_oddball.bat` with no console window. `remove` takes it back out.
 
-**To check everything still works** — 28 harnesses, ~12,405 checks, no API key required:
+**To check everything still works** — 28 harnesses, 12,407 checks, no API key required:
 
 ```powershell
 Get-ChildItem tools\verify_*.py | ForEach-Object { python $_.FullName }
