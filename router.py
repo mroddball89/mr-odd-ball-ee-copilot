@@ -88,6 +88,8 @@ Available Agents:
   schematic" is HARDWARE, because that is a file he can read without looking at the display.
 - GENERAL: anything that fits nowhere above — and the route that FILES a document the user has
   just uploaded through the chat panel, whether it is a syllabus, a datasheet or a schematic.
+  ALSO his notebook: writing a note into his vault, adding to one, or reading one back. GENERAL
+  is the only route with `save_to_vault` and `read_from_vault` bound.
 
 Routing notes:
 - **A NEW UPLOAD IS ALWAYS GENERAL.** If the user says he has just uploaded, attached, added or
@@ -96,6 +98,12 @@ Routing notes:
   document, and it can file all three kinds. A question about what is INSIDE a file he uploaded
   earlier is not an upload: route that normally, so "what's on the amp board" is still HARDWARE
   and "when's the midterm" is still ACADEMIC.
+- **A note is GENERAL, never OS.** "Write this down", "save that to my ECE350 notes", "read me
+  my regulator note" — the vault is a folder of Markdown files and GENERAL is the route that can
+  write it. OS is for the machine, and "managing files" in its description means the user's
+  disk, not his notebook. Most note requests never reach this router at all
+  (`orchestrator/note_intent.py` answers them for free); the ones that do are the phrasings that
+  matcher deliberately refused, and they still belong here.
 - Prefer UTILITY over MATH for a plain unit conversion or a looked-up constant. MATH is for
   problems that need working out, not for facts.
 - Prefer PERSONA over GENERAL when the user is being social.

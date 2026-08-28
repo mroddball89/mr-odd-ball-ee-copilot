@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1020" height="600" viewBox="0 0 1020 600" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1020" height="600" fill="#FFFFFF"/>
+<text x="40" y="46" font-size="23" font-weight="600" fill="#1B1B1B">Taking a note: what it cost, and what it costs now</text>
+<text x="40" y="72" font-size="14" fill="#666666">Gemini API requests per note (left) and measured wall clock (right). win32 python3.12, 2026-08-28. Free tier is 20 requests per model per day.</text>
+<text x="60" y="128" font-size="15" font-weight="600" fill="#1B1B1B">API requests per note</text>
+<line x1="60" y1="450.0" x2="540" y2="450.0" stroke="#E3E3E3"/>
+<text x="48" y="454.0" font-size="12" fill="#666666" text-anchor="end">0</text>
+<line x1="60" y1="375.0" x2="540" y2="375.0" stroke="#E3E3E3"/>
+<text x="48" y="379.0" font-size="12" fill="#666666" text-anchor="end">1</text>
+<line x1="60" y1="300.0" x2="540" y2="300.0" stroke="#E3E3E3"/>
+<text x="48" y="304.0" font-size="12" fill="#666666" text-anchor="end">2</text>
+<line x1="60" y1="225.0" x2="540" y2="225.0" stroke="#E3E3E3"/>
+<text x="48" y="229.0" font-size="12" fill="#666666" text-anchor="end">3</text>
+<line x1="60" y1="150.0" x2="540" y2="150.0" stroke="#E3E3E3"/>
+<text x="48" y="154.0" font-size="12" fill="#666666" text-anchor="end">4</text>
+<line x1="60" y1="225.0" x2="540" y2="225.0" stroke="#C0504D" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="536" y="217.0" font-size="12" fill="#C0504D" text-anchor="end">3 calls = 6 notes a day, then nothing</text>
+<rect x="79.0" y="225.0" width="26" height="225.0" fill="#C0504D"/>
+<text x="92.0" y="217.0" font-size="13" font-weight="600" fill="#C0504D" text-anchor="middle">3</text>
+<rect x="111.0" y="446" width="26" height="4" fill="#4F8A5B"/>
+<text x="124.0" y="440" font-size="13" font-weight="600" fill="#4F8A5B" text-anchor="middle">0</text>
+<text x="108.0" y="472" font-size="12" fill="#1B1B1B" text-anchor="middle">take a note</text>
+<rect x="175.0" y="225.0" width="26" height="225.0" fill="#C0504D"/>
+<text x="188.0" y="217.0" font-size="13" font-weight="600" fill="#C0504D" text-anchor="middle">3</text>
+<rect x="207.0" y="446" width="26" height="4" fill="#4F8A5B"/>
+<text x="220.0" y="440" font-size="13" font-weight="600" fill="#4F8A5B" text-anchor="middle">0</text>
+<text x="204.0" y="472" font-size="12" fill="#1B1B1B" text-anchor="middle">add to it</text>
+<rect x="271.0" y="225.0" width="26" height="225.0" fill="#C0504D"/>
+<text x="284.0" y="217.0" font-size="13" font-weight="600" fill="#C0504D" text-anchor="middle">3</text>
+<rect x="303.0" y="446" width="26" height="4" fill="#4F8A5B"/>
+<text x="316.0" y="440" font-size="13" font-weight="600" fill="#4F8A5B" text-anchor="middle">0</text>
+<text x="300.0" y="472" font-size="12" fill="#1B1B1B" text-anchor="middle">read it back</text>
+<rect x="367.0" y="225.0" width="26" height="225.0" fill="#C0504D"/>
+<text x="380.0" y="217.0" font-size="13" font-weight="600" fill="#C0504D" text-anchor="middle">3</text>
+<rect x="399.0" y="446" width="26" height="4" fill="#4F8A5B"/>
+<text x="412.0" y="440" font-size="13" font-weight="600" fill="#4F8A5B" text-anchor="middle">0</text>
+<text x="396.0" y="472" font-size="12" fill="#1B1B1B" text-anchor="middle">list them</text>
+<rect x="463.0" y="432" width="26" height="16" fill="none" stroke="#B8B8B8" stroke-dasharray="3 3"/>
+<text x="476.0" y="424" font-size="11" fill="#B8B8B8" text-anchor="middle">none</text>
+<rect x="495.0" y="446" width="26" height="4" fill="#4F8A5B"/>
+<text x="508.0" y="440" font-size="13" font-weight="600" fill="#4F8A5B" text-anchor="middle">0</text>
+<text x="492.0" y="472" font-size="12" fill="#1B1B1B" text-anchor="middle">delete one</text>
+<line x1="60" y1="450" x2="540" y2="450" stroke="#1B1B1B"/>
+<text x="616" y="128" font-size="15" font-weight="600" fill="#1B1B1B">Measured wall clock, per operation</text>
+<line x1="616" y1="189.1" x2="866" y2="189.1" stroke="#666666" stroke-width="1.5" stroke-dasharray="6 4"/>
+<text x="616" y="181.1" font-size="11.5" fill="#666666">750 ms — the ROUTING call alone, cited, not measured here</text>
+<rect x="616" y="173.0" width="6.3" height="14" fill="#4F8A5B"/>
+<text x="630.3" y="184.0" font-size="12" fill="#1B1B1B">take a note — 18 ms, no network</text>
+<rect x="616" y="233.0" width="6.7" height="14" fill="#4F8A5B"/>
+<text x="630.7" y="244.0" font-size="12" fill="#1B1B1B">add to it — 19 ms, no network</text>
+<rect x="616" y="293.0" width="7.1" height="14" fill="#4F8A5B"/>
+<text x="631.1" y="304.0" font-size="12" fill="#1B1B1B">read it back — 20 ms, no network</text>
+<rect x="616" y="353.0" width="6.2" height="14" fill="#4F8A5B"/>
+<text x="630.2" y="364.0" font-size="12" fill="#1B1B1B">list them — 18 ms, no network</text>
+<rect x="616" y="413.0" width="7.8" height="14" fill="#4F8A5B"/>
+<text x="631.8" y="424.0" font-size="12" fill="#1B1B1B">delete one — 22 ms, no network</text>
+<line x1="616" y1="150" x2="616" y2="450" stroke="#1B1B1B"/>
+<text x="40" y="548" font-size="14" fill="#1B1B1B">Every note now costs zero requests, so the notebook still works after the day&#8217;s quota is gone &#8212; which is when</text>
+<text x="40" y="568" font-size="14" fill="#1B1B1B">you are most likely to want something written down. Deleting a note was not slow before; it was impossible.</text>
+</svg>

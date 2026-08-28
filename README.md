@@ -31,9 +31,10 @@ everything. Restore from git history (or the `v0-terminal` tag) if the Pi ever c
 
 **A free tier runs first, and most short questions never reach an API at all.**
 `engine/core.py:_free_turn` tries `orchestrator/instant.py` before the router: the time, the
-date, unit conversions, physical constants, engineering definitions, arithmetic — and *"open
-Firefox"*, via `orchestrator/launch_intent.py`. All of those cost **zero** API calls, so they
-keep working after the daily quota is gone. Opening an application used to cost three.
+date, unit conversions, physical constants, engineering definitions, arithmetic — *"open
+Firefox"*, via `orchestrator/launch_intent.py` — and **his whole notebook**, via
+`orchestrator/note_intent.py`. All of those cost **zero** API calls, so they keep working after
+the daily quota is gone. Opening an application used to cost three, and so did taking a note.
 
 When nothing free matches, `router.py` uses Pydantic structured output
 (`with_structured_output`) to classify the query into one destination, and dispatches it:
@@ -51,6 +52,8 @@ When nothing free matches, `router.py` uses Pydantic structured output
 | `UTILITY` | `orchestrator/instant.py` | the free lookups, when the router is reached anyway |
 | `PERSONA` | `agents/persona_agent.py` | chit-chat and jokes — Mr Odd Ball himself |
 | `GENERAL` | `agents/persona_agent.py` | anything outside the scope — **and files whatever you upload** (`tools/file_manager.py`), whichever kind of document it turns out to be |
+
+Most note-taking never reaches this table at all — see **Taking notes** below.
 
 ## The three security gates
 
@@ -119,6 +122,52 @@ reading your board rather than from a reference design it half-remembers.
 
 See `docs/DECISIONS.md` (D9) for why `kiutils` rather than a hand-rolled parser, and
 `tools/verify_kicad.py` for the harness.
+
+## Taking notes
+
+**Tell him or type it, and it goes into your vault. It costs nothing.**
+
+> **You:** Take a note in a new folder called amp board that the reg is an LM317, not a 7805
+> **Him:** What should I call it?
+> **You:** Regulator choice
+> **Him:** Written down in amp board.
+
+Five things he can do, all of them free, all of them without a model anywhere in the path:
+
+| Say | What happens |
+|---|---|
+| *take a note that the reg is an LM317* | asks what to call it, then writes it |
+| *add to my regulator note that it needs a heatsink* | appends, under a `---` rule |
+| *read me my regulator note* | says it aloud, full text on a card |
+| *what notes do I have in amp board* | lists that folder |
+| *delete my scratch note* | **asks first**, then moves it to `vault/.trash/` |
+
+A bare *"take a note"* asks what to write down. A folder you name is **created on demand** —
+it does not have to exist, and it does not have to be one of his. Say *"never mind"*, say
+nothing, or dismiss him, and the note is dropped.
+
+**What is stored is exactly what you said**, sliced out of the raw text, never a model's
+paraphrase of it. That is the same rule as your standing rules above, for the same two
+reasons: it works with the quota gone, and a part number that goes through a paraphrase is a
+part number that can quietly change.
+
+Taking a note used to cost **three** Gemini calls — route, tool call, follow-up — which against
+the 20-a-day free tier was six notes and then nothing. Measured 2026-08-28: **0 of 8** of the
+phrasings above were free before, 8 of 8 now, at 18–22 ms each.
+`media/data/2026-08-28-note-turn-cost.csv`, and D50 for why none of it uses a model.
+
+**Deleting is a move, not a shred.** The note goes to `vault/.trash/` with a timestamp on it —
+it stops being searched, read back or found, but it is still a file you can drag back. The
+exact path is on a card *before* he asks, so what you approve is what gets moved.
+
+```bash
+python tools/knowledge_vault.py --list             # every note, and what is in the trash
+python tools/knowledge_vault.py --read "regulator choice"   # what he'd SAY and what he'd SHOW
+python -m orchestrator.note_intent                 # what he matches, and what he refuses
+```
+
+He deliberately will **not** edit a line inside a note by voice, and *"remember that…"* is
+deliberately not a note verb — it means *recall* as often as it means *record*. Both are in D50.
 
 ## Memory
 
@@ -235,7 +284,7 @@ powershell -ExecutionPolicy Bypass -File tools\install_autostart.ps1 status
 That puts a shortcut in `shell:startup` pointing at `config/start_oddball.vbs`, which runs
 `config/start_oddball.bat` with no console window. `remove` takes it back out.
 
-**To check everything still works** — 27 harnesses, ~12,300 checks, no API key required:
+**To check everything still works** — 28 harnesses, ~12,405 checks, no API key required:
 
 ```powershell
 Get-ChildItem tools\verify_*.py | ForEach-Object { python $_.FullName }
