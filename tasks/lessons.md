@@ -891,3 +891,64 @@ words someone has to remember to extend.
 This is L23's rule arriving from the other direction — *use `ast`, not string matching* — and
 it will keep arriving, because this repo comments heavily and every comment is text a naive
 scan will read. **If a check is about what the code DOES, parse the code.**
+
+---
+
+## L26 — Look for what the machine has already recorded, before inventing a corpus
+
+**2026-08-28.** The single most expensive habit of the whole session, and it cost the same
+mistake three times before I noticed the pattern.
+
+### Three times, same shape
+
+1. **The note matcher.** I wrote `orchestrator/note_intent.py` against a corpus I made up, and
+   shipped it. `captures/` — which `--save-captures` has been filling since the port — held LB
+   trying to take a note by voice **ten minutes before he asked me to build it**. Both real
+   utterances failed: one stored a note whose body was "in the vault", the other was missed
+   entirely. Neither was findable from invented examples.
+
+2. **The wake threshold.** I ranked "re-fit `[wake].threshold`" as the top priority on a board
+   entry recording scores of 0.17–0.28. `captures/` holds **31 wakes across three days** — a
+   capture only exists after one fires. The figure was from the Pi and stale. I recommended
+   work on a problem that had already gone away.
+
+3. **Restart-on-failure.** Approved and started. `data/oddball.log` has **exactly one** start
+   marker across fourteen hours: nothing has ever crashed. I was building insurance against an
+   event with no instances.
+
+Three items, and the evidence that settled all three was sitting in two directories in the repo
+I had open the whole time.
+
+### Why it kept happening
+
+An invented corpus feels like progress: it is fast, it is under my control, and every example
+in it passes. Real recordings are awkward, badly transcribed, and full of things that are
+nobody's intent — *"family home yes k t o p 3 nsu 5dk"*. **That awkwardness is the value.** The
+invented negatives could argue the matcher was safe; the 27 real ones proved it, and then found
+two bugs the invented ones could not.
+
+It is L15 — *a test that builds its own world never sees what the repository put in the real
+one* — but L15 is written about fixtures. This is the same failure one level up, in **choosing
+what to work on at all**.
+
+### The rule
+
+**Before writing a corpus, planning work, or accepting a number from the task board, spend two
+minutes asking what this machine has already recorded about it.** In this repo that is:
+
+    captures/           every utterance after a wake, with tiny.en's transcript in the filename
+    data/oddball.log    start markers, exceptions, dropped frames, wake scores
+    data/face.log       the window
+    media/data/*.csv    every measurement anyone has taken
+    vault/*.md          corrections and reflections he has written himself
+
+A number on the task board is a **claim with a date on it**. `captures/` is what happened.
+When they disagree, the directory wins.
+
+### And the corollary that saved two wrong reports
+
+Real data also disproves things, and twice it disproved *me* before I said them out loud: the
+3,940 dropped frames looked like audio corruption until `run_voice.py:484` showed the queue is
+drained at end of turn anyway, and the minimum-duration guard for false dismissals died on the
+fact that 2.0s of every recording is `hangover_s` silence. **Check the mechanism before
+reporting the finding**, not after.
