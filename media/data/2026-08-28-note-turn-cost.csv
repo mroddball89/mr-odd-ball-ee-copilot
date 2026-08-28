@@ -1,0 +1,6 @@
+measured_at,operation,turns,wall_s,api_calls_after,api_calls_before,platform,notes
+2026-08-28T09:28:57,new,2,0.0181,0,3,win32 python3.12,median of 25; before = router + persona tool call + followup
+2026-08-28T09:28:57,append,1,0.0193,0,3,win32 python3.12,median of 25; before = router + persona tool call + followup
+2026-08-28T09:28:57,read,1,0.0203,0,3,win32 python3.12,median of 25; before = router + persona tool call + followup
+2026-08-28T09:28:57,list,1,0.0177,0,3,win32 python3.12,median of 25; before = router + persona tool call + followup
+2026-08-28T09:28:57,delete,2,0.0224,0,,win32 python3.12,median of 25; no delete existed before

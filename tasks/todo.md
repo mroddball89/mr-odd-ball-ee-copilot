@@ -2051,3 +2051,76 @@ $k = Read-Host 'paste the key' -AsSecureString
 python main.py --text                       # cheapest first check
 wscript config\start_oddball.vbs            # then the full rig
 ```
+
+---
+
+# The vault notebook — dictate a note, add to it, read it back, delete it
+
+**2026-08-28.** LB: *"I want to be able to tell or type to Mr Odd Ball to make him take notes
+and save it to whatever folder or make a new folder in the vault I ask him to"* — and then,
+*"I also want him to be able to go back and edit / add more of what I say to, or delete notes.
+And read them back to me."*
+
+## What was already there, and what was not
+
+- [x] `tools/knowledge_vault.py:write_note` already wrote Markdown, already created a named
+      folder on demand, already **appended** rather than overwrote. The "make a new folder"
+      half of the request needed no new storage code at all.
+- [x] `agents/persona_agent.py` already had `save_to_vault` bound.
+- [x] **Nothing recognised the request.** Measured before writing anything: 8 phrasings LB
+      uses, `0/8` matched the free tier. All eight fell through to the paid router — 3 Gemini
+      calls per note, against a 20-a-day tier.
+- [x] Nothing could delete a note, and nothing could read one *aloud*.
+
+## Built
+
+- [x] `orchestrator/note_intent.py` — pure function of a string, injected into
+      `instant.Router` as a planner. Five ops: new, append, read, list, delete.
+- [x] `tools/knowledge_vault.py` — `notes()`, `find_notes()`, `read_note()`, `append_note()`,
+      `list_notes()`, `trash_note()`; honours `ODDBALL_VAULT_DIR`; `--find` and `--read` CLI.
+- [x] `engine/core.py` — `NoteDraft` and the three-turn dictation, the cancel escapes, and
+      delete through the existing `Pending` gate (`kind="note"`).
+- [x] `router.py` — one prompt line, so a refused phrasing lands on GENERAL and not OS.
+- [x] `tools/verify_notes.py` — 125 checks, `--probe`.
+- [x] `docs/DECISIONS.md` D50, `tasks/lessons.md` L24 and L25, README **Taking notes**.
+- [x] `media/scripts/measure_note_turn.py` → `media/data/2026-08-28-note-turn-cost.csv`;
+      `media/scripts/plot_note_cost.py` → `media/charts/2026-08-28-note-cost.svg`.
+
+## Review
+
+**It works end to end, and the cost went to zero.** 0/8 phrasings free before, 8/8 after, 0 API
+calls, 18–22 ms per operation — and the measurement script carries a tripwire on
+`router.router_agent`, so "no API call" is a number rather than a claim.
+
+**Three bugs the harness found, all of them mine, all worth recording.**
+
+1. **`_strip_lead` ate the subject of a sentence.** Its list held "it" and "is", so *"add to my
+   regulator note that IT needs a heatsink"* stored the note "needs a heatsink" — a sentence
+   with its subject removed, filed as LB's own words. The list now holds only joints between
+   the command and the content.
+
+2. **The cancel did not fire, and two checks after it went green anyway.** `is_sleep` does not
+   contain "never mind" — correctly, it is a dismissal matcher, not a cancel. The draft stayed
+   open, "never mind" became the content, the *next* command became its name, and by the time
+   the silence check ran there was no draft left to cancel, so it passed having tested nothing.
+   L24, and the checks are now written to be independently falsifiable.
+
+3. **The spoken form ran 41 words against a 40-word ceiling.** The clip budget was a constant
+   (`MAX_WORDS - 14`) and the framing sentence is longer for a multi-entry note than a single
+   one. The frame is now built first and the clip gets what is left.
+
+**Two pre-existing problems fixed on the way past.** `knowledge_vault` was the only one of the
+three vault modules not honouring `ODDBALL_VAULT_DIR`, so every harness driving a vault write
+was writing to LB's real vault — L22, with the file already in place. And `read_from_vault`
+walked `rglob("*.md")` with no exclusions, which would have made a trashed note keep answering
+questions. There is now one walk, `notes()`, used by search, listing, resolution and the CLI.
+
+**Two things deliberately not built**, both in D50: editing a line inside a note by voice, and
+nested folders.
+
+**The numbering jumps to D50.** D30–D47 are cited throughout this codebase and belong to the
+*assistant's* decision log, not this one. Continuing at D30 would have put two decisions behind
+one citation. A note explaining the gap is now at the top of `docs/DECISIONS.md`.
+
+**28 harnesses green, 12,405 checks.** `verify_upload.py`'s single failure is pre-existing and
+unrelated — confirmed by stashing this work and re-running it.

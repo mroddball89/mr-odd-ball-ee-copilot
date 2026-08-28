@@ -3,6 +3,15 @@
 Numbered so they can be cited from code comments and commit messages. A decision here is one
 somebody could reasonably have made differently — not a fact, and not a preference.
 
+> **On the numbering, which is not contiguous and cannot be.** This log holds D1–D29 and then
+> resumes at D50. **D30 to D47 belong to the standalone assistant's own decision log** at
+> `mroddball89/mr-odd-ball-ai`, and this codebase cites them by bare number in a dozen places —
+> D30 (local models stating first-year electronics fluently and wrongly), D32 (Piper at ~160
+> wpm), D38 (the danger is never the rule that fails to match), D41, D42, D44. Continuing this
+> file at D30 would have put two different decisions behind one citation, which is the same
+> trap `orchestrator/instant.py` was renamed to avoid. The gap is deliberate and is cheaper
+> than the ambiguity.
+
 ---
 
 ## D1 — The EE Copilot is the host, not the assistant
@@ -2819,3 +2828,114 @@ python tools/verify_agents.py         55/55     SCREEN reaches a real, importabl
 because each asserts it has been told about every route. That is two harnesses doing exactly the
 job they were written for, and it is why the negatives for the new route were written before it
 shipped rather than after something broke.
+
+---
+
+## D50 — The notebook is free, verbatim, and asks what to call it
+
+**2026-08-28.** LB asked to be able to tell or type *"take a note"*, have it land in a vault
+folder he names — existing or invented — and then go back to it: add more, hear it read back,
+throw it away.
+
+Half of that already worked and nobody could reach it. `tools/knowledge_vault.py:write_note`
+has always written Markdown under `vault/`, created a named folder on demand, and **appended**
+rather than overwritten. `agents/persona_agent.py` has always had `save_to_vault` bound. What
+was missing was everything in front: nothing recognised the request.
+
+**Measured before touching anything.** Eight phrasings LB actually uses, put through the free
+tier: `0/8` matched. All eight fell through to `router.py` and reached the persona agent, which
+is **three Gemini calls** — route, tool call, follow-up with the tool result. Against D3's
+measured 20 requests per model per day, that is **six notes and then nothing**. After:
+`8/8` free, `0` calls, ~18–22 ms per operation.
+`media/data/2026-08-28-note-turn-cost.csv`, `media/charts/2026-08-28-note-cost.svg`.
+
+### Why no model, when there is one right there
+
+Three reasons, and only the first is about money.
+
+1. **Quota.** The moment LB most wants something written down is not a moment to discover the
+   day's requests are gone. A notebook that stops working at note seven is not a notebook.
+2. **Authority.** The content stored is a **slice of the raw utterance**, never a paraphrase.
+   This is `tools/corrections.py`'s argument reused without a word changed: `normalise()`
+   strips `/` and `-`, so "the reg is an LM317, not a 7805 — see /home/lb/kicad/amp" survives
+   only if extraction runs on the original text. A note is evidence of what LB decided; a
+   paraphrase is a model's opinion about what he decided, and the day they differ is the day
+   the part number is wrong.
+3. **Speed.** 18 ms against 750 ms for the routing call alone. This is the least important of
+   the three and is drawn smallest on the chart, because milliseconds were never the problem.
+
+### He asks what to call it, and that was LB's call
+
+A bare *"take a note"* asks what to write down; every new note then asks what to call it. Both
+hold a turn open, which is the one genuinely risky thing here — `Engine.ask()` already
+documents the permission gate having got exactly this wrong, leaving a question open so that
+the next thing said, about anything at all, was consumed as its answer.
+
+So `NoteDraft` is read and cleared **unconditionally at the top** of `_resolve_note`, and has
+three escapes: silence, a dismissal (`instant.is_sleep`), and a cancel
+(`note_intent.is_cancel`). The last of those is a separate list from the first, and finding out
+why cost a bug — see L24.
+
+The alternative was deriving a filename from the first few words. Rejected by LB, and he was
+right: a term of dictation becomes a drawer of files called `the-reg-is-an.md`, and two notes
+opening similarly silently append to each other.
+
+### The two anchors, which are the whole safety argument
+
+D38 for the ninth time. `orchestrator/note_intent.py` matches only when:
+
+1. **The utterance OPENS with the verb.** A question does not begin with an order.
+2. **Naming an existing note requires the word "note".**
+
+The second is structural rather than a blocklist, and it is what keeps three working features
+from being stolen: *"read my screen"* stays SCREEN, *"delete the temp files"* stays OS,
+*"add this to the BOM"* stays HARDWARE. A blocklist of things-that-are-not-notes would need
+every noun LB owns; requiring the noun he **is** naming needs one word and cannot be
+incomplete. `tools/verify_notes.py --probe` removes both anchors and shows **13 of 29** working
+features being taken.
+
+The same rule settles *"make a new folder called builds"*: no note in it, so it is a `mkdir`
+and belongs to OS, where it is gated. *"Make a new folder called amp board and save this note
+there"* has one, and is a note.
+
+**"Remember" is deliberately absent.** It is the one verb that means *recall* as often as it
+means *record* — "remember that the reg is an LM317" and "remember that thing I told you?" open
+with the same two words, and no start anchor separates them. It stays on the paid persona path,
+where it already worked.
+
+### Delete is a gated move, not a shred
+
+The only notebook operation that asks first, and it reuses `Pending` whole rather than growing
+a second gate. That buys the property the gate was built for: **the resolved path is on a card
+before the question is asked**, so what LB approves and what is moved are provably one file.
+`kind="note"` is the first gated action with no agent behind it — deleting a Markdown file
+needs no model, and inventing an agent to hold one function would be the tail wagging the dog.
+
+And the delete is a **move to `vault/.trash/`**. The vault is explicitly the store that
+outlives the conversation window and survives this program being deleted; a voice-triggered
+destructive operation on *that*, arriving through `tiny.en` — which turned "What is the date?"
+into "What is today?" — should not be the one irreversible thing in the repo. A rename costs
+nothing.
+
+That decision surfaced a **live bug in code that predates it**: `read_from_vault` walked
+`VAULT_DIR.rglob("*.md")` with no exclusions, so a trashed note would have kept being found by
+search and fed into prompts as current — two versions of one fact reaching one model, which is
+what D22 and D23 both exist to prevent. There is now one walk, `notes()`, which skips
+dot-directories, and search, listing, resolution and the CLI all use it.
+
+### Deliberately not built
+
+**Editing a line inside a note by voice.** "Change the third line to…" needs the note read
+back, an index agreed out loud, and a transcript accurate enough to trust with an overwrite.
+Append and delete cover the need at a fraction of the risk, and `vault/**/*.md` is plain
+Markdown in any editor.
+
+**Nested folders.** One level, created on demand, is the whole of what was asked for.
+`_safe_segment` is unchanged.
+
+### One more thing this fixed on the way past
+
+`tools/knowledge_vault.py` was the only one of the three vault modules that did **not** honour
+`ODDBALL_VAULT_DIR` — `corrections.py` and `reflections.py` both did. That made every harness
+driving a vault write a writer to LB's real vault. It is L22 with the file already in place and
+nobody having noticed, and it had to be fixed before `tools/verify_notes.py` could exist.

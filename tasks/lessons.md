@@ -795,3 +795,99 @@ translate TO. Write the new one against the new platform's shapes, keep the old 
 and select. Do not merge them either — on Windows the Linux `rm` row starts matching inside
 unrelated commands and names the wrong cause, and a refusal that gives the wrong reason is how
 a guard gets switched off in frustration.
+
+---
+
+## L24 — A guard that never fires makes the checks after it pass while testing nothing
+
+**2026-08-28, building the vault notebook.**
+
+`engine/core.py` holds a note open across turns: "What should I write down?" then "What should
+I call it?". Backing out needed a cancel, and I reached for `orchestrator/instant.is_sleep` —
+the end-anchored dismissal matcher that already handles "goodnight", "that's all", "leave me
+alone". It looked like the same job.
+
+It is not. **"Never mind" and "forget it" are not in that list, and should not be**: neither of
+them means LB wants Mr Odd Ball to stop listening. They mean he wants *this* to stop. A
+dismissal ends the conversation; a cancel ends one action inside it.
+
+### What made it worth a lesson is how it failed
+
+Not as one red line. `tools/verify_notes.py` ran this:
+
+```python
+turn(esc, "take a note")
+r = turn(esc, "never mind")
+check(esc.note_draft is None, "a dismissal cancels the draft")        # RED, correctly
+check(not kv.find_notes("never mind"), "and nothing was written")     # GREEN, meaninglessly
+
+turn(esc, "take a note")
+r = turn(esc, "")
+check(esc.note_draft is None, "silence cancels the draft")            # GREEN, meaninglessly
+```
+
+The cancel did not fire, so "never mind" became the note's **content**. The draft moved on to
+awaiting a name. The next `"take a note"` was then read as **the name**, and a note called
+"take a note" was written. By the time the silence check ran there was no draft left to
+cancel — so it passed, having tested nothing at all.
+
+One broken guard, one honest failure, and **two checks that went green for the wrong reason**.
+The second and third were not weak tests; they were correct tests, downstream of state the
+first one was supposed to have reset.
+
+### The rule
+
+**A check on state that a previous step was supposed to establish is only as good as that
+step.** When a guard fails, assume every assertion after it in the same sequence is now
+untrustworthy — and write the ones that matter to be independently falsifiable:
+
+```python
+turn(esc, "take a note")
+held = esc.note_draft is not None            # prove there WAS something to cancel
+r = turn(esc, "")
+check(held and esc.note_draft is None and "nothing written down" in r.speech.lower(),
+      "silence cancels the draft, and he says so")
+```
+
+Asserting on the **speech as well as the state** is what makes it bite: "no draft" is true both
+when the cancel worked and when there was never a draft, and only one of those says "nothing
+written down".
+
+Related: L15 (a test that builds its own world never sees what the repository put in the real
+one) is the same family — a check that cannot distinguish success from a vacuum.
+
+---
+
+## L25 — A textual scan of a well-commented file reads the prose, not the code
+
+**2026-08-28, same session.** `tools/verify_notes.py` asserts that
+`orchestrator/note_intent.py` cannot reach a model. First attempt:
+
+```python
+_source = inspect.getsource(note_intent)
+for forbidden in ("langchain", "genai", "requests", "urllib"):
+    check(forbidden not in _source, ...)
+check("agents" not in _source, "it imports nothing from agents/")
+```
+
+Two red, both wrong. The module's own docstring contains the sentences *"Nothing here imports
+`agents/`"* and *"a planner returns a request"* — so the scan found the module's **promise not
+to do the thing** and reported it as the thing.
+
+The fix is to parse:
+
+```python
+tree = ast.parse(inspect.getsource(note_intent))
+imported = {a.name.split(".")[0] for n in ast.walk(tree)
+            if isinstance(n, ast.Import) for a in n.names}
+imported |= {n.module.split(".")[0] for n in ast.walk(tree)
+             if isinstance(n, ast.ImportFrom) and n.module}
+```
+
+Which is also **stronger than what was intended**: it can assert the whole import set is a
+subset of the standard library plus `orchestrator/`, rather than checking a list of forbidden
+words someone has to remember to extend.
+
+This is L23's rule arriving from the other direction — *use `ast`, not string matching* — and
+it will keep arriving, because this repo comments heavily and every comment is text a naive
+scan will read. **If a check is about what the code DOES, parse the code.**

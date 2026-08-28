@@ -45,6 +45,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from engine.response import Card, CardKind, Pending, Response
 from engine.split import split
@@ -139,6 +140,39 @@ class Turnlog:
                 + (f" | {', '.join(self.extras)}" if self.extras else ""))
 
 
+@dataclass
+class NoteDraft:
+    """A note being dictated, waiting on one more thing before it can be written.
+
+    LB asked for two behaviours that both need a turn to be held open: a bare "take a note"
+    should ask what to write down, and every new note should ask what to call it. So a note can
+    take up to three turns, and this is what carries the first two into the third.
+
+    **It is not a `Pending`.** A `Pending` is an approval — a yes/no about an action already
+    fully described, resolved by `orchestrator/classify_yes.py`. This is the opposite shape: the
+    action is not yet described, and the answer is content rather than consent. Reusing
+    `Pending` would mean `is_yes("the TL072 has output on pin 1")` deciding whether to save it.
+
+    Args:
+        op:       "new" or "append" — which operation is waiting.
+        awaiting: "content" or "name" — what the next utterance will be read as.
+        content:  what he has been given so far, verbatim.
+        folder:   the vault folder LB named, "" for the default.
+        name:     what to call it, once he has said.
+        path:     for "append", the note already resolved by `knowledge_vault.find_notes`.
+                  Held as a path rather than as a name so the note that gets added to is the
+                  one that was found, not one re-resolved a turn later against a vault that
+                  may have changed underneath.
+    """
+
+    op: str = "new"
+    awaiting: str = "content"
+    content: str = ""
+    folder: str = ""
+    name: str = ""
+    path: "Path | None" = None
+
+
 class Engine:
     """The copilot, with no terminal attached.
 
@@ -152,6 +186,7 @@ class Engine:
         self.mode = "normal"
         self.quiz_item: dict | None = None
         self.pending: Pending | None = None
+        self.note_draft: NoteDraft | None = None
         self._confirm_gates = confirm_gates
         self.last: Turnlog = Turnlog()
 
@@ -189,11 +224,32 @@ class Engine:
                 t.extras.append("gate: no answer -> declined")
                 return Response(speech="No problem, I'll leave it.", route="",
                                 raw="Action aborted: no answer to the permission question.")
+            # A held note question is closed by silence for the same reason, and it is the same
+            # bug if it is not: a draft left open consumes whatever LB says next, about
+            # anything at all, and files it as the note.
+            if self.note_draft is not None:
+                self.note_draft = None
+                t.route = "note"
+                t.extras.append("note: no answer -> cancelled")
+                return Response(speech="No problem, nothing written down.", route="note",
+                                raw="Note abandoned: no answer to the note question.")
             return Response(speech="I didn't catch that.", route="", raw="")
 
         try:
             if self.pending is not None:
                 return self._resolve_pending(text, t)
+
+            # A note question that is open owns the next utterance, exactly as the gate above
+            # does — "What should I call it?" is answered by the next thing said, and routing
+            # that answer would send "op amp pinouts" to the persona agent as a fresh question.
+            #
+            # BELOW the gate, because a gate and a draft are never open at once and the gate is
+            # the one that guards an action. ABOVE quiz mode and the correction check, because
+            # both of those read an ordinary utterance, and while a draft is open there is no
+            # such thing: "that was wrong" is a perfectly good thing to write in a note.
+            if self.note_draft is not None:
+                return self._resolve_note(text, t)
+
             if self.mode == "quiz":
                 return self._quiz_turn(text, t)
 
@@ -489,19 +545,29 @@ class Engine:
         Returns:
             A `Response`, or None when nothing free applies.
         """
-        from orchestrator import launch_intent
+        from orchestrator import launch_intent, note_intent
         from orchestrator.instant import Router as InstantRouter
 
         try:
             # `planners` is checked before INTENTS and was built for exactly this. Injected
             # rather than imported, per that class's docstring: a dependency handed in is one a
             # harness can withhold, which is what lets `verify_engine.py` prove nothing runs.
-            reply = InstantRouter(planners={"launch": launch_intent.look_up}).route(text)
+            #
+            # **Note before launch, and the order matters.** "start a new note" opens with
+            # "start", which is a `launch_intent.LAUNCH_VERB`, so the launch planner would be
+            # offered "a new note" as an application name. It resolves to nothing today and the
+            # turn would fall through — but the day LB installs something called Notes, asking
+            # to start a note would start a program instead. Ordering settles it structurally.
+            reply = InstantRouter(planners={"note": note_intent.look_up,
+                                            "launch": launch_intent.look_up}).route(text)
         except Exception:                                              # noqa: BLE001
             LOG.exception("free tier failed; falling back to the router")
             return None
 
         request = reply.action
+        if isinstance(request, note_intent.NoteRequest):
+            return self._note_turn(request, t)
+
         if isinstance(request, launch_intent.LaunchRequest):
             from agents.os_agent import propose_launch
             t.route = AgentRoute.OS.value
@@ -686,6 +752,278 @@ class Engine:
         from agents.persona_agent import run_persona_agent
         return split(run_persona_agent(text), route=AgentRoute.PERSONA.value)
 
+    # --- the notebook ------------------------------------------------------------------
+    #
+    # Five operations, reached from `_free_turn` when `orchestrator/note_intent.py` recognises
+    # one. **Every path here costs zero API calls**, including the delete — the matcher is a
+    # pure function of a string and `tools/knowledge_vault.py` is a folder of Markdown files.
+    #
+    # That is the whole point rather than a nice property. Dictating a note used to cost three
+    # Gemini calls out of D3's measured twenty a day, and the moment LB most needs to write
+    # something down is not a moment to discover the quota is gone.
+
+    NOTE_ROUTE = "note"
+
+    def _note_turn(self, request, t: Turnlog) -> Response:
+        """Dispatch one recognised note request. Never raises — `ask()` catches, but the
+        notebook failing should not look like the assistant crashing."""
+        from orchestrator import note_intent
+
+        t.route = self.NOTE_ROUTE
+        t.extras.append(f"free note:{request.op}")
+
+        if request.op == note_intent.NEW:
+            return self._note_new(request, t)
+        if request.op == note_intent.APPEND:
+            return self._note_append(request, t)
+        if request.op == note_intent.READ:
+            return self._note_read(request, t)
+        if request.op == note_intent.LIST:
+            return self._note_list(request, t)
+        return self._note_delete(request, t)
+
+    def _say(self, speech: str, raw: str = "", cards: list[Card] | None = None) -> Response:
+        """One notebook answer, on the notebook's route."""
+        return Response(speech=speech, cards=cards or [], route=self.NOTE_ROUTE,
+                        raw=raw or speech)
+
+    def _one_note(self, target: str, t: Turnlog):
+        """Resolve a spoken note name to exactly one file.
+
+        Args:
+            target: what LB called it.
+
+        Returns:
+            `(path, None)` when exactly one note matched, or `(None, Response)` carrying what to
+            say instead. **Zero and two-or-more are different answers and neither is a guess** —
+            `knowledge_vault.find_notes` is the resolver and this is the half that talks about
+            it. `tools/kicad_parser.py` handles an ambiguous project name the same way, and it
+            matters more here because one of the three callers deletes what it is handed.
+        """
+        from tools.knowledge_vault import VAULT_DIR, find_notes
+
+        hits = find_notes(target)
+        if len(hits) == 1:
+            return hits[0], None
+
+        if not hits:
+            t.extras.append(f"note: no match for {target!r}")
+            return None, self._say(
+                f"I don't have a note called {target}.",
+                raw=f"No note in the vault matches {target!r}.")
+
+        t.extras.append(f"note: {len(hits)} match {target!r}")
+        listing = "\n".join(
+            f"- {p.resolve().relative_to(VAULT_DIR.resolve()).as_posix()}" for p in hits)
+        return None, self._say(
+            f"I've got {len(hits)} notes that could be {target}. Which one?",
+            raw=f"{len(hits)} notes match {target!r}:\n{listing}",
+            cards=[Card(CardKind.MARKDOWN, f"{len(hits)} notes match '{target}'", listing)])
+
+    # --- new, which is the one that holds a turn open ------------------------------------
+
+    def _note_new(self, request, t: Turnlog) -> Response:
+        """Start a note. Asks for whatever LB did not say, in the order he will say it."""
+        if not request.content:
+            self.note_draft = NoteDraft(op="new", awaiting="content",
+                                        folder=request.folder, name=request.name)
+            t.extras.append("note: awaiting content")
+            return self._say("What should I write down?",
+                             raw="Waiting for the note's contents.")
+
+        if not request.name:
+            self.note_draft = NoteDraft(op="new", awaiting="name",
+                                        content=request.content, folder=request.folder)
+            t.extras.append("note: awaiting name")
+            return self._say("What should I call it?",
+                             raw=f"Waiting for a name for: {request.content}")
+
+        return self._write_draft(NoteDraft(op="new", content=request.content,
+                                           folder=request.folder, name=request.name), t)
+
+    def _resolve_note(self, text: str, t: Turnlog) -> Response:
+        """Read the answer to an open note question.
+
+        **Read and cleared unconditionally, at the top.** The draft cannot survive its own turn
+        under any branch below, which is the property `ask()`'s own comment says the permission
+        gate got wrong the first time: a held question that stays held eats the next thing LB
+        says about anything at all.
+        """
+        from orchestrator.instant import is_sleep
+        from orchestrator.note_intent import is_cancel
+
+        draft, self.note_draft = self.note_draft, None
+        t.route = self.NOTE_ROUTE
+        answer = text.strip()
+
+        # The escape, and it takes BOTH lists. `note_intent.is_cancel` is "never mind", "forget
+        # it", "cancel" — stop this. `is_sleep` is "goodnight", "that's all" — stop everything,
+        # which necessarily includes this. Both are end-anchored, so a note whose contents
+        # genuinely mention forgetting something still gets written.
+        if is_cancel(answer) or is_sleep(answer):
+            t.extras.append("note: cancelled")
+            return self._say("Alright, nothing written down.",
+                             raw="Note abandoned by the user.")
+
+        if draft.awaiting == "content":
+            draft.content = answer                 # verbatim. Never normalised, never trimmed.
+            if draft.op == "append":
+                return self._write_draft(draft, t)
+            if draft.name:
+                return self._write_draft(draft, t)
+            self.note_draft = NoteDraft(op=draft.op, awaiting="name",
+                                        content=draft.content, folder=draft.folder)
+            t.extras.append("note: awaiting name")
+            return self._say("What should I call it?",
+                             raw=f"Waiting for a name for: {draft.content}")
+
+        draft.name = answer
+        return self._write_draft(draft, t)
+
+    def _write_draft(self, draft: NoteDraft, t: Turnlog) -> Response:
+        """Commit a finished draft — a new note, or an addition to one already found."""
+        from tools.knowledge_vault import VAULT_DIR, append_note, write_note
+
+        if draft.op == "append" and draft.path is not None:
+            result = append_note(draft.path, draft.content)
+            rel = draft.path.resolve().relative_to(VAULT_DIR.resolve()).as_posix()
+            ok = result.startswith("Added")
+            t.extras.append("note appended" if ok else "note append FAILED")
+            speech = ("Added to your note." if ok
+                      else "I couldn't add to that note. It's on the screen.")
+            return self._say(speech, raw=result,
+                             cards=[Card(CardKind.LOG if ok else CardKind.ERROR,
+                                         "Vault", f"{rel}\n\n{draft.content}")])
+
+        folder = draft.folder or "notes"
+        result = write_note(draft.name, draft.content, folder)
+        ok = result.startswith("Successfully")
+        t.extras.append("note written" if ok else "note write FAILED")
+
+        # The path is SHOWN, not just spoken. A note filed in the wrong folder is a note LB
+        # will not find again, and "saved it" without saying where is exactly the claim
+        # `VAULT_INSTRUCTION` forbids a model from making.
+        rel = result.split("Vault: ", 1)[-1] if ok else ""
+        speech = (f"Written down in {folder}." if ok
+                  else "I couldn't write that down. The reason's on the screen.")
+        return self._say(speech, raw=result,
+                         cards=[Card(CardKind.MARKDOWN if ok else CardKind.ERROR,
+                                     rel or "Vault", draft.content if ok else result)])
+
+    # --- add to, read back, list ---------------------------------------------------------
+
+    def _note_append(self, request, t: Turnlog) -> Response:
+        path, problem = self._one_note(request.target, t)
+        if problem is not None:
+            return problem
+
+        if not request.content:
+            self.note_draft = NoteDraft(op="append", awaiting="content", path=path)
+            t.extras.append("note: awaiting content to append")
+            return self._say(f"What should I add to {request.target}?",
+                             raw=f"Waiting for text to append to {path}.")
+
+        return self._write_draft(
+            NoteDraft(op="append", content=request.content, path=path), t)
+
+    def _note_read(self, request, t: Turnlog) -> Response:
+        """Read one note back — verbatim, and clipped honestly when it is too long to say."""
+        from tools.knowledge_vault import find_notes, list_notes, read_note
+
+        hits = find_notes(request.target)
+        if not hits:
+            # A name that matches no note may be a FOLDER. "What's in my ECE350 notes" is a
+            # perfectly ordinary way to ask for a folder, and answering "I don't have a note
+            # called ECE350" when there are four of them in exactly that folder is the kind of
+            # literal-mindedness that makes an assistant feel broken.
+            in_folder = list_notes(request.target)
+            if in_folder:
+                t.extras.append("note: read fell through to a folder listing")
+                return self._folder_listing(request.target, in_folder, t)
+
+        path, problem = self._one_note(request.target, t)
+        if problem is not None:
+            return problem
+
+        view = read_note(path)
+        t.extras.append(f"note read: {view.rel} ({len(view.entries)} entries)")
+        return self._say(view.spoken, raw=f"--- {view.rel} ---\n{view.body}",
+                         cards=[Card(CardKind.MARKDOWN, view.rel, view.body)])
+
+    def _note_list(self, request, t: Turnlog) -> Response:
+        from tools.knowledge_vault import list_notes
+
+        found = list_notes(request.folder)
+        if not found:
+            where = f" in {request.folder}" if request.folder else ""
+            return self._say(f"You haven't got any notes{where} yet.",
+                             raw=f"The vault is empty{where}.")
+        return self._folder_listing(request.folder, found, t)
+
+    def _folder_listing(self, folder: str, found: list, t: Turnlog) -> Response:
+        """What is in the vault, or in one folder of it. The names go on a card, not into the
+        air — reading twelve filenames aloud is fifty seconds of Piper and nobody's idea of an
+        answer."""
+        from tools.knowledge_vault import VAULT_DIR
+
+        t.extras.append(f"note list: {len(found)}")
+        rels = [p.resolve().relative_to(VAULT_DIR.resolve()).as_posix() for p in found]
+        where = f" in {folder}" if folder else ""
+        plural = "note" if len(found) == 1 else "notes"
+
+        # Name a couple out loud, because "you've got twelve notes" answers nothing.
+        sample = ", ".join(Path(r).stem for r in rels[:3])
+        tail = f" — {sample}" + (", and more." if len(rels) > 3 else ".")
+        return self._say(f"You've got {len(found)} {plural}{where}{tail}",
+                         raw="\n".join(rels),
+                         cards=[Card(CardKind.LOG, f"{len(found)} {plural}{where}",
+                                     "\n".join(rels))])
+
+    # --- delete, which is the only one that asks first -----------------------------------
+
+    def _note_delete(self, request, t: Turnlog) -> Response:
+        """Propose deleting a note. **Nothing is removed here.**
+
+        Reuses the permission gate whole rather than inventing a second one, which buys the
+        property the gate was built for: the resolved path is rendered on a card BEFORE the
+        question is asked, so what LB approves and what gets moved are provably the same file.
+        Anything that is not a clear yes is a no, via `orchestrator/classify_yes.py`.
+        """
+        from tools.knowledge_vault import VAULT_DIR, read_note
+
+        path, problem = self._one_note(request.target, t)
+        if problem is not None:
+            return problem
+
+        view = read_note(path)
+        size = path.stat().st_size if path.exists() else 0
+        entries = len(view.entries)
+        detail = (f"{view.rel}\n{entries} entr{'y' if entries == 1 else 'ies'}, {size} bytes\n\n"
+                  f"{view.body}")
+        spoken = f"Delete your {request.target} note? It's got {entries} " \
+                 f"{'entry' if entries == 1 else 'entries'} in it."
+
+        proposed = Response(
+            speech=spoken,
+            cards=[Card(CardKind.MARKDOWN, f"Delete {view.rel}?", detail)],
+            route=self.NOTE_ROUTE,
+            pending=Pending(kind="note", tool_args={"path": str(path.resolve())},
+                            spoken=spoken, shown=str(path.resolve()), tool="trash_note"),
+            raw=f"Awaiting approval to delete {view.rel} ({size} bytes).")
+        return self._gate(proposed, self.NOTE_ROUTE, t)
+
+    def _trash_approved(self, pending: Pending) -> Response:
+        """Carry out an approved delete. Reached only through `_run_pending`."""
+        from tools.knowledge_vault import trash_note
+
+        result = trash_note(Path(pending.tool_args["path"]))
+        ok = result.startswith("Moved")
+        speech = ("Gone. It's in the vault trash if you want it back."
+                  if ok else "I couldn't delete that note. The reason's on the screen.")
+        return Response(speech=speech,
+                        cards=[Card(CardKind.LOG if ok else CardKind.ERROR, "Vault", result)],
+                        route=self.NOTE_ROUTE, raw=result)
+
     # --- gates -------------------------------------------------------------------------
 
     def _gate(self, proposed: Response, route: str, t: Turnlog) -> Response:
@@ -727,6 +1065,11 @@ class Engine:
         if pending.kind == "os":
             from agents.os_agent import resume_os_action
             return resume_os_action(pending)
+        if pending.kind == "note":
+            # The only gated action with no agent behind it. `kind` selects the AGENT for the
+            # other three; here it selects a function, because deleting a Markdown file needs
+            # no model and inventing an agent to hold one function would be the tail wagging.
+            return self._trash_approved(pending)
         if pending.kind == "screen":
             from agents.screen_agent import resume_screen_look
             return resume_screen_look(pending)
