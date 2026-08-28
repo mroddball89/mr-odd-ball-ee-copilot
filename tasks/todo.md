@@ -2161,3 +2161,58 @@ Overreach in the opposite direction from the substring check it replaced; narrow
 → still correctly reports no signal, though the text is in the file.
 
 **28 harnesses, 12,407 checks, 0 failures. The suite is 100% green.**
+
+## The corpus I should have used first — LB's own recordings (2026-08-28)
+
+Going to re-fit the wake threshold, I opened `captures/` — what
+`engine/run_voice.py --save-captures` writes after every wake — and found **31 wakes across
+three days, 27 of them with real speech.** Two things fell out, and neither was what I went
+looking for.
+
+### 1. The wake threshold is not the problem, and I was wrong to rank it first
+
+A capture only exists **after a wake fires**. 22 on 2026-08-26, 3 on 08-27, 6 on 08-28. The
+board's *"scores 0.17–0.28, mostly did not fire"* is from **2026-08-19, on the Pi**, and is
+stale: the wake word demonstrably fires on Windows. 4 of the 31 are `empty.wav` — woken by the
+room, heard nothing — so the false-wake rate is ~13% and worth watching, but "he cannot be
+woken" is not true and has not been for a while. **Re-fitting is demoted to a tuning job.**
+
+### 2. He had already tried to take a note by voice, and I never checked
+
+At **08:49:50 and 08:50:47 on 2026-08-28** — ten minutes before asking for this feature:
+
+    "can you save a note for me in the vault"
+    "i need to add a note to the vault"
+
+Both failed against the matcher I had just shipped:
+
+- the first **matched but stored a note whose entire body was "in the vault"** — a destination
+  filed as content
+- the second was **missed outright**, because it opens with "i need to" and `_drop_filler`
+  works word-by-word
+
+**Neither could have been found by the corpus in section 1 of the harness, because I wrote that
+corpus.** L15, exactly: a test that builds its own world never sees what the repository put in
+the real one. The real data was on disk the whole time.
+
+#### Fixed
+
+- `_PREAMBLE` — indirect openings as PHRASES: "i need to", "i want to", "help me", "let me".
+  Phrases and not bare words, and that is the whole safety argument: **"i" cannot go in FILLER**,
+  or *"I take notes in Python"* strips to "take notes in python", matches `_NEW`, and files a
+  note saying "in python". Four such statements are now checks.
+- `_VAULT_TAIL` — "…in the vault" / "…to my vault" is a DESTINATION naming the vault itself.
+  Stripped before any branch reads the remainder, and deliberately not a `_FOLDER_PATTERNS`
+  entry, which would have filed the note into `vault/vault/`.
+
+#### And a result worth keeping
+
+Running all 27 real utterances through the matcher as first written: **zero false positives.**
+The two anchors held against real, badly-transcribed speech — "sink my schedule", "family home
+yes k t o p 3 nsu 5dk" — which is the thing the invented negatives could only argue for.
+
+Section 2b of `tools/verify_notes.py` now carries all of it permanently. **Copied in rather than
+read from `captures/`**, because `.gitignore:93` excludes `captures/**` — a harness reading that
+directory would pass here and pass vacuously on a fresh clone, which is L15 wearing the other hat.
+
+**28 harnesses, 12,416 checks, 0 failures.**
