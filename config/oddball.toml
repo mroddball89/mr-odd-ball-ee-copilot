@@ -225,6 +225,54 @@ hangover_s = 2.00
 max_s = 15.0
 
 [stt]
+# ===================================================================================
+# tiny.en -> base.en on 2026-08-28. EVERYTHING BELOW THIS BLOCK IS SUPERSEDED — it is
+# kept because it argues for tiny.en on a machine that no longer exists, and because
+# it names in advance the exact condition that has now been met.
+#
+# It said: *"Measured on SYNTHESISED speech, not on LB's voice. If he is misheard in
+# practice, switch to base.en and accept a slower turn; it is one word."*
+#
+# He is misheard in practice. `captures/` holds "sync my schedule" said SIX times over
+# two days and transcribed by tiny.en as "sink my schedule" (x3), "i think my
+# schedule" (x2) and "sick mass schedule". None of those spellings is in
+# `route_hint._SYNC`, so **none of the six reached ACADEMIC**. The feature was not
+# degraded, it was not working at all, and LB kept repeating himself.
+#
+# Re-measured on HIS 27 recordings, on this workstation (int8, 4 threads, Ryzen 7
+# 5700X). Scored on where the transcript ROUTES, which needs no ground truth:
+#
+#              median   worst    "sync my schedule"   all known intents   false routes
+#   tiny.en     0.29s   1.99s          0 / 6                8 / 14              0
+#   base.en     0.57s   2.63s          3 / 6                9 / 14              1
+#   small.en    1.76s   4.63s          4 / 6               11 / 14              1
+#
+# **The latency argument below is dead.** It said tiny.en "is the ONLY one that fits
+# PLAN.md's under-2s turn". On this box base.en runs in 0.57s — faster than tiny.en
+# managed on the Pi (1.05-1.40s). All three fit. The number that chose the model was a
+# property of the Cortex-A76, and the Cortex-A76 is retired.
+#
+# WHAT THIS COSTS, stated rather than discovered later — base.en is not a clean win:
+#   "thank you"          -> "Okay."     loses a free social ack
+#   "can you save a note -> "can you say the note"   loses one of the two note clips
+#   "So."                -> "That's all."           A FALSE DISMISSAL. 1 of 7 noise
+#                           clips ends the conversation. This is the real cost, it is
+#                           shared with small.en, and it is not cheaply fixable: a
+#                           minimum-duration guard was investigated and refused,
+#                           because every recording is 2.4-4.4s and 2.0s of that is
+#                           `listen.hangover_s` silence — the length of a recording
+#                           says nothing about the length of the speech in it.
+#
+# small.en is the accuracy winner and is NOT chosen: 1.76s median and 4.63s worst
+# spends the whole turn budget on transcription alone, before routing, the agent, or
+# ~0.4s of Piper. It is now *possible* on this hardware in a way it never was on the
+# Pi, which is worth knowing; it is not affordable.
+#
+# Revert with one word. media/data/2026-08-28-stt-tiny-vs-base.csv holds every
+# transcript, media/charts/2026-08-28-stt-models.svg is the figure, and
+# `python media/scripts/measure_stt_models.py` re-runs the whole thing offline.
+# ===================================================================================
+#
 # "tiny.en" or "base.en". Measured on the Pi (int8, 4 threads), nine synthesised commands:
 #
 #   tiny.en   1.05-1.40s   7/9 exact
@@ -236,7 +284,7 @@ max_s = 15.0
 #
 # Measured on SYNTHESISED speech, not on LB's voice. If he is misheard in practice, switch to
 # base.en and accept a slower turn; it is one word.
-model = "tiny.en"
+model = "base.en"
 
 # int8 is ~4x faster than float32 on this CPU with no accuracy difference worth the time.
 compute_type = "int8"

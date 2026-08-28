@@ -2216,3 +2216,55 @@ read from `captures/`**, because `.gitignore:93` excludes `captures/**` — a ha
 directory would pass here and pass vacuously on a fresh clone, which is L15 wearing the other hat.
 
 **28 harnesses, 12,416 checks, 0 failures.**
+
+## STT: the model was fitted to the Pi, and it never heard "sync my schedule" (2026-08-28)
+
+Approved after both earlier board items died on their evidence. Full reasoning in **D51**.
+
+- [x] `media/scripts/measure_stt_models.py` — all 27 real recordings through tiny.en, base.en
+      and small.en, timed, and each transcript put through the REAL `route_hint` and free tier
+      to see where it lands. Offline, keyless, no microphone.
+- [x] `media/data/2026-08-28-stt-tiny-vs-base.csv` — every transcript from every model.
+- [x] `media/charts/2026-08-28-stt-models.svg` + `media/scripts/plot_stt_models.py`.
+- [x] `config/oddball.toml` — `[stt].model = "base.en"`, with the old block kept and marked
+      superseded, the way the `[wake].threshold` block already does it.
+
+### The headline
+
+**tiny.en transcribed "sync my schedule" correctly 0 times out of 6.** Not degraded — by voice
+that feature did not work at all, and the captures show LB simply saying it again.
+
+|          | median | worst  | "sync my schedule" | known intents | false routes |
+|----------|--------|--------|--------------------|---------------|--------------|
+| tiny.en  | 0.29 s | 1.99 s | **0 / 6**          | 8 / 14        | 0            |
+| base.en  | 0.57 s | 2.63 s | 3 / 6              | 9 / 14        | 1            |
+| small.en | 1.76 s | 4.63 s | 4 / 6              | 11 / 14       | 1            |
+
+### Two things I got wrong on the way, both caught by checking
+
+1. **"The dropped frames are corrupting audio."** 3,940 `utterance buffer full` warnings — 72%
+   of `oddball.log`, in 5 bursts, the largest 2,739 frames over **219 s** (the documented 217 s
+   quota-retry stall). I was about to report this as audio loss. It is not:
+   `run_voice.py:484` drains the queue at end of turn anyway, so those frames were headed for
+   the bin regardless. It is a **logging defect** — the comment "if it is full something is
+   wedged" is wrong, it is full because the turn outlived the 16 s buffer — and it buries 33
+   real ERROR lines. Still open, still worth fixing, but it is not what I first said.
+
+2. **"A minimum-duration guard would kill the false dismissal."** base.en hears a mumbled "So."
+   as "That's all." and ends the conversation. A duration floor looked obvious and does not
+   work: every recording is 2.4–4.4 s because **2.0 s of it is `listen.hangover_s` silence**.
+   "So." is 2.56 s; "go to sleep" is 2.88 s. Nothing separates them. Refused, and recorded here
+   rather than deleted.
+
+### Still open
+
+- [ ] **The log flood.** Collapse the dropped-frame warnings to one line per burst with a count
+      and a duration, and correct the "something is wedged" comment.
+- [ ] **`POINTER_GAIN = 900`** is still the libinput figure. Needs LB's hands.
+- [ ] **Restart-on-failure.** Deliberately NOT built: `oddball.log` spans 14 hours with exactly
+      one start marker and no crash on record. Also found the trap — the `.vbs` -> `.bat` chain
+      exits in under a second, so a Task Scheduler task pointed at it records "completed
+      successfully" and would never restart anything. If it is ever wanted, it needs two tasks
+      whose actions block, one per process.
+- [ ] **`[wake].threshold`.** Demoted: 31 wakes across three days says it fires. ~13% of them
+      were silent (false wakes), which is the number to watch if it becomes annoying.
