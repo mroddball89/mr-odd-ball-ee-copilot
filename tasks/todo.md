@@ -2124,3 +2124,40 @@ one citation. A note explaining the gap is now at the top of `docs/DECISIONS.md`
 
 **28 harnesses green, 12,405 checks.** `verify_upload.py`'s single failure is pre-existing and
 unrelated — confirmed by stashing this work and re-running it.
+
+## Addendum — the last red check, and it was a leftover from the Pi
+
+**2026-08-28.** `tools/verify_upload.py` had one failure predating the notebook work:
+
+    FAIL  float.py watches the file chooser, and a bad signal name cannot break the window
+
+**Cause: a WebKitGTK signal that the Windows port correctly deleted.** `run-file-chooser` is a
+GTK API. The 2026-08-26 port replaced GTK4/WebKitGTK with PyQt6/QtWebEngine and removed the
+guarded `view.connect("run-file-chooser", …)` along with the rest of the GTK code — rightly,
+because the paperclip is a plain `<input type="file">` in `hud/face-preview.html` and
+QtWebEngine gives it a native dialog with no code at all. The GTK block's own comment said it
+"is a LOG LINE". Nothing was broken; only the check was stale. **L23, one more time.**
+
+**It was also one comment away from being worse than red.** The check was
+`"run-file-chooser" in chooser and "except TypeError" in chooser`. The only surviving
+occurrence of `run-file-chooser` is inside a comment referring back to the GTK build — so the
+first half was passing on prose. Had the port written a bare `except TypeError:` instead of
+`except (AttributeError, TypeError):`, this would have gone **green while testing a signal
+connection that no longer exists**. That is L25, found in the wild an hour after writing it.
+
+**Replaced with three parsed checks**, on the invariant that still applies — a diagnostic must
+never cost him the window:
+
+- the web-settings loop is inside a `try` that catches `TypeError`
+- `float.py` imports no `gi`/`gtk`/`webkit` — the Pi's toolkit was deleted, not half-wired
+- no live `connect("run-file-chooser", …)`, however the comments describe the old build
+
+The first attempt asserted *every* `setAttribute` was guarded and went red on three correct
+`QWidget.setAttribute(Qt.WidgetAttribute.WA_…)` calls — core Qt enums that will not be renamed.
+Overreach in the opposite direction from the substring check it replaced; narrowed to the loop.
+
+**Mutation-tested, because a check that cannot fail is worth nothing.** Guard removed → red.
+`TypeError` dropped from the tuple → red. GTK signal reinstated → caught. And the comment alone
+→ still correctly reports no signal, though the text is in the file.
+
+**28 harnesses, 12,407 checks, 0 failures. The suite is 100% green.**

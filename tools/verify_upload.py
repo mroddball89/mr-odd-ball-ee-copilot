@@ -748,11 +748,86 @@ for token, why in [
 check("except OSError" in wiring,
       "a taken port is caught, so losing the paperclip cannot cost him his voice")
 
-# The rig's file-chooser diagnostic must be guarded: PyGObject raises TypeError on an unknown
-# signal name, and that would take the WINDOW down, not just the log line.
-chooser = (REPO_ROOT / "hud" / "float.py").read_text(encoding="utf-8")
-check("run-file-chooser" in chooser and "except TypeError" in chooser,
-      "float.py watches the file chooser, and a bad signal name cannot break the window")
+# The invariant: **a diagnostic must never be able to take the window down.** On the GTK build
+# that meant guarding `view.connect("run-file-chooser", …)`, because PyGObject raises TypeError
+# on an unknown signal name. This check asserted exactly that, by substring.
+#
+# `run-file-chooser` is a WebKitGTK signal and the 2026-08-26 Windows port deleted it, correctly
+# — the paperclip is a plain `<input type="file">` in `hud/face-preview.html` and QtWebEngine
+# gives it a native dialog with no code at all. The check stayed, and went red.
+#
+# **It was also one comment away from being worse than useless.** The only surviving occurrence
+# of `run-file-chooser` in the file is inside a comment referring back to the GTK build, so the
+# first half of that `and` was passing on prose; had the port written a bare `except TypeError:`
+# rather than a tuple, this would have gone GREEN while testing a signal connection that no
+# longer exists. That is L25, and it is why what replaces it is parsed rather than grepped.
+#
+# What the Qt build actually has to get right is the same shape one layer along: a Qt version
+# that spells a WebAttribute differently must cost him a log line, not his face.
+import ast
+
+_float_src = (REPO_ROOT / "hud" / "float.py").read_text(encoding="utf-8")
+_float_ast = ast.parse(_float_src)
+
+
+def _guarded_settings_loop(tree: ast.AST) -> bool:
+    """Is the web-settings loop wrapped in a try that catches TypeError?
+
+    **The loop specifically, not every `setAttribute` in the file.** Three of the four calls in
+    `hud/float.py` are `QWidget.setAttribute(Qt.WidgetAttribute.WA_…)` — core Qt enums that are
+    not going to be renamed, and if they were he would have no window to lose. The one that
+    needs the guard is the loop over `QWebEngineSettings.WebAttribute`, where the whole point
+    is that a Qt version may spell one of them differently.
+
+    Asserting "all of them" instead measured the wrong thing and went red on three calls that
+    are correct as written — the same overreach in the opposite direction from the substring
+    check this replaced.
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.For):
+            continue
+        for inner in ast.walk(node):
+            if not (isinstance(inner, ast.Try)
+                    and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)
+                            and c.func.attr == "setAttribute"
+                            for stmt in inner.body for c in ast.walk(stmt))):
+                continue
+            caught: set[str] = set()
+            for handler in inner.handlers:
+                node_type = handler.type
+                parts = (node_type.elts if isinstance(node_type, ast.Tuple)
+                         else [node_type] if node_type is not None else [])
+                caught.update(p.id for p in parts if isinstance(p, ast.Name))
+            if "TypeError" in caught:
+                return True
+    return False
+
+
+check(_guarded_settings_loop(_float_ast),
+      "float.py guards the web-settings loop, so a Qt spelling change costs a log line "
+      "and not his face")
+
+_gtk_imports = {alias.name.split(".")[0]
+                for node in ast.walk(_float_ast) if isinstance(node, ast.Import)
+                for alias in node.names}
+_gtk_imports |= {node.module.split(".")[0]
+                 for node in ast.walk(_float_ast)
+                 if isinstance(node, ast.ImportFrom) and node.module}
+check(not ({"gi", "gtk", "webkit", "webkit2"} & {n.lower() for n in _gtk_imports}),
+      "and imports no GTK or WebKitGTK — the Pi's toolkit was DELETED, not left half-wired",
+      f"imports are {sorted(_gtk_imports)}")
+
+# The signal name must not survive as a live call either. Parsed, so the comment that explains
+# the history does not read as the code that was removed — the exact trap above.
+_connect_literals = {
+    arg.value for node in ast.walk(_float_ast)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    and node.func.attr == "connect"
+    for arg in node.args if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+}
+check("run-file-chooser" not in _connect_literals,
+      "and connects no WebKitGTK signal, however the comments describe the old build",
+      f"string signal connects: {sorted(_connect_literals) or 'none'}")
 
 # Both CLIs, run as SCRIPTS in a fresh interpreter. This is not the same test as importing them:
 # `python tools/file_manager.py` puts `tools/` on sys.path and not the repo root, so a
