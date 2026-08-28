@@ -2939,3 +2939,75 @@ Markdown in any editor.
 `ODDBALL_VAULT_DIR` — `corrections.py` and `reflections.py` both did. That made every harness
 driving a vault write a writer to LB's real vault. It is L22 with the file already in place and
 nobody having noticed, and it had to be fixed before `tools/verify_notes.py` could exist.
+
+---
+
+## D51 — The speech model was chosen on the Pi, and it never heard "sync my schedule"
+
+**2026-08-28.** `[stt].model` has been `tiny.en` since the Pi, on a measurement of **nine
+synthesised commands** — tiny 1.05–1.40s / 7-of-9, base 2.03–2.49s / 8-of-9 — with the verdict
+that tiny is *"the ONLY one that fits PLAN.md's under-2s turn"*. That comment also named, in
+advance, the condition for changing it: *"Measured on SYNTHESISED speech, not on LB's voice.
+If he is misheard in practice, switch to base.en."*
+
+### He was misheard in practice, and the evidence was on disk the whole time
+
+`captures/` is what `engine/run_voice.py --save-captures` writes after every wake. It holds
+LB saying **"sync my schedule" six times over two days**, transcribed as *"sink my schedule"*
+(×3), *"i think my schedule"* (×2) and *"sick mass schedule"*. None of those spellings is in
+`orchestrator/route_hint._SYNC`. **None of the six reached ACADEMIC.** The feature was not
+degraded — by voice it did not work at all, and he kept repeating himself.
+
+### Scored on where the transcript routes, because there is no ground truth
+
+Word-error rate needs to know what he said, and the only record of that is the transcript under
+test. Writing down what I think he meant would measure my guess.
+
+What needs no ground truth is the thing that actually matters: `route_hint.look_up` and the free
+tier are pure functions of a string, so every transcript can be put through the real ones.
+*"sync my schedule"* reaches ACADEMIC for nothing; *"sink my schedule"* reaches nothing and pays
+a routing call to be told so. That is an outcome, it is objective, and it is what LB experiences.
+
+27 of his own recordings, this workstation, int8, 4 threads:
+
+| | median | worst | "sync my schedule" | all known intents | false routes |
+|---|---|---|---|---|---|
+| `tiny.en` | 0.29 s | 1.99 s | **0 / 6** | 8 / 14 | 0 |
+| `base.en` | 0.57 s | 2.63 s | 3 / 6 | 9 / 14 | 1 |
+| `small.en` | 1.76 s | 4.63 s | 4 / 6 | 11 / 14 | 1 |
+
+### The latency argument that chose tiny.en is dead
+
+It was a property of the Cortex-A76, and the Cortex-A76 is retired. **`base.en` on this box runs
+in 0.57 s — faster than `tiny.en` managed on the Pi.** All three fit the budget the old comment
+said only one of them could.
+
+`small.en` is the accuracy winner and is **not** chosen: 1.76 s median and 4.63 s worst spends
+the whole turn on transcription before routing, the agent, or ~0.4 s of Piper. Worth knowing it
+is now *possible* here in a way it never was on the Pi; it is not affordable.
+
+### base.en is not a clean win, and the cost is named
+
+    "thank you"           -> "Okay."                 loses a free social acknowledgement
+    "can you save a note" -> "can you say the note"  loses one of the two note clips
+    "So."                 -> "That's all."           A FALSE DISMISSAL
+
+The third is the real cost: 1 of 7 clips that meant nothing now ends the conversation, and
+`small.en` does it too. **A minimum-duration guard was investigated and refused** — every
+recording is 2.4–4.4 s and 2.0 s of that is `listen.hangover_s` silence, so the length of a
+recording says nothing about the length of the speech inside it. "So." is 2.56 s and "go to
+sleep" is 2.88 s; no threshold separates them.
+
+So the trade is: a feature that never worked by voice starts working two times in three, paid
+for with a conversation that occasionally ends early. Reverting is one word.
+
+### What this is really an instance of
+
+**A number that chose a design is a property of the machine it was measured on.** D3 (the free
+tier), D10 (the launch call count) and L23 (the Linux blocklist pointed at a Windows shell) are
+the same shape. The Windows port re-measured the blocklist because it was a security boundary
+and the failure was loud. It did not re-measure the speech model, because nothing went red —
+LB just quietly said things twice.
+
+`media/scripts/measure_stt_models.py` re-runs all of it offline, keylessly, from his own
+recordings.
