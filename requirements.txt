@@ -12,6 +12,16 @@
 
 # --- LLM and routing -------------------------------------------------------------------
 langchain-google-genai>=4.3          # ChatGoogleGenerativeAI, with_structured_output
+langchain-openai>=1.5                # ChatOpenAI, pointed at OpenRouter for the PERSONA route
+                                     # (engine/models.build_persona_llm). NOT for OpenAI: it is
+                                     # the client that speaks the OpenAI wire format, and
+                                     # OpenRouter serves that format.
+                                     #
+                                     # Declared 2026-08-28, after tools/verify_agents.py caught
+                                     # it IMPORTED BUT NOT DECLARED. It was already installed
+                                     # here — transitively, by chance — so nothing failed
+                                     # locally and a fresh clone would have died on import.
+                                     # Same class as pypdf at the bottom of this file.
 pydantic>=2.13                       # RouteDecision — the router's structured output
 python-dotenv>=1.2                   # GOOGLE_API_KEY out of .env, never out of source
 

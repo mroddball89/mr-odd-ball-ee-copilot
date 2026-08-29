@@ -53,13 +53,18 @@ The real fixes, in the order LB should consider them:
 
 from __future__ import annotations
 
+import logging
 import os
 import warnings
 from pathlib import Path
 
 from dotenv import load_dotenv
 
+LOG = logging.getLogger("oddball.models")
+
 __all__ = ["ROUTER_MODEL", "AGENT_MODEL", "PERSONA_MODEL", "VISION_MODEL",
+           "PERSONA_FALLBACK_MODEL", "OPENROUTER_BASE_URL", "OPENROUTER_API_KEY",
+           "persona_provider", "build_persona_llm",
            "FREE_TIER_DAILY_LIMIT", "LLM_MAX_RETRIES"]
 
 # Measured, not documented — from the 429 body on 2026-08-19. Defined above the key
@@ -192,7 +197,93 @@ LLM_MAX_RETRIES = int(os.environ.get("ODDBALL_LLM_MAX_RETRIES", "0"))
 
 ROUTER_MODEL = os.environ.get("ODDBALL_ROUTER_MODEL", "gemini-3.5-flash-lite")
 AGENT_MODEL = os.environ.get("ODDBALL_AGENT_MODEL", "gemini-3.5-flash")
-PERSONA_MODEL = os.environ.get("ODDBALL_PERSONA_MODEL", "gemini-3.5-flash-lite")
+
+# --- the persona, which is the one route that does not have to be Gemini ------------------
+#
+# **These four constants resolve to only TWO model names, and that was never written down.**
+# `ROUTER_MODEL` and `PERSONA_MODEL` were both `gemini-3.5-flash-lite`, so routing and chit-chat
+# shared one bucket of 20 requests a day — while `engine/core.py` claimed "D3 split the jobs
+# across three model names precisely so that one running dry does not silence the others",
+# which was true of two of them. The comment on VISION_MODEL below states its sharing plainly;
+# this one hid.
+#
+# D3's remedy is the same either way: **the free tier is per model per project, so a different
+# model name is a different 20 a day.** LB chose to spend that on a different PROVIDER rather
+# than a different Gemini name, which buys the same separation and costs nothing extra —
+# OpenRouter's `:free` tier is not drawn from the Google quota at all.
+#
+# `minimax/minimax-m2.7:free` was checked before this was written, because the persona route is
+# also GENERAL, and GENERAL is **the only route that can file an upload**. A model without tool
+# calling would break `save_to_vault` and `process_inbox_file` silently, on the one route that
+# has no other home. Verified 2026-08-28 on the model's OpenRouter page: it accepts `tools` and
+# `tool_choice` for function calling, and carries a 196,608-token context.
+OPENROUTER_BASE_URL = os.environ.get("ODDBALL_OPENROUTER_BASE_URL",
+                                     "https://openrouter.ai/api/v1")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
+
+# Which model answers as Mr Odd Ball. An OpenRouter slug when `OPENROUTER_API_KEY` is set,
+# a Gemini name otherwise — see `build_persona_llm`, which is where the choice is actually made.
+PERSONA_MODEL = os.environ.get(
+    "ODDBALL_PERSONA_MODEL",
+    "minimax/minimax-m2.7:free" if OPENROUTER_API_KEY else "gemini-3.5-flash-lite")
+
+# The Gemini model to fall back to when OpenRouter is not configured. Named separately so the
+# fallback is a decision with a name rather than a string buried in an `or`.
+PERSONA_FALLBACK_MODEL = os.environ.get("ODDBALL_PERSONA_FALLBACK_MODEL",
+                                        "gemini-3.5-flash-lite")
+
+
+def persona_provider() -> str:
+    """"openrouter" or "google" — which service answers as Mr Odd Ball.
+
+    Decided by whether `OPENROUTER_API_KEY` is set and whether `PERSONA_MODEL` looks like an
+    OpenRouter slug (`vendor/model`), because those are the two things that have to agree.
+    Setting `ODDBALL_PERSONA_MODEL` to a Gemini name with an OpenRouter key present is a
+    perfectly reasonable thing to want, and it should not be overridden.
+    """
+    if OPENROUTER_API_KEY and "/" in PERSONA_MODEL:
+        return "openrouter"
+    return "google"
+
+
+def build_persona_llm(temperature: float = 0.8):
+    """The chat model for the PERSONA and GENERAL routes.
+
+    Returns a LangChain chat model with `bind_tools` support either way, so
+    `agents/persona_agent.py` does not care which provider answered.
+
+    **Falls back to Gemini rather than failing.** An OpenRouter key that is absent, expired or
+    rate-limited must not take the character offline — PERSONA is also GENERAL, which is where
+    every unrecognised question and every upload lands. A missing key is reported once, loudly,
+    in the log, and then he carries on as he did before this existed.
+    """
+    if persona_provider() == "openrouter":
+        from langchain_openai import ChatOpenAI                       # noqa: PLC0415
+
+        LOG.info("persona: OpenRouter %s (its own quota, separate from Gemini's)",
+                 PERSONA_MODEL)
+        return ChatOpenAI(model=PERSONA_MODEL, temperature=temperature,
+                          max_retries=LLM_MAX_RETRIES,
+                          base_url=OPENROUTER_BASE_URL, api_key=OPENROUTER_API_KEY,
+                          # OpenRouter asks callers to identify themselves; it is optional and
+                          # costs nothing, and an unattributed app is the first thing a free
+                          # tier rate-limits.
+                          default_headers={
+                              "HTTP-Referer": "https://github.com/mroddball89/mr-odd-ball-ee-copilot",
+                              "X-Title": "Mr Odd Ball EE Copilot",
+                          })
+
+    from langchain_google_genai import ChatGoogleGenerativeAI          # noqa: PLC0415
+
+    if OPENROUTER_API_KEY and "/" not in PERSONA_MODEL:
+        LOG.info("persona: Gemini %s (an OpenRouter key is set, but ODDBALL_PERSONA_MODEL "
+                 "names a Gemini model)", PERSONA_MODEL)
+    elif not OPENROUTER_API_KEY:
+        LOG.info("persona: Gemini %s — set OPENROUTER_API_KEY to give the character its own "
+                 "quota instead of sharing the router's", PERSONA_FALLBACK_MODEL)
+    model = PERSONA_MODEL if "/" not in PERSONA_MODEL else PERSONA_FALLBACK_MODEL
+    return ChatGoogleGenerativeAI(model=model, temperature=temperature,
+                                  max_retries=LLM_MAX_RETRIES)
 
 # Reading a screenshot — `agents/screen_agent.py`. Defaults to the SAME NAME as AGENT_MODEL,
 # which means it shares that model's daily bucket, and that is worth stating rather than hiding:
