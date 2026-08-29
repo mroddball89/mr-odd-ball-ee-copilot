@@ -73,6 +73,21 @@ PREBUFFER_FRAMES = 5        # 5 x 80ms = 0.40s
 DROP_REPORT_EVERY_S = 1.0
 
 
+def _warm_embeddings() -> None:
+    """Load the sentence-transformer now, so the first corpus question does not.
+
+    Imported inside the function, deliberately: `tools/vector_db` is cheap to import but the
+    thing it loads is not, and keeping the import here means `engine/run_voice` can still be
+    imported by a harness without dragging torch in behind it.
+    """
+    began = time.monotonic()
+    from tools.vector_db import warm                                  # noqa: PLC0415
+
+    warm()
+    LOG.info("embedding model warmed in %.1fs — the first corpus question will not wait",
+             time.monotonic() - began)
+
+
 def _listen_thread(
     detector: WakeDetector,
     device: str,
@@ -473,6 +488,25 @@ async def main(argv: list[str] | None = None) -> int:
     # 20-requests-a-day free tier.
     engine = Engine()
     LOG.info("engine up: router=%s agents=%s", models.ROUTER_MODEL, models.AGENT_MODEL)
+
+    # --- warm the embedding model, off the answer path -------------------------------------
+    #
+    # `tools/vector_db.get_embeddings` is lazy, and rightly so: a session that never asks a
+    # datasheet question should not pay for torch. But the first one that DOES pays all of it
+    # at once, and `engine/core._corpus_route` sits in the free tier in front of the router,
+    # so it lands in the middle of a turn. Measured 2026-08-29:
+    #
+    #     12:03:23  loading the embedding model (all-MiniLM-L6-v2)
+    #     12:03:34  route 'Nothing go to sleep.' -> persona
+    #     12:04:09  turn: ... => answered in 48.89s
+    #
+    # Nine of those seconds were this, on a turn whose answer was a canned dismissal.
+    #
+    # **A daemon thread, and it must not join anything.** The wake word has to come up whether
+    # or not this finishes, and it competes for nothing that matters — the model is not needed
+    # until LB asks a corpus question, which is seconds away at the very best. `warm()` never
+    # raises, so a machine that cannot load it starts exactly as it did before.
+    threading.Thread(target=_warm_embeddings, name="warm-embeddings", daemon=True).start()
 
     if full_turn:
         listen_cfg, stt_cfg = cfg["listen"], cfg["stt"]

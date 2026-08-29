@@ -61,6 +61,8 @@ because it is a rebuildable artifact.
 from __future__ import annotations
 
 import logging
+import os
+import time
 from pathlib import Path
 
 # NOTHING heavy is imported at module scope, and that is a deployment decision.
@@ -106,6 +108,76 @@ _embeddings = None
 _stores: dict[str, object] = {}
 
 
+# The repo id, as HuggingFace knows it. `EMBEDDING_MODEL` is the short name
+# `HuggingFaceEmbeddings` takes; this is the same model spelled the way the cache indexes it,
+# and the two have to agree or the cache check below silently answers "not cached" forever.
+EMBEDDING_REPO = f"sentence-transformers/{EMBEDDING_MODEL}"
+
+
+def _local_only() -> bool:
+    """Should the model be loaded WITHOUT contacting huggingface.co?
+
+    True when the files are already cached, which is the only time it is safe.
+
+    ## Why this is a per-model argument and not `HF_HUB_OFFLINE`
+
+    The env var was tried first and does not work in this process. `huggingface_hub` reads it
+    into a module constant **when it is imported**, and `faster_whisper` imports it while
+    loading `base.en` — on the main thread, at start-up, racing the warm-up thread that would
+    have set it. The result was a log line saying "from the local cache" above thirty-two HTTP
+    requests to huggingface.co. The harness passed, because in a small test process nothing
+    had imported the library yet.
+
+    `local_files_only` is passed to the model constructor instead. It is scoped to this one
+    load, it works whatever was imported first, and — the part that matters most — it CANNOT
+    stop `faster_whisper` downloading a Whisper model it does not have. A global flag would
+    have to be correct for every HuggingFace consumer in the process; this one only has to be
+    correct for this model.
+
+    ## What it saves, measured 2026-08-29
+
+        contacting the hub   construct 3.81s
+        local_files_only     construct 2.61s, zero network calls
+
+    One second per cold start, and — the real reason — no dependency on a network that may not
+    be there. Those are HEAD requests on the path in front of the free corpus tier, and a HEAD
+    to a host that does not answer does not fail in a second.
+
+    **Conditional, and that is the whole design.** Passing it unconditionally would make a
+    fresh clone fail to download the model at all, with an error about local files on a machine
+    that is perfectly online — the bare NO_SUCHFILE shape `audio/wake.ensure_feature_models`
+    exists to prevent.
+    """
+    return _cache_dir() is not None
+
+
+def _cache_dir() -> "Path | None":
+    """The cached snapshot directory for `EMBEDDING_REPO`, or None if it is not there.
+
+    **By path, and NOT with `huggingface_hub.try_to_load_from_cache`, which is the obvious
+    way and does not work here.** `huggingface_hub` reads `HF_HUB_OFFLINE` into a module
+    constant when it is IMPORTED, so importing it in order to ask about the cache freezes the
+    flag as False a moment before we set it. The first version of this function did exactly
+    that: it reported "cached", set the variable, and the HEAD requests went out anyway.
+
+    The layout it walks is the hub cache's own and has been stable for years:
+
+        <cache>/models--<org>--<name>/snapshots/<commit sha>/config.json
+
+    Strict on purpose. A wrong answer in one direction costs a second; in the other it makes a
+    fresh clone refuse to download the model while insisting it is offline.
+    """
+    root = (os.environ.get("HF_HUB_CACHE")
+            or (Path(os.environ["HF_HOME"]) / "hub" if os.environ.get("HF_HOME") else None)
+            or Path.home() / ".cache" / "huggingface" / "hub")
+    folder = Path(root) / f"models--{EMBEDDING_REPO.replace('/', '--')}"
+    if not folder.is_dir():
+        return None
+    # `config.json` rather than the weights: the small file every snapshot has, so its
+    # presence means a real snapshot rather than a half-written one.
+    return next((c.parent for c in folder.glob("snapshots/*/config.json")), None)
+
+
 def get_embeddings():
     """The embedding model, loaded once."""
     global _embeddings
@@ -113,9 +185,42 @@ def get_embeddings():
         # Imported here, not at module scope: this line is what pulls torch.
         from langchain_huggingface import HuggingFaceEmbeddings      # noqa: PLC0415
 
-        LOG.info("loading the embedding model (%s)", EMBEDDING_MODEL)
-        _embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+        cached = _local_only()
+        LOG.info("loading the embedding model (%s)%s", EMBEDDING_MODEL,
+                 " from the local cache" if cached else " — fetching from huggingface.co")
+        began = time.monotonic()
+        _embeddings = HuggingFaceEmbeddings(
+            model_name=EMBEDDING_MODEL,
+            model_kwargs={"local_files_only": True} if cached else {})
+        LOG.info("embedding model ready in %.2fs", time.monotonic() - began)
     return _embeddings
+
+
+def warm() -> None:
+    """Load the embedding model NOW, so the first question does not pay for it.
+
+    ## The nine seconds this moves
+
+    `get_embeddings` is lazy, which is right — a session that never asks a datasheet question
+    should not pay for torch. But the first one that does pays all of it, **on the answer
+    path**, and `engine/core._corpus_route` sits in the FREE tier in front of the router:
+
+        12:03:23  loading the embedding model (all-MiniLM-L6-v2)
+        12:03:34  route 'Nothing go to sleep.' -> persona
+        12:04:09  turn: ... => answered in 48.89s
+
+    Nine of those seconds were this, on a turn whose actual answer was a canned dismissal.
+
+    Called from a background thread at start-up by `engine/run_voice.py`. Never raises: a
+    machine that cannot load it must still start, and `get_retriever` already returns None for
+    "nothing ingested" — a warm-up that fails simply leaves the first question paying what it
+    used to pay.
+    """
+    try:
+        get_embeddings()
+    except Exception:                                                 # noqa: BLE001
+        LOG.warning("could not warm the embedding model; the first corpus question will "
+                    "load it instead", exc_info=True)
 
 
 def get_retriever(k: int = 4, collection: str = DATASHEET_COLLECTION):
