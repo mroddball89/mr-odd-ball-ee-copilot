@@ -468,6 +468,21 @@ class Engine:
             # free tier, so "sync Canvas" and "CPU temp" keep working after the router is dry.
             destination = self._hinted_route(text, t)
 
+            # Third free pass: let LB's OWN DOCUMENTS claim the turn. Searching the vector
+            # store is local and costs nothing (`all-MiniLM-L6-v2`, no network), so a question
+            # that lands close to a datasheet he has actually filed is a FIRMWARE question and
+            # needs no model to say so. The chunks come back with the hint and are handed to
+            # the agent, so the search happens once rather than twice.
+            #
+            # Below `route_hint` deliberately: "sync my schedule" and "cpu temp" have already
+            # been claimed by then, and this must only ever see what would otherwise have been
+            # paid for.
+            corpus = None
+            if destination is None:
+                corpus = self._corpus_route(text, t)
+                if corpus is not None:
+                    destination = AgentRoute.FIRMWARE
+
             if destination is None:
                 # The router's model may already be known out of quota. Asking again costs a
                 # round trip to be told the same thing, and before LLM_MAX_RETRIES went to 0 it
@@ -492,7 +507,16 @@ class Engine:
                 destination = decision.destination
 
             t0 = time.monotonic()
-            response = self._dispatch(destination, text, t)
+            if corpus is not None:
+                # The corpus band dispatches its OWN turn, exactly as `_free_turn` dispatches
+                # its own launch. Threading the chunks through `_dispatch` was tried and
+                # reverted: that signature is stubbed by `tools/verify_router.py` to record
+                # which agent ran, so adding a parameter to it turned four of its checks into
+                # a swallowed `TypeError` — a real interface, with test doubles standing on it.
+                from agents.firmware_agent import run_firmware_agent_response
+                response = run_firmware_agent_response(text, (corpus.context, corpus.sources))
+            else:
+                response = self._dispatch(destination, text, t)
             t.agent_s = time.monotonic() - t0
 
         response = self._with_backup_reminder(response, t)
@@ -622,6 +646,38 @@ class Engine:
         t.extras.append(f"free route:{route.value}")
         LOG.info("route %r -> %s (local, no api call)", text, route.value)
         return route
+
+    def _corpus_route(self, text: str, t: Turnlog):
+        """FIRMWARE, when LB's own datasheets recognise the question. See corpus_hint.py.
+
+        The third and last free band, below `_free_turn` (needs no agent) and `_hinted_route`
+        (the destination is idiomatic). This one asks the CORPUS, and it is the only router in
+        the repo whose rule is derived from LB's files rather than written down: add a
+        datasheet and its questions start landing here, delete it and they stop.
+
+        **Saves the routing leg only** — one of the two calls a firmware turn costs, and it is
+        the `flash-lite` one that `PERSONA_MODEL` shares a 20-a-day bucket with. `t.route_s`
+        stays 0.0, as on every other free path, so the log reads `route 0ms -> firmware`.
+
+        Returns:
+            A `CorpusHit` carrying the chunks, or None — which is the answer for everything
+            that is not about a document he has filed, and for every question at all when no
+            store has been built.
+        """
+        from orchestrator import corpus_hint
+
+        try:
+            hit = corpus_hint.look_up(text)
+        except Exception:                                              # noqa: BLE001
+            LOG.exception("corpus hint failed; falling back to the router")
+            return None
+
+        if hit is None:
+            return None
+        t.route = AgentRoute.FIRMWARE.value
+        t.extras.append(f"free route:firmware (corpus d={hit.distance:.2f})")
+        LOG.info("route %r -> firmware (corpus, no api call)", text)
+        return hit
 
     def _with_backup_reminder(self, response: Response, t: Turnlog) -> Response:
         """The 15-day clock. Appended to the SHOWN half, never the spoken one: a system alarm
