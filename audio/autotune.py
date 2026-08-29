@@ -235,10 +235,33 @@ def _replay(path: str) -> int:
     """
     import re
 
-    wake_re = re.compile(r"oddball\.run wake: \S+ \(([\d.]+)\)")
+    # **The logger name is optional now, and that is the whole repair.** This pattern read
+    # `oddball\.run wake:`, which is the FileHandler format that `engine/run_voice.py`
+    # installs: "%(asctime)s %(levelname)-7s %(name)s %(message)s". The log LB actually has,
+    # `data/oddball.log`, is the console stream redirected by `config/start_oddball.bat`, and
+    # THAT format carries no logger name:
+    #
+    #     07:06:06 INFO    wake: hey_mr_odd_ball (0.980)
+    #
+    # So the pattern matched nothing, `--replay` said "0 wakes", and then printed
+    # "settled at 0.300" underneath it — the untouched default, formatted exactly like a
+    # measurement. The only input it was ever tested against,
+    # `media/data/2026-08-14-oddball-session.log`, is no longer in the repo, so nothing has
+    # caught this since.
+    wake_re = re.compile(r"\bwake: \S+ \(([\d.]+)\)")
     cap_re = re.compile(r"capture (\w+): [\d.]+s audio, ([\d.]+)s voiced")
 
-    tuner = AdaptiveThreshold(configured=0.30, floor=0.30, ceiling=0.80)
+    # Start from the threshold IN FORCE, not from a hard-coded 0.30. The useful question is
+    # "where would it settle from where I am now", and answering it from a number LB has not
+    # run since 2026-08-14 makes the recommendation unreadable.
+    try:
+        from orchestrator.settings import load_config
+        configured = float(load_config()["wake"]["threshold"])
+    except Exception:                                                  # noqa: BLE001
+        configured = 0.30
+    start = min(max(configured, 0.30), 0.80)
+
+    tuner = AdaptiveThreshold(configured=start, floor=0.30, ceiling=0.80)
     pending: float | None = None
     seen = 0
 
@@ -256,8 +279,15 @@ def _replay(path: str) -> int:
                 pending = None
 
     print(f"\nreplayed {seen} wakes from {path}")
+    if seen == 0:
+        # **Loudly, and non-zero.** A replay that parsed nothing has measured nothing, and
+        # printing a settled value under that sentence is how this went unnoticed for a
+        # fortnight: the number was the default, and it read exactly like a result.
+        print("  NOTHING PARSED - no 'wake: <model> (score)' lines in that file.")
+        print("  Nothing was measured, so there is no threshold to recommend.")
+        return 1
     print(f"  {tuner.summary()}")
-    print(f"  started at 0.300, settled at {tuner.value:.3f}")
+    print(f"  started at {start:.3f}, settled at {tuner.value:.3f}")
     return 0
 
 
