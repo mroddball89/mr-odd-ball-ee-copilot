@@ -487,15 +487,28 @@ import os as _os                                                      # noqa: E4
 _saved = {k: _os.environ.get(k) for k in ("OPENROUTER_API_KEY", "ODDBALL_PERSONA_MODEL")}
 _FAKE = "sk-or-v1-not-a-real-key-for-the-harness"
 
-# (key, model, expected provider, why)
+# **Every case sets all THREE variables**, for the reason the paragraph above gives about two.
+# A local base URL left over from a previous case would make every row after it read "local"
+# and the whole matrix would pass while testing one branch.
+_LOCAL = "http://127.0.0.1:11434/v1"
+
+# (local url, key, model, expected provider, why)
 _CASES = [
-    (_FAKE, "nvidia/nemotron-3.5-lightning:free", "openrouter",
+    ("", _FAKE, "nvidia/nemotron-3.5-lightning:free", "openrouter",
      "a key AND a slug is the only combination that leaves Google"),
-    (_FAKE, "gemini-3.5-flash-lite", "google",
+    ("", _FAKE, "gemini-3.5-flash-lite", "google",
      "a Gemini name wins even with a key present"),
-    (None, "nvidia/nemotron-3.5-lightning:free", "google",
+    ("", None, "nvidia/nemotron-3.5-lightning:free", "google",
      "a slug with NO key falls back rather than failing"),
-    (None, "gemini-3.5-flash-lite", "google", "neither: plain Gemini"),
+    ("", None, "gemini-3.5-flash-lite", "google", "neither: plain Gemini"),
+    # A machine that can answer for free should not be spending a quota, so the local URL
+    # wins over everything — including a perfectly good OpenRouter setup.
+    (_LOCAL, _FAKE, "llama3.2:3b", "local",
+     "a local server beats a hosted one, whatever else is configured"),
+    (_LOCAL, _FAKE, "nvidia/nemotron-3.5-lightning:free", "local",
+     "even when the model name is an OpenRouter slug"),
+    (_LOCAL, None, "gemini-3.5-flash-lite", "local",
+     "and even when the name looks like Gemini — the URL is the signal, not the name"),
 ]
 
 try:
@@ -506,12 +519,15 @@ try:
     # "no key" cases were therefore unreachable through the environment and went red against
     # code that was behaving correctly — the test was wrong, not the module.
     _real_key, _real_model = _m.OPENROUTER_API_KEY, _m.PERSONA_MODEL
-    for _key, _model, _want, _why in _CASES:
+    _real_local = _m.LOCAL_BASE_URL
+    for _local, _key, _model, _want, _why in _CASES:
+        _m.LOCAL_BASE_URL = _local
         _m.OPENROUTER_API_KEY = _key or ""
         _m.PERSONA_MODEL = _model
         _got = _m.persona_provider()
         check(_got == _want,
-              f"key={'yes' if _key else 'no ':3} model={_model[:34]:36} -> {_want}",
+              f"local={'yes' if _local else 'no ':3} key={'yes' if _key else 'no ':3} "
+              f"model={_model[:30]:32} -> {_want}",
               _why if _got == _want else f"got {_got}")
         _llm = _m.build_persona_llm()
         check(hasattr(_llm, "bind_tools"),
@@ -520,8 +536,17 @@ try:
             check(str(getattr(_llm, "openai_api_base", "")).startswith("https://openrouter.ai"),
                   "    and points at OpenRouter, not at OpenAI",
                   str(getattr(_llm, "openai_api_base", "")))
+        if _want == "local":
+            check(str(getattr(_llm, "openai_api_base", "")) == _LOCAL,
+                  "    and points at THIS machine — no network leaves the room",
+                  str(getattr(_llm, "openai_api_base", "")))
+            # The OpenAI client refuses to construct without a key even when the server
+            # ignores it. A placeholder is supplied so a local setup needs no secret at all.
+            check(bool(getattr(_llm, "openai_api_key", None)),
+                  "    with a placeholder key, because the client demands one")
 
     _m.OPENROUTER_API_KEY, _m.PERSONA_MODEL = _real_key, _real_model
+    _m.LOCAL_BASE_URL = _real_local
 
     # The default, read from the SOURCE rather than the environment — `.env` cannot be unset.
     import inspect                                                    # noqa: E402

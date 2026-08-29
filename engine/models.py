@@ -64,6 +64,7 @@ LOG = logging.getLogger("oddball.models")
 
 __all__ = ["ROUTER_MODEL", "AGENT_MODEL", "PERSONA_MODEL", "VISION_MODEL",
            "PERSONA_FALLBACK_MODEL", "OPENROUTER_BASE_URL", "OPENROUTER_API_KEY",
+           "LOCAL_BASE_URL", "LOCAL_API_KEY",
            "persona_provider", "build_persona_llm",
            "FREE_TIER_DAILY_LIMIT", "LLM_MAX_RETRIES"]
 
@@ -251,14 +252,61 @@ PERSONA_FALLBACK_MODEL = os.environ.get("ODDBALL_PERSONA_FALLBACK_MODEL",
                                         "gemini-3.5-flash-lite")
 
 
-def persona_provider() -> str:
-    """"openrouter" or "google" — which service answers as Mr Odd Ball.
+# --- the third option: a model on this machine ------------------------------------------------
+#
+# ## The persona is the one job small enough to run at home
+#
+# It is one to three spoken sentences, in character, with no reasoning in them. That is well
+# inside a 1-3B instruct model, and this box has the room for it: a Ryzen 7 5700X with 8 cores
+# and 32 GB, plus an RX 6600 whose 4 GB fits a 3B at Q4 through llama.cpp's Vulkan backend.
+#
+# ## Why it is worth having at all, stated as measurements
+#
+# Both hosted free tiers are small and both were exhausted on 2026-08-29:
+#
+#     Gemini      20 requests per model NAME per day
+#     OpenRouter  50 requests per day   (429 at noon: "X-RateLimit-Remaining: 0")
+#
+# And PERSONA is not a luxury route. `router.py` sends GENERAL here too, which is every
+# unrecognised question and every uploaded document, so a persona that is out of quota is an
+# assistant that cannot file a syllabus.
+#
+# ## Set up as an OpenAI-compatible endpoint, deliberately
+#
+# Ollama and llama.cpp's `llama-server` both speak the OpenAI chat API, so this needs no new
+# client, no new dependency, and no second code path to keep working — it is the SAME
+# `ChatOpenAI` branch OpenRouter uses, pointed somewhere else. Nothing here is installed yet;
+# this is the seam, and it stays inert until `ODDBALL_LOCAL_BASE_URL` is set.
+#
+#     ollama serve                                   # then, in another shell:
+#     ollama pull llama3.2:3b
+#     setx ODDBALL_LOCAL_BASE_URL http://127.0.0.1:11434/v1
+#     setx ODDBALL_PERSONA_MODEL llama3.2:3b
+#
+# **A local model is chosen by URL, not by model name**, because a local name has no reliable
+# shape — "llama3.2:3b" has no "/" and "qwen2.5/3b" does, so name-sniffing would guess wrong
+# in both directions. The URL is the unambiguous signal and it is the thing that has to be
+# right anyway.
+LOCAL_BASE_URL = os.environ.get("ODDBALL_LOCAL_BASE_URL", "").strip()
 
-    Decided by whether `OPENROUTER_API_KEY` is set and whether `PERSONA_MODEL` looks like an
-    OpenRouter slug (`vendor/model`), because those are the two things that have to agree.
-    Setting `ODDBALL_PERSONA_MODEL` to a Gemini name with an OpenRouter key present is a
-    perfectly reasonable thing to want, and it should not be overridden.
+# llama.cpp ignores it; Ollama ignores it; the OpenAI client REFUSES TO CONSTRUCT without one.
+# So it is a placeholder rather than a secret, and saying so here stops the next person hunting
+# for where the local key is configured.
+LOCAL_API_KEY = os.environ.get("ODDBALL_LOCAL_API_KEY", "not-needed-for-a-local-server")
+
+
+def persona_provider() -> str:
+    """"local", "openrouter" or "google" — which service answers as Mr Odd Ball.
+
+    `local` wins when `ODDBALL_LOCAL_BASE_URL` is set, because a machine that can answer for
+    free should not be spending a quota. The remaining two are decided by whether
+    `OPENROUTER_API_KEY` is set and whether `PERSONA_MODEL` looks like an OpenRouter slug
+    (`vendor/model`), because those are the two things that have to agree. Setting
+    `ODDBALL_PERSONA_MODEL` to a Gemini name with an OpenRouter key present is a perfectly
+    reasonable thing to want, and it should not be overridden.
     """
+    if LOCAL_BASE_URL:
+        return "local"
     if OPENROUTER_API_KEY and "/" in PERSONA_MODEL:
         return "openrouter"
     return "google"
@@ -275,7 +323,23 @@ def build_persona_llm(temperature: float = 0.8):
     every unrecognised question and every upload lands. A missing key is reported once, loudly,
     in the log, and then he carries on as he did before this existed.
     """
-    if persona_provider() == "openrouter":
+    provider = persona_provider()
+
+    if provider == "local":
+        from langchain_openai import ChatOpenAI                       # noqa: PLC0415
+
+        LOG.info("persona: local %s at %s (no quota, no network)",
+                 PERSONA_MODEL, LOCAL_BASE_URL)
+        return ChatOpenAI(model=PERSONA_MODEL, temperature=temperature,
+                          max_retries=LLM_MAX_RETRIES,
+                          base_url=LOCAL_BASE_URL, api_key=LOCAL_API_KEY,
+                          # A local model that is loading, swapping or thinking on CPU can sit
+                          # for a while, and the caller is a voice turn. Bounded here rather
+                          # than left to the client default, so a wedged server is a slow turn
+                          # and not a hung one.
+                          timeout=float(os.environ.get("ODDBALL_LOCAL_TIMEOUT_S", "30")))
+
+    if provider == "openrouter":
         from langchain_openai import ChatOpenAI                       # noqa: PLC0415
 
         LOG.info("persona: OpenRouter %s (its own quota, separate from Gemini's)",
