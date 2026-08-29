@@ -952,3 +952,49 @@ Real data also disproves things, and twice it disproved *me* before I said them 
 drained at end of turn anyway, and the minimum-duration guard for false dismissals died on the
 fact that 2.0s of every recording is `hangover_s` silence. **Check the mechanism before
 reporting the finding**, not after.
+
+---
+
+## L27 — A model's capability list is a claim; the real prompt is the test
+
+**2026-08-29.** `minimax/minimax-m2.7:free` was switched in as the PERSONA model on the strength
+of its OpenRouter page, which advertises `tools` and `tool_choice`. I checked that page *before*
+writing the refactor, specifically because PERSONA is also GENERAL and GENERAL is the only route
+that can file an upload. The check was real and it was not enough.
+
+    bare 10-word prompt, tools bound             tool_calls  3/3
+    the REAL 8,175-char persona prompt           tool_calls  0/3
+    the same prompt, gemini-3.5-flash-lite       tool_calls  1/1
+
+Three configurations of the real prompt — temperature 0.8 and 0.2, vault+file tools and vault
+only — and it called nothing in any of them. **Twice it said "I've written that down" while
+calling nothing**, which is the exact sentence `knowledge_vault.VAULT_INSTRUCTION` forbids.
+
+### Why this is worse than a model that simply cannot do it
+
+A model with no tool support fails loudly at bind time. This one passes every cheap test, passes
+its own documentation, and fails **silently** on the one route that has no fallback — while
+narrating success. `save_to_vault` and `process_inbox_file` would have stopped working and the
+only symptom would have been notes quietly not existing.
+
+### The rule
+
+**Probe with the prompt you actually ship.** A capability is not a property of the model alone;
+it is a property of the model under your prompt, your temperature, and your tool count. The
+persona prompt is 8,175 characters of personality, vault rules, file rules and chat history, and
+that is the context tool-calling has to survive.
+
+`tools/probe_persona_tools.py` is the generalisation: it runs candidates against
+`PERSONA_PROMPT_TEMPLATE` itself and scores **tool calls, not reply text** — because the reply
+is the thing that lies. It also flags the dangerous case explicitly: no call plus a claim of
+success. Measured across six free models, only two passed, and one 404'd on a slug I had guessed
+rather than looked up. `nvidia/nemotron-3.5-lightning:free` is 3/3 and is what runs now.
+
+### And the thing the failure exposed underneath
+
+Chasing why minimax answered "It's 9 35." to a question about a transistor turned up that
+`tools/verify_notes.py` and `tools/verify_academic.py` had both been writing their test
+utterances into **LB's real conversation log** — `memory_manager.MEMORY_FILE` was a bare
+relative string with no override, the one persistent store in the repo that had neither. Those
+turns were being injected into every agent prompt as things he had recently said. L22 again,
+from the other direction: an old file, and new harnesses that became writers to it.

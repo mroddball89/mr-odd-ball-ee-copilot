@@ -55,8 +55,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import os                                                             # noqa: E402
 import tempfile                                                       # noqa: E402
 
-os.environ.setdefault("ODDBALL_VAULT_DIR",
-                      tempfile.mkdtemp(prefix="oddball-harness-vault-"))
+_HARNESS_TMP = tempfile.mkdtemp(prefix="oddball-harness-vault-")
+os.environ.setdefault("ODDBALL_VAULT_DIR", _HARNESS_TMP)
+# The conversation log too — this file drives a real `Engine()` at section 275, and every
+# `Engine.ask()` calls `memory_manager.add_message`. Without this the harness writes its own
+# test utterances into LB's actual log, where `format_memory_for_llm` then feeds them to every
+# agent as things he recently said. Added 2026-08-29, when a sweep was measured still touching
+# `sd_card_memory.json` after `tools/verify_notes.py` had been fixed — this was the other one.
+os.environ.setdefault("ODDBALL_MEMORY_FILE",
+                      os.path.join(_HARNESS_TMP, "harness_memory.json"))
 
 
 for _stream in (sys.stdout, sys.stderr):
