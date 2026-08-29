@@ -335,7 +335,13 @@ def _plain(text: str) -> str:
     between a file and itself. `orchestrator/note_intent._clean_target` trims the same way, and
     the two have to agree or nothing resolves.
     """
-    words = normalise(text).split()
+    # **Underscores and hyphens are word separators here, and `normalise` deletes them.**
+    # That is right for an utterance — "/home/lb/kicad" must not become four words — and wrong
+    # for a FILENAME, which is the only kind of string reaching this function. `peanut_butter.md`
+    # normalised to "peanutbutter", which no spoken name can match, so the note LB dictated on
+    # 2026-08-28 was unreadable by voice from the moment it was written. Split first, then
+    # normalise, and "read me my peanut butter note" finds it.
+    words = normalise(text.replace("_", " ").replace("-", " ")).split()
     while words and words[0] in _NAME_FILLER:
         words.pop(0)
     while words and words[-1] in _NAME_FILLER:
@@ -349,6 +355,57 @@ def _folder_of(path: Path) -> str:
     return "" if parent == VAULT_DIR.resolve() else parent.name
 
 
+# Words that cannot, on their own, make two note names the same thing. Deliberately WIDER than
+# `_NAME_FILLER`, because the two lists do different jobs: `_NAME_FILLER` trims the ends of a
+# name and so must stay narrow, while this one only decides which words are allowed to COUNT
+# toward a match. A word here may still sit inside a name and be stored in it.
+_WEAK_WORDS = frozenset({
+    "my", "the", "a", "an", "and", "or", "of", "for", "to", "in", "on", "at", "is", "it",
+    "that", "this", "these", "those", "with", "about", "from", "note", "notes", "file",
+    "files", "one", "called", "named", "titled", "topic", "thing", "things", "stuff", "some",
+    "any", "i", "me", "you", "your", "our", "was", "were", "be", "been", "back", "out",
+})
+
+# How many significant words two names must share before they are the same note. See
+# `_overlap_notes` — this number is the difference between a resolver and a search.
+_MIN_OVERLAP = 2
+
+
+def _overlap_notes(needle: str) -> list[Path]:
+    """Notes sharing at least `_MIN_OVERLAP` significant words with `needle`. Best score only.
+
+    The third and last tier of `find_notes`, and the one that lets LB DESCRIBE a note instead
+    of quoting its filename.
+
+    **Measured, not imagined.** `oddball.log` 2026-08-29 07:18:02 — he asked to add to *"my
+    note about the topic for my English research paper"*, and the file on disk is called
+    `english research question.md`. Neither exact nor substring matching can join those two
+    strings, and the words that DO join them are the two he chose himself: "english" and
+    "research". Without this tier the matcher can be fixed and the note still not be found.
+
+    **Two shared words, never one.** One is how "my amp note" starts matching "amp board",
+    "preamp filter" and "op amp pinouts" at once — the threshold is the entire difference
+    between resolving a name and searching for it. Ties come back whole rather than sorted and
+    sliced, so `find_notes`'s zero/one/many contract is unchanged: an ambiguous description is
+    still a question the caller has to ask, not a guess this function makes.
+    """
+    wanted = {w for w in needle.split() if w not in _WEAK_WORDS}
+    if len(wanted) < _MIN_OVERLAP:
+        return []
+
+    scored: list[tuple[int, Path]] = []
+    for path in notes():
+        against = f"{_plain(_folder_of(path))} {_plain(path.stem)}".split()
+        shared = wanted & {w for w in against if w not in _WEAK_WORDS}
+        if len(shared) >= _MIN_OVERLAP:
+            scored.append((len(shared), path))
+
+    if not scored:
+        return []
+    best = max(score for score, _ in scored)
+    return [path for score, path in scored if score == best]
+
+
 def find_notes(name: str) -> list[Path]:
     """Every note whose name matches `name`. **Never guesses.**
 
@@ -356,7 +413,8 @@ def find_notes(name: str) -> list[Path]:
         name: what LB called it — "regulator choice", "my amp board note", "ECE350 midterm".
 
     Returns:
-        Exact matches when there are any, otherwise partial ones, otherwise []. The caller
+        Exact matches when there are any, otherwise partial ones, otherwise the best
+        word-overlap ones (`_overlap_notes`), otherwise []. The caller
         handles all three counts and they mean different things: **zero says so, one acts, and
         two or more asks which** — the same rule `tools/kicad_parser.py` follows for an
         ambiguous project name, and the one that matters most for `trash_note`, where guessing
@@ -379,7 +437,7 @@ def find_notes(name: str) -> list[Path]:
             exact.append(path)
         elif stem and needle in stem:
             partial.append(path)
-    return exact or partial
+    return exact or partial or _overlap_notes(needle)
 
 
 @dataclass(frozen=True)

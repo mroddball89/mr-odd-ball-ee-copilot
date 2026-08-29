@@ -247,6 +247,66 @@ for utterance, where in SPOKEN_NOTES:
           "and carries NO content — he was starting one, not dictating it, so he gets asked",
           "" if found is None else f"content={found.content!r}")
 
+# --- 2026-08-29, the morning three ---------------------------------------------------------
+#
+# Transcribed from `captures/` at 07:18:02, 07:20:27 and 07:24:45. All three are LB asking
+# about the notebook, all three missed, and `oddball.log` has what each miss cost:
+#
+#     "can you add to my note about..."   -> GENERAL   128.8s   2 paid calls
+#     "read me back the notes..."         -> OS        186.1s   2 paid calls
+#     "tell me what notes you have..."    -> OS        302.8s   2 paid calls
+#
+# Ten minutes, six calls out of a twenty-a-day budget, and not one of them touched the vault.
+# The third one is the reason `_PREAMBLE` grew "tell me"; the first is the reason
+# `_split_target` looks on both sides of the noun; the second is the reason `_POSSESSION_TAIL`
+# exists.
+#
+# **The last two are LIST, not READ.** Both are LB asking what the machine has got, and the
+# distinction is the difference between an answer and "I don't have a note called you have
+# for" — which is verbatim what he was told at 07:20:27.
+
+SPOKEN_2026_08_29: list[tuple[str, str, str, str]] = [
+    ("can you add to my note about the topic for my English research paper",
+     APPEND, "topic for my english research paper", "captures/071802 — 07:18:02"),
+    ("read me back the notes that you have for me", LIST, "", "captures/072027 — 07:20:27"),
+    ("tell me what notes you have saved for me", LIST, "", "captures/072445 — 07:24:45"),
+]
+
+for utterance, want_op, want_target, where in SPOKEN_2026_08_29:
+    found = ask(utterance)
+    check(found is not None and found.op == want_op,
+          f"{utterance!r} -> {want_op}",
+          where if found is not None else f"{where} — not recognised at all")
+    check(found is not None and found.target == want_target,
+          f"   and names {want_target!r}" if want_target else "   and names no note",
+          "" if found is None else f"got target={found.target!r}")
+
+# The append is only useful if the target then RESOLVES, and the two halves failed separately:
+# the matcher produced no target at all, and `find_notes` could not have matched the file if it
+# had. `english research question.md` is the note LB dictated on 2026-08-28 at 19:39.
+_res = Path(os.environ["ODDBALL_VAULT_DIR"]) / "notes"
+_res.mkdir(parents=True, exist_ok=True)
+(_res / "english research question.md").write_text(
+    "Research paper question for English: to what extent can capitalism negatively "
+    "affect the price of medicine?", encoding="utf-8")
+(_res / "peanut_butter.md").write_text("LB loves peanut butter.", encoding="utf-8")
+
+_hit = kv.find_notes("topic for my english research paper")
+check([p.name for p in _hit] == ["english research question.md"],
+      "and 'topic for my english research paper' resolves to the note he actually has",
+      f"got {[p.name for p in _hit]} — needs the word-overlap tier in find_notes")
+
+# Written by `persona_agent.save_to_vault`, which underscores what it writes. `normalise`
+# DELETES underscores, so this note was unreachable by voice until `_plain` learned to split
+# on them: "peanut_butter" reduced to "peanutbutter" and no spoken name can match that.
+_pb = kv.find_notes("peanut butter")
+check([p.name for p in _pb] == ["peanut_butter.md"],
+      "an underscored filename is reachable by the words in it",
+      f"got {[p.name for p in _pb]}")
+
+for _leftover in ("english research question.md", "peanut_butter.md"):
+    (_res / _leftover).unlink()
+
 # Every other thing he said in those three days. None of it is about the notebook, and the
 # matcher must leave all of it alone — 25 real negatives against 29 invented ones above.
 SPOKEN_OTHER: list[str] = [
