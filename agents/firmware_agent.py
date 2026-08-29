@@ -114,9 +114,19 @@ def run_firmware_agent(query: str) -> str:
     return _answer(query)[0]
 
 
-def run_firmware_agent_response(query: str) -> Response:
-    """The same answer, as a Response, with a Sources card when retrieval grounded it."""
-    reply, sources = _answer(query)
+def run_firmware_agent_response(query: str, retrieved: "tuple[str, list[dict]] | None" = None
+                                ) -> Response:
+    """The same answer, as a Response, with a Sources card when retrieval grounded it.
+
+    Args:
+        query:     the question.
+        retrieved: `(context, sources)` already fetched by `orchestrator/corpus_hint.py`, which
+                   searched the same store to decide this WAS a firmware question. Passed on so
+                   the search happens once per turn rather than twice — the retrieval is local
+                   and free, but it loads a sentence-transformer and it is the same answer both
+                   times. None means search here, which is what every other caller does.
+    """
+    reply, sources = _answer(query, retrieved)
     out = split(reply, route="firmware")
 
     if sources:
@@ -129,13 +139,26 @@ def run_firmware_agent_response(query: str) -> Response:
     return out
 
 
-def _answer(query: str) -> tuple[str, list[dict]]:
+def _answer(query: str, retrieved: "tuple[str, list[dict]] | None" = None
+            ) -> tuple[str, list[dict]]:
     # 1. Initialize the LLM
     llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1, max_retries=LLM_MAX_RETRIES)
 
     # 2. Retrieve from the local datasheet store. None means it was never built.
+    #
+    # Skipped entirely when the caller already searched. `orchestrator/corpus_hint.py` has to
+    # search this exact store to decide the turn is FIRMWARE at all, and it uses the same k, so
+    # searching again here would return the same chunks for the same query. It hands them over
+    # instead. If it ever stopped using the same k, the two paths would put DIFFERENT context in
+    # front of the model depending on how the turn was routed, which is why that constant is
+    # pinned to this one in `corpus_hint.K` with a comment saying so.
     context, sources = "", []
-    retriever = get_retriever(k=4)
+    if retrieved is not None:
+        context, sources = retrieved
+        LOG.info("reusing %d chunk(s) retrieved by the router hint", len(sources))
+        retriever = None
+    else:
+        retriever = get_retriever(k=4)
     if retriever is not None:
         try:
             context, sources = format_chunks(retriever.invoke(query))

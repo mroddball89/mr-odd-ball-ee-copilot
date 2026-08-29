@@ -3011,3 +3011,82 @@ LB just quietly said things twice.
 
 `media/scripts/measure_stt_models.py` re-runs all of it offline, keylessly, from his own
 recordings.
+
+---
+
+## D52 — His own datasheets route his datasheet questions, and the first threshold was fitted to negatives I chose myself
+
+**2026-08-28.** A datasheet question costs **1 `flash-lite` (routing) + 1 `flash` (the answer)**.
+`engine/models.py` resolves its four model constants to only **two names** — `ROUTER_MODEL` and
+`PERSONA_MODEL` are both `gemini-3.5-flash-lite` — so routing and chit-chat share one bucket of
+20 a day, and routing is spent before anything else is.
+
+`orchestrator/corpus_hint.py` removes the routing call. The vector store is already on disk and
+searching it is **free**: `tools/vector_db.py` embeds locally with `all-MiniLM-L6-v2`, no
+network, no quota. If a question lands close to a document LB has actually filed, it is a
+question about that document, and no model is needed to notice. The retrieved chunks are handed
+to the agent, so the search happens once per turn rather than twice.
+
+### Why this is not the keyword list `route_hint.py` refused
+
+D27 specified, costed and refused a keyword dictionary — `voltage` to HARDWARE, `esp32` to
+FIRMWARE — because those words are ambiguous in LB's own vocabulary.
+
+This has no list. The evidence is **the corpus**, read off the filesystem, exactly as
+`route_hint.known_courses()` derives course codes from `vault/courses/*.md`. Add an ESP32
+datasheet and ESP32 questions start routing here; delete it and they stop.
+
+### The first threshold was wrong, and the *existing* engine harness caught it
+
+Measured positives at 0.447–1.205 against negatives at 1.409–1.905 — a clean gap of +0.204 —
+and set the threshold at the midpoint, 1.30. Then `tools/verify_engine.py` went red on a check
+written months earlier: it asks **"check the temperature"** and expects it to reach the router.
+At 1.30 the corpus claimed it, because the sensor brief has a page about operating temperature,
+so the injected 429 never happened and two more checks fell over behind it.
+
+**The gap was an artefact of negatives I had chosen myself.** Every positive named "camera
+module 3" or "IMX708"; every negative was about something else entirely. The hard cases — short,
+generic questions sharing vocabulary with the corpus without being about it — land *below* the
+worst positive:
+
+    check the temperature       1.049      BELOW the worst positive (1.205)
+    how do I focus the camera   1.102      also below it
+
+**No top-1 threshold separates those.** This is L26 arriving inside my own measurement: an
+invented corpus agrees with whoever invented it.
+
+### The property asserted is zero false positives, not a clean gap
+
+Re-fitted against 73 negatives — hand-written, seventeen deliberately hard, and **all 42 of LB's
+real recordings from `captures/`**:
+
+| threshold | positives kept | false positives | margin |
+|---|---|---|---|
+| 0.90 | 8/10 | 0 | 0.8% |
+| 0.95 | 9/10 | 0 | 4.0% |
+| **1.00** | **9/10** | **0** | **8.8%** |
+| 1.05 | 9/10 | 1 | 13.1% |
+| 1.30 | 10/10 | 5 | 7.3% |
+
+`THRESHOLD = 1.00`. The sets overlap, so `tools/verify_corpus_hint.py` asserts **zero false
+positives at the threshold in force** rather than a positive gap, which would demand the
+impossible. `--probe` raises the bar to 2.0 and shows all 56 negatives being swallowed.
+
+**The failure directions are not symmetric**, and the threshold sits where it does because of
+that: a positive lost below it costs one `flash-lite` call and is answered exactly as it was
+before this module existed; a negative taken above it answers a question about his CPU out of a
+camera datasheet.
+
+### A signature is an interface, even a private one
+
+Threading the chunks through `Engine._dispatch` as a new keyword argument turned four
+`tools/verify_router.py` checks into a swallowed `TypeError` — that harness stubs `_dispatch`
+to record which agent ran. Reverted: the corpus band dispatches its own turn, exactly as
+`_free_turn` already dispatches its own launch.
+
+### The corpus that made this possible
+
+`data/` held two "datasheets" that were **single-page PDFs containing one image each** — 0
+characters of text. `tools/vector_db.py` detected it and refused to write an empty store, which
+is L19 working as designed. Replaced with the official Raspberry Pi Camera Module 3 and Sensor
+Assembly product briefs: 14 usable pages, 34 chunks. FIRMWARE is grounded for the first time.
