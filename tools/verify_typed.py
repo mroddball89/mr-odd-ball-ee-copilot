@@ -163,6 +163,68 @@ check("mr" in instant._DISMISS_FILLER and "mr" not in instant._WAKE_FILLER,
       "'mr' is filler around a dismissal and load-bearing in a wake phrase")
 
 # =========================================================================================
+section("5. how LB really dismisses him — 2026-08-29, from oddball.log")
+# =========================================================================================
+#
+# Every one of these routed to PERSONA that day. Each cost TWO API calls -- one to route, one
+# to answer -- and together they were his entire OpenRouter allowance: 50 requests, 0 left by
+# noon, spent telling him to go away.
+#
+#     sleep · Sleep. · Go to sleep, sleep. · Go to sleep. Sleep. · Nothing go to sleep.
+#     Nothing.
+#
+# Two separate faults. `_SLEEP_PHRASES` had no bare "sleep" -- excluded on purpose, over a
+# worry the end-anchor already answered -- and `_is_bare` stripped ONE phrase, so the doubling
+# a transcriber produces on a short utterance failed the anchor with a second copy of the same
+# dismissal left over.
+
+SPOKEN_DISMISSALS = [
+    ("sleep", "07:39 and four more times"),
+    ("Sleep.", "11:22:19, with the full stop Whisper adds"),
+    ("Go to sleep, sleep.", "12:03 - said once, transcribed twice"),
+    ("Go to sleep. Sleep.", "the same thing with different punctuation"),
+    ("Nothing go to sleep.", "12:03:21 - answered by a model, 48.9s"),
+    ("Nothing.", "12:04:45 - his reply to 'What's up LB?'"),
+]
+
+for text, where in SPOKEN_DISMISSALS:
+    got = is_sleep(text)
+    check(got, f"{text!r} ends the conversation for free", where if got else
+          f"{where} - still costs a router call and a persona call")
+    check(not is_wake(text), f"...and is not read as a wake: {text!r}")
+
+# The exclusion note that kept "sleep" out for weeks, tested rather than trusted. The anchor
+# was always going to hold these; nobody had checked.
+STILL_QUESTIONS = [
+    "how much sleep did i get",
+    "whats a good sleep schedule",
+    "how do i sleep a thread in python",
+    "nothing is working",
+    "nothing else matters in this circuit",
+    "sleep mode on the esp32",
+    "does the pi sleep when idle",
+    "take a note that nothing worked",
+]
+for text in STILL_QUESTIONS:
+    got = is_sleep(text)
+    check(not got, f"but {text!r} is still a question",
+          "" if not got else "the end-anchor stopped holding -- this is the D38 failure")
+
+# `repeat` is opt-in, and the wake path must not have acquired it: a doubled wake phrase is
+# not something a person TYPES, and widening that matcher widens the doorbell.
+check(instant._is_bare("go to sleep sleep", instant._SLEEP_PHRASES,
+                       instant._DISMISS_FILLER) is False,
+      "without repeat=True the doubling still fails -- the flag is what fixes it, not the list")
+check(instant._is_bare("go to sleep sleep", instant._SLEEP_PHRASES,
+                       instant._DISMISS_FILLER, repeat=True) is True,
+      "and with it, the same string passes")
+
+# Longest-first, which cost a working feature when it was written the other way round.
+check(is_sleep("go to sleep"),
+      "a phrase containing a shorter phrase still matches whole",
+      "written in tuple order, 'sleep' is removed first, leaves 'go to', and this fails")
+
+# =========================================================================================
 
 
 def probe() -> int:
