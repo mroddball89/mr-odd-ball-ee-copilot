@@ -2268,3 +2268,45 @@ that feature did not work at all, and the captures show LB simply saying it agai
       whose actions block, one per process.
 - [ ] **`[wake].threshold`.** Demoted: 31 wakes across three days says it fires. ~13% of them
       were silent (false wakes), which is the number to watch if it becomes annoying.
+
+## RAG: the index cannot be built, because the corpus is two screenshots (2026-08-28)
+
+Asked to build `chroma_db` so FIRMWARE stops answering ungrounded. **It cannot be built, and
+FIRMWARE is NOT grounded.**
+
+`python tools/vector_db.py` ran and refused, correctly and loudly:
+
+    datasheets: 2 page(s) carried NO extractable text - pi_cam3.pdf, pi_cam3_noir_wide.pdf
+          These are image-only PDFs.
+    NOTHING WAS WRITTEN. The store is empty, so `get_retriever()` still returns None
+    and the firmware agent will keep answering without documents.
+
+Verified independently with `pypdf`. Both files are **one page, 0 characters of text, one
+embedded image** — screenshots saved as PDF, ~305 KB each. They are not datasheets.
+
+That the build refuses rather than writing an empty store is L19 working as designed: *a model
+given an empty document does not report an empty document*, so the ingest has to.
+
+### The machinery itself is fine — proven, not assumed
+
+Built a text-bearing PDF with `tests/fixtures/make_syllabus_pdf.write()` in a temp directory,
+pointed `vector_db.DATA_PATH` and `CHROMA_PATH` at it, and ran the real functions:
+
+    build_vector_database()  -> 1 usable page -> 1 chunk, persisted
+    get_retriever(k=2)       -> a retriever
+    "which pin is the HX711 clock on"  -> 1 chunk, correct text, source and page attached
+
+Load -> chunk -> embed -> persist -> retrieve -> `format_chunks` all work. `data/` and
+`chroma_db/` were never touched. **The moment a text-bearing datasheet lands in `data/`,
+`python tools/vector_db.py` grounds FIRMWARE.**
+
+### Blocked, and on what
+
+- [ ] **Text-bearing datasheets.** The Pi Camera Module 3 and its IMX708 sensor are both
+      published as real text PDFs; what is in `data/` are pictures of something.
+- [ ] **OCR is not the answer here** and is not installed anyway (no `tesseract`, no
+      `pytesseract`/`ocrmypdf`). A one-page screenshot OCRs to a paragraph — the cost is real
+      and the yield is a paragraph.
+- [ ] **Retrieval-as-router is blocked behind this.** It ranks a query against the corpus to
+      decide the route without paying `flash-lite`; there is no corpus to rank against, and a
+      similarity threshold cannot be fitted to an empty store.
