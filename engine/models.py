@@ -221,11 +221,29 @@ OPENROUTER_BASE_URL = os.environ.get("ODDBALL_OPENROUTER_BASE_URL",
                                      "https://openrouter.ai/api/v1")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 
-# Which model answers as Mr Odd Ball. An OpenRouter slug when `OPENROUTER_API_KEY` is set,
-# a Gemini name otherwise — see `build_persona_llm`, which is where the choice is actually made.
-PERSONA_MODEL = os.environ.get(
-    "ODDBALL_PERSONA_MODEL",
-    "minimax/minimax-m2.7:free" if OPENROUTER_API_KEY else "gemini-3.5-flash-lite")
+# Which model answers as Mr Odd Ball.
+#
+# **A key alone no longer switches the provider, and that is a measurement, not caution.**
+# The default was `minimax/minimax-m2.7:free` whenever a key was present. Tested live on
+# 2026-08-29 and reverted:
+#
+#     bare 10-word prompt, tools bound      minimax emits tool_calls    3/3
+#     the REAL 6,608-char persona prompt    minimax emits tool_calls    0/3
+#     the same prompt, gemini-3.5-flash-lite               tool_calls   1/1
+#
+# Three configurations of the persona prompt — temperature 0.8 and 0.2, vault+file tools and
+# vault only — and minimax called nothing in any of them. Twice it said **"I've written that
+# down"** while calling nothing, which is precisely the sentence `VAULT_INSTRUCTION` forbids.
+#
+# It is not that the model lacks tool calling. Its OpenRouter page advertises `tools` and
+# `tool_choice`, and a short prompt proves it. **It stops calling them under a long system
+# prompt**, which is worse than lacking the feature: it passes every cheap test and fails on
+# the real one, silently, on the route that FILES EVERY UPLOAD.
+#
+# So OpenRouter is now opt-in BY MODEL NAME. Set `ODDBALL_PERSONA_MODEL` to a slug with a "/"
+# in it and the OpenRouter path is taken; leave it unset and the character stays on Gemini
+# whether or not a key is present. `tools/probe_persona_tools.py` is how a candidate earns it.
+PERSONA_MODEL = os.environ.get("ODDBALL_PERSONA_MODEL", "gemini-3.5-flash-lite")
 
 # The Gemini model to fall back to when OpenRouter is not configured. Named separately so the
 # fallback is a decision with a name rather than a string buried in an `or`.

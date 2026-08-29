@@ -61,6 +61,12 @@ for _stream in (sys.stdout, sys.stderr):
 # this afterwards would rebind nothing and every write below would land in LB's real vault.
 _TMP = Path(tempfile.mkdtemp(prefix="oddball-notes-"))
 os.environ["ODDBALL_VAULT_DIR"] = str(_TMP)
+# The conversation log too. Section 4 drives a REAL `Engine.ask()`, which calls
+# `memory_manager.add_message` on every turn — so without this the harness writes its own test
+# utterances into LB's actual log, where they are then injected into every agent prompt as
+# things he recently said. It did exactly that until 2026-08-29; see the comment on
+# `memory_manager.MEMORY_FILE`.
+os.environ["ODDBALL_MEMORY_FILE"] = str(_TMP / "harness_memory.json")
 
 from orchestrator import note_intent                                 # noqa: E402
 from orchestrator.instant import Query, normalise                    # noqa: E402

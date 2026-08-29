@@ -464,64 +464,79 @@ def live() -> int:
 
 
 # =========================================================================================
-section("the persona provider — Gemini or OpenRouter, and tools either way")
+section("the persona provider — and a key alone no longer switches it")
 # =========================================================================================
 #
-# PERSONA is also GENERAL, and GENERAL is the ONLY route that can file an upload. So the one
-# property that must hold whichever provider answers is that `bind_tools` exists — a persona
-# model without it breaks `save_to_vault` and `process_inbox_file` silently, on the route that
-# has no other home.
+# PERSONA is also GENERAL, and GENERAL is the ONLY route that can file an upload. So the
+# property that must hold whichever provider answers is that `bind_tools` exists.
+#
+# **A key alone does NOT move the persona to OpenRouter, and that is a measurement.** On
+# 2026-08-29 `minimax/minimax-m2.7:free` was defaulted in on the strength of its advertised
+# tool support, and measured: 3/3 tool calls on a bare prompt, **0/3 on the real 8,175-char
+# persona prompt**, twice claiming "I've written that down" while calling nothing. Gemini
+# passed the identical prompt 1/1. So OpenRouter is opt-in BY MODEL NAME, and a candidate
+# earns it through `tools/probe_persona_tools.py`, never through its own capability list.
+#
+# Every case sets BOTH variables explicitly. `.env` supplies ODDBALL_PERSONA_MODEL on this
+# machine, and `load_dotenv` re-reads it on reload — so a case that merely UNSETS one is not
+# testing what it thinks it is. That cost a red run.
 
 import importlib                                                      # noqa: E402
 import os as _os                                                      # noqa: E402
 
-_saved = _os.environ.get("OPENROUTER_API_KEY")
+_saved = {k: _os.environ.get(k) for k in ("OPENROUTER_API_KEY", "ODDBALL_PERSONA_MODEL")}
+_FAKE = "sk-or-v1-not-a-real-key-for-the-harness"
+
+# (key, model, expected provider, why)
+_CASES = [
+    (_FAKE, "nvidia/nemotron-3.5-lightning:free", "openrouter",
+     "a key AND a slug is the only combination that leaves Google"),
+    (_FAKE, "gemini-3.5-flash-lite", "google",
+     "a Gemini name wins even with a key present"),
+    (None, "nvidia/nemotron-3.5-lightning:free", "google",
+     "a slug with NO key falls back rather than failing"),
+    (None, "gemini-3.5-flash-lite", "google", "neither: plain Gemini"),
+]
+
 try:
-    # --- no OpenRouter key: falls back to Gemini rather than failing ---------------------
-    _os.environ.pop("OPENROUTER_API_KEY", None)
     import engine.models as _m
-    _m = importlib.reload(_m)
-    check(_m.persona_provider() == "google",
-          "with no OPENROUTER_API_KEY the persona falls back to Gemini",
-          f"provider={_m.persona_provider()}, model={_m.PERSONA_MODEL}")
-    check("/" not in _m.PERSONA_MODEL,
-          "and PERSONA_MODEL is a Gemini name, not an OpenRouter slug",
-          _m.PERSONA_MODEL)
-    _llm = _m.build_persona_llm()
-    check(hasattr(_llm, "bind_tools"),
-          "    and it still binds tools, so uploads and the vault keep working",
-          type(_llm).__name__)
+    # The module ATTRIBUTES are set directly, not the environment. Popping
+    # OPENROUTER_API_KEY and reloading does not clear it: `load_dotenv(ENV_FILE)` runs at
+    # import and reads it straight back out of `.env`, which on this machine has one. The
+    # "no key" cases were therefore unreachable through the environment and went red against
+    # code that was behaving correctly — the test was wrong, not the module.
+    _real_key, _real_model = _m.OPENROUTER_API_KEY, _m.PERSONA_MODEL
+    for _key, _model, _want, _why in _CASES:
+        _m.OPENROUTER_API_KEY = _key or ""
+        _m.PERSONA_MODEL = _model
+        _got = _m.persona_provider()
+        check(_got == _want,
+              f"key={'yes' if _key else 'no ':3} model={_model[:34]:36} -> {_want}",
+              _why if _got == _want else f"got {_got}")
+        _llm = _m.build_persona_llm()
+        check(hasattr(_llm, "bind_tools"),
+              f"    {type(_llm).__name__} binds tools — GENERAL can still file an upload")
+        if _want == "openrouter":
+            check(str(getattr(_llm, "openai_api_base", "")).startswith("https://openrouter.ai"),
+                  "    and points at OpenRouter, not at OpenAI",
+                  str(getattr(_llm, "openai_api_base", "")))
 
-    # --- with a key: OpenRouter, and still tool-capable ----------------------------------
-    _os.environ["OPENROUTER_API_KEY"] = "sk-or-v1-not-a-real-key-for-the-harness"
-    _m = importlib.reload(_m)
-    check(_m.persona_provider() == "openrouter",
-          "with OPENROUTER_API_KEY set the persona moves to OpenRouter",
-          f"provider={_m.persona_provider()}, model={_m.PERSONA_MODEL}")
-    check(_m.PERSONA_MODEL == "minimax/minimax-m2.7:free",
-          "and defaults to the model whose tool support was verified",
-          _m.PERSONA_MODEL)
-    _llm = _m.build_persona_llm()
-    check(type(_llm).__name__ == "ChatOpenAI",
-          "    built as ChatOpenAI", type(_llm).__name__)
-    check(str(getattr(_llm, "openai_api_base", "")).startswith("https://openrouter.ai"),
-          "    pointed at OpenRouter, not at OpenAI",
-          str(getattr(_llm, "openai_api_base", "")))
-    check(hasattr(_llm, "bind_tools"),
-          "    and binds tools — the property that keeps GENERAL able to file an upload")
+    _m.OPENROUTER_API_KEY, _m.PERSONA_MODEL = _real_key, _real_model
 
-    # --- an explicit Gemini override wins even with a key present ------------------------
-    _os.environ["ODDBALL_PERSONA_MODEL"] = "gemini-3.5-flash-lite"
-    _m = importlib.reload(_m)
-    check(_m.persona_provider() == "google",
-          "naming a Gemini model explicitly overrides the OpenRouter key",
-          f"provider={_m.persona_provider()}, model={_m.PERSONA_MODEL}")
-    _os.environ.pop("ODDBALL_PERSONA_MODEL", None)
+    # The default, read from the SOURCE rather than the environment — `.env` cannot be unset.
+    import inspect                                                    # noqa: E402
+    _src = inspect.getsource(_m)
+    _default = re.search(
+        r'PERSONA_MODEL = os\.environ\.get\("ODDBALL_PERSONA_MODEL", "([^"]+)"\)', _src)
+    check(_default is not None and "/" not in _default.group(1),
+          "and the DEFAULT is a Gemini name, so a bare key changes nothing",
+          f"default is {_default.group(1) if _default else 'unparseable'!r}")
 finally:
-    if _saved is None:
-        _os.environ.pop("OPENROUTER_API_KEY", None)
-    else:
-        _os.environ["OPENROUTER_API_KEY"] = _saved
+    for _k, _v in _saved.items():
+        if _v is None:
+            _os.environ.pop(_k, None)
+        else:
+            _os.environ[_k] = _v
     importlib.reload(importlib.import_module("engine.models"))
 
 
