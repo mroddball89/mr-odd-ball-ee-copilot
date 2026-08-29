@@ -59,7 +59,7 @@ LOG = logging.getLogger("oddball.screen")
 __all__ = ["propose_screen_look", "resume_screen_look"]
 
 SCREEN_PROMPT = """
-You are Mr Odd Ball, an Electrical Engineering copilot on a Raspberry Pi. You have just taken a
+You are Mr Odd Ball, an Electrical Engineering copilot on a Windows 11 PC. You have just taken a
 screenshot of LB's display and you are looking at it.
 
 Answer his question from what is actually in the image.
