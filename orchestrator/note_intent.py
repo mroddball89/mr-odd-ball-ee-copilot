@@ -163,7 +163,76 @@ _PREAMBLE: tuple[str, ...] = (
     "i would like you to", "id like to", "id like you to", "i have to", "i gotta",
     "im going to", "i am going to", "im gonna", "let me", "help me", "i should",
     "do me a favor and", "do me a favour and", "go ahead and", "if you could",
+    # **"tell me" and nothing longer.** Measured 2026-08-29 07:24:45: "tell me what notes you
+    # have saved for me" fell through every table here, routed to OS, and took 303 seconds to
+    # answer a question the vault could have answered instantly.
+    #
+    # The phrase must stop at "me". Adding "tell me what" would strip the word the `_LIST`
+    # opener "what notes" is anchored on, and the utterance that motivated the entry would go
+    # back to missing — a longer preamble is sorted first and wins.
+    #
+    # "show me" is deliberately NOT here for that same reason: `_LIST` already carries "show me
+    # my notes" and "show me the notes" in full, and a preamble would eat their openers.
+    "tell me",
 )
+
+# "…that you have for me", "…you have saved for me". LB describing the LISTENER'S possession
+# of the notes, which is conversational scaffolding and never a note's name.
+#
+# **Measured, not imagined.** `oddball.log` 2026-08-29 07:20:27, "read me back the notes that
+# you have for me": the `_READ` opener matched, `_clean_target` chewed the remainder down to
+# the target "you have for", `knowledge_vault.find_notes` returned [] for it, and he answered
+# "I don't have a note called you have for". He was asking for the LIST.
+#
+# **Anchored to the end, and the anchor is the whole safety argument.** A note really can be
+# called "things you have to buy" — and it survives, because after "you have" this pattern
+# demands nothing but courtesy words and then `$`. "to buy note" is not courtesy, so the match
+# fails and the name is left exactly as LB said it. Applied ONLY to target and folder
+# extraction, never to a NEW or APPEND body: the verbatim guarantee is not negotiable, and the
+# cheapest way to keep it is for this regex to never see the content.
+_POSSESSION_TAIL = re.compile(
+    r"\s*\b(?:that\s+|which\s+)?(?:youve|you|u)\s+"
+    r"(?:have|has|ve|got|saved|stored|kept|wrote|written|made|took|taken)"
+    r"(?:\s+(?:saved|stored|kept|written|down|for|of))*"
+    r"(?:\s+(?:me|us|mine|ours))?\s*$", re.IGNORECASE)
+
+
+def _drop_possession(flat: str) -> str:
+    """Remove a trailing "that you have for me" clause. Returns the text unchanged if none."""
+    return " ".join(_POSSESSION_TAIL.sub("", flat).split())
+
+
+# Which prepositions can introduce a FOLDER after a list opener — "what notes do I have IN amp
+# board". See `_folder_after_preposition`.
+_FOLDER_PREPOSITIONS: frozenset[str] = frozenset({
+    "in", "inside", "under", "from", "within", "into", "on",
+})
+
+_FOLDER_PREPOSITION = re.compile(
+    rf"^(?:{'|'.join(sorted(_FOLDER_PREPOSITIONS))})\s+(?P<f>.+)$", re.IGNORECASE)
+
+
+def _folder_after_preposition(flat_rest: str, opener: str) -> str:
+    """The folder a LIST names, or "" — and "" is the common answer.
+
+    The old rule was `_clean_target(rest)`, which treats *whatever is left over* as a folder
+    name. That is fine for "what notes do I have in amp board" and wrong for every sentence
+    that trails off politely: "tell me what notes you have saved for me" asked for a listing of
+    a folder called "you have saved for me", found nothing, and said the vault was empty.
+
+    A folder is named by a PREPOSITION or it is not named at all. The opener may carry the
+    preposition itself — `_LIST` contains "what notes are in" — so it is checked too, or that
+    phrasing would lose the folder it just introduced.
+    """
+    stripped = _drop_possession(flat_rest)
+    if not stripped:
+        return ""
+    tail = opener.split()[-1] if opener else ""
+    if tail in _FOLDER_PREPOSITIONS:
+        return _clean_target(stripped)
+    hit = _FOLDER_PREPOSITION.match(stripped)
+    return _clean_target(hit.group("f")) if hit else ""
+
 
 # "…in the vault", "…to my vault". A DESTINATION that names the vault itself rather than a
 # folder in it — so it is removed from the content and leaves the folder alone. Without this,
@@ -498,9 +567,27 @@ def _split_target(flat_rest: str, raw_rest: str) -> tuple[str, str]:
         return _clean_target(target), content
 
     if note_at >= 0 and note_at + 1 < len(words):
-        target = " ".join(words[:note_at])
-        content = _strip_lead(_slice_after(raw_rest, words[note_at]))
-        return _clean_target(target), content
+        before = _clean_target(" ".join(words[:note_at]))
+
+        # **Which side of the noun the name is on is not fixed, and assuming it was cost LB a
+        # note.** Measured 2026-08-29 07:18:02: "add to my note about the topic for my English
+        # research paper" put everything identifying the note AFTER the word "note", so
+        # `words[:note_at]` was ["my"], `_clean_target` reduced it to "", `_build` returned
+        # None on the empty target, and the turn fell through to the router — 129 seconds and
+        # two paid calls to not append one line to a file.
+        #
+        # "add to my regulator note it needs a heatsink" still splits at the noun, because
+        # there the words before it are a real name. The test is whether anything SURVIVES
+        # `_clean_target` on the left: a name survives, pure scaffolding does not.
+        if before:
+            content = _strip_lead(_slice_after(raw_rest, words[note_at]))
+            return before, content
+
+        # Nothing but filler in front of the noun, so the name is what follows it — and there
+        # is no content, because a sentence shaped "add to my note about X" has named the note
+        # and not the addition. He is asked what to add, which is the same thing "add more to
+        # my amp board note" already does.
+        return _clean_target(flat_rest), ""
 
     return _clean_target(flat_rest), ""
 
@@ -623,10 +710,10 @@ def _build(op: str, opener: str, rest_flat: str, raw: str,
     if op == LIST:
         folder, _ = _take_folder(rest_raw)
         if not folder:
-            folder = _clean_target(rest_flat)
+            folder = _folder_after_preposition(rest_flat, opener)
         return NoteRequest(op=LIST, folder=folder, verb=opener)
 
-    target = _clean_target(rest_flat)
+    target = _clean_target(_drop_possession(rest_flat))
     if op == READ and not target:
         # "read me my notes" with nothing named is a request for the list, not for a note.
         return NoteRequest(op=LIST, verb=opener)
