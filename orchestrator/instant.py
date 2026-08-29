@@ -101,7 +101,8 @@ def _any(text: str, *words: str) -> bool:
     return any(_has(text, w) for w in words)
 
 
-def _is_bare(text: str, phrases: tuple[str, ...], filler: frozenset[str]) -> bool:
+def _is_bare(text: str, phrases: tuple[str, ...], filler: frozenset[str],
+             repeat: bool = False) -> bool:
     """Does one of `phrases` BE the utterance, rather than merely appear inside it?
 
     The end-anchor rule, in one place. A phrase counts when removing it leaves nothing behind
@@ -122,18 +123,57 @@ def _is_bare(text: str, phrases: tuple[str, ...], filler: frozenset[str]) -> boo
         text:    already normalised — callers holding raw input call `normalise` first.
         phrases: the triggers, matched as whole words.
         filler:  words that may be left over and still count as nothing.
+        repeat:  keep stripping until nothing changes, so an utterance built out of SEVERAL
+                 phrases still counts. Off by default: it widens what matches, and only the
+                 dismissal path has been shown to need it.
 
     Returns:
         True when some phrase matched AND only filler remained. Trying every phrase matters:
         "thanks a lot" fails the anchor on "thanks" and passes it on "thanks a lot".
+
+    ## Why `repeat` exists, and why it is not the default
+
+    Whisper repeats itself on short utterances. Straight from `oddball.log` on 2026-08-29:
+
+        "Go to sleep, sleep."     "Go to sleep. Sleep."     "Nothing go to sleep."
+
+    Each is a dismissal twice over, and each failed the anchor — removing "go to sleep" leaves
+    "sleep", which is not filler, so the whole thing read as an ordinary sentence and cost two
+    API calls. Stripping repeatedly is the honest generalisation of this function's own rule:
+    if what remains after removing a phrase is ANOTHER phrase, the utterance is still nothing
+    but triggers and filler.
+
+    It stays opt-in because it genuinely widens the match, and `is_wake` does not need it —
+    that path is typed, and a person typing does not stutter the way a transcriber does.
     """
-    for phrase in phrases:
-        if not _has(text, phrase):
-            continue
-        rest = re.sub(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", " ", text)
-        if not [w for w in rest.split() if w not in filler]:
-            return True
-    return False
+    # **Longest first, and it is not a preference.** Written in tuple order, a short phrase
+    # eats the word a longer one needs: "sleep" matched inside "go to sleep", removed only
+    # that word, left "go to", and a dismissal that had worked for weeks started failing. The
+    # same rule `note_intent._opening` states for its openers, arrived at the same way.
+    ordered = sorted(phrases, key=len, reverse=True)
+
+    def strip_one(current: str) -> "str | None":
+        """Remove one matching phrase, longest first, or None if none matched."""
+        for phrase in ordered:
+            if _has(current, phrase):
+                return re.sub(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", " ", current)
+        return None
+
+    rest = strip_one(text)
+    if rest is None:
+        return False
+    if repeat:
+        # Bounded by construction: every pass removes at least one whole word, so this cannot
+        # run longer than the utterance. The loop still carries a cap, because a matcher on
+        # the turn path is not the place to rely on that argument being right.
+        for _ in range(len(text.split())):
+            if not [w for w in rest.split() if w not in filler]:
+                break
+            nxt = strip_one(rest)
+            if nxt is None:
+                break
+            rest = nxt
+    return not [w for w in rest.split() if w not in filler]
 
 
 # --- the handlers. Each takes the Query and `now`, and returns a line. ---
@@ -263,10 +303,27 @@ _DATE_PHRASES = (
 # Chosen from how LB actually talks rather than invented: `captures/173508_that-s-all-.wav` is
 # him saying "that's all" to a build that had no idea what to do with it.
 #
-# Deliberately NOT here: a bare "sleep" ("how much sleep did I get"), a bare "night"
-# ("what are you doing tonight"), and "enough" ("that's enough sugar"). Each is a whole word
-# that means something else in an ordinary sentence — D38, for the fifth time.
+# Deliberately NOT here: a bare "night" ("what are you doing tonight") and "enough" ("that's
+# enough sugar"). Each is a whole word that means something else in an ordinary sentence —
+# D38, for the fifth time.
+#
+# **"sleep" and "nothing" WERE on that list and have been moved off it, 2026-08-29.** The note
+# above used to read "a bare 'sleep' ('how much sleep did I get')", and the worry was real but
+# already answered by the rule underneath it: `_is_bare` is END-ANCHORED, so a bare phrase
+# matches only when it IS the whole utterance. Every sentence the note feared was tested and
+# none of them match:
+#
+#     "how much sleep did I get"            no
+#     "whats a good sleep schedule"         no
+#     "how do I sleep a thread in python"   no
+#     "nothing is working"                  no
+#
+# What it cost to leave them out is measured. On 2026-08-29 LB dismissed him twelve times and
+# `is_sleep` caught two, because he says "sleep" far more often than "go to sleep". Every miss
+# went to the router and then to PERSONA — **two API calls to be told to go away** — and that
+# was his entire OpenRouter daily allowance for the day: 50 requests, 0 remaining by noon.
 _SLEEP_PHRASES = (
+    "sleep", "nothing", "nothing thanks", "nothing right now",
     "go to sleep", "go back to sleep", "back to sleep", "get some sleep", "sleep now",
     "goodnight", "good night", "night night", "nighty night",
     "go to bed", "take a nap", "have a nap",
@@ -400,7 +457,9 @@ def _is_dismissal(text: str) -> bool:
     behind but filler — which allows "okay, goodnight" and "Mr Odd Ball, that's all for now"
     while refusing any sentence that is *about* something else.
     """
-    return _is_bare(text, _SLEEP_PHRASES, _DISMISS_FILLER)
+    # `repeat=True`: "Go to sleep, sleep." is what the transcriber hands over when LB says it
+    # once. See `_is_bare`.
+    return _is_bare(text, _SLEEP_PHRASES, _DISMISS_FILLER, repeat=True)
 
 # Ordered, and the order is load-bearing: the first match wins, so anything specific must sit
 # above anything general. "what time is it" would otherwise be caught by a bare "what".

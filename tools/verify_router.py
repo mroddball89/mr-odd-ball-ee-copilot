@@ -465,6 +465,54 @@ def s8_engine() -> None:
             check(seen == [], "...and NO agent ran at all", f"dispatched {seen}")
             check(bool(r.speech), "...and he actually said something", repr(r.speech))
 
+        # --- B2. a dismissal is free, AND it ends the conversation -----------------------
+        #
+        # Both halves, because for weeks only the first was even attempted and neither worked.
+        # `orchestrator/instant.py` matched dismissals from the day it was written and its
+        # docstring said "the caller watches for intent == 'sleep' and closes the
+        # conversation". `Engine.FREE_INTENTS` did not list "sleep", so every one fell through
+        # to the paid router, came back labelled PERSONA, and `run_voice.turn_finished` — which
+        # reads `Timings.intent` — saw "persona" and kept the microphone open.
+        #
+        # Measured 2026-08-29: LB dismissed him twelve times, spent two API calls on each, and
+        # was still being answered three turns later. These are his exact words, including the
+        # ones Whisper doubled.
+        for utterance in ("sleep", "Sleep.", "Go to sleep.", "Go to sleep, sleep.",
+                          "Nothing go to sleep.", "Nothing.", "goodnight", "that's all"):
+            seen.clear()
+            r = eng.ask(utterance)
+            check(r.route == "sleep", f"{utterance!r} -> sleep, with no router call",
+                  "" if r.route == "sleep" else
+                  f"route={r.route} — anything but 'sleep' leaves the conversation open")
+            check(seen == [], "...and NO agent ran either", f"dispatched {seen}")
+            check(bool(r.speech), "...and he says goodnight rather than going quiet",
+                  "" if r.speech else "a silent dismissal is indistinguishable from a crash")
+
+        # A question that merely CONTAINS a dismissal word is still a question. The router is
+        # still `_explode` here, so reaching it is a hard failure rather than a wrong label —
+        # widening `_SLEEP_PHRASES` on 2026-08-29 is exactly the change that could break this.
+        # Recorded, not raised: `Engine.ask` catches everything and turns it into "something
+        # went wrong", so an exploding router proves nothing here — the first version of this
+        # check went green-then-red for exactly that reason.
+        asked: list[str] = []
+
+        def recording_router(query):
+            asked.append(query)
+            return RouteDecision(destination=AgentRoute.GENERAL, reasoning="harness")
+
+        router.router_agent = recording_router
+        core.router_agent = recording_router
+        for utterance in ("how much sleep did i get", "does the esp32 have a sleep mode",
+                          "nothing is working"):
+            asked.clear()
+            r = eng.ask(utterance)
+            check(r.route != "sleep" and asked == [utterance],
+                  f"{utterance!r} is NOT swallowed as a dismissal",
+                  "" if r.route != "sleep" else
+                  "answered as a dismissal — the end-anchor has stopped holding")
+        router.router_agent = _explode
+        core.router_agent = _explode
+
         # --- C. ambiguous turns still reach the paid router ------------------------------
         # The other direction, and it is not optional: a hint layer that quietly swallowed
         # everything would pass every check above.

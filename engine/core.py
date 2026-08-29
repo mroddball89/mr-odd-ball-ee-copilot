@@ -620,6 +620,11 @@ class Engine:
     # classification; in front of it, it removes HARDWARE from the answer path entirely. All
     # three now take the end-anchor rule (`instant._is_bare`): the greeting has to BE the
     # utterance. `tools/verify_router.py` mutation-tests that by putting the bare matchers back.
+    # What `engine/turn.py` puts in `Timings.intent` and `run_voice.turn_finished` reads to
+    # decide the conversation is over. One definition, because a typo here is a dismissal that
+    # does not dismiss and there is no error to see.
+    SLEEP_ROUTE = "sleep"
+
     SOCIAL_INTENTS = frozenset({"hello", "thanks", "identity"})
 
     FREE_INTENTS = frozenset({
@@ -675,6 +680,28 @@ class Engine:
             # Still gated. The free path decides WHAT was asked for, never whether to do it.
             return self._gate(propose_launch(request.app, request.spoken),
                               AgentRoute.OS.value, t)
+
+        # **A dismissal is free, and it is also the thing that ENDS the conversation.**
+        #
+        # `orchestrator/instant.py` has matched these since it was written, and its own
+        # docstring says "the caller watches for `intent == "sleep"` and closes the
+        # conversation". Nothing watched. `FREE_INTENTS` did not list "sleep", so every
+        # dismissal fell through to the paid router, came back labelled PERSONA, and
+        # `Turn` set `t.intent = "persona"` — which `run_voice.turn_finished` reads as NOT
+        # dismissed, so the window stayed open and he carried on talking.
+        #
+        # Measured 2026-08-29. LB said some form of "sleep" twelve times; every one cost a
+        # router call and a persona call, and not one of them put him to sleep. He was still
+        # answering three turns later. That is the whole of the day's OpenRouter allowance —
+        # 50 requests — spent failing to go away.
+        #
+        # The route is the literal "sleep" rather than an `AgentRoute`: no agent answers a
+        # dismissal, the reply is canned, and this string is the signal the voice loop is
+        # already looking for.
+        if reply.handled and reply.intent == self.SLEEP_ROUTE:
+            t.route = self.SLEEP_ROUTE
+            t.extras.append("free:sleep")
+            return Response(speech=reply.text, route=self.SLEEP_ROUTE, raw=reply.text)
 
         if reply.handled and reply.intent in self.FREE_INTENTS:
             # The answer is canned either way; what differs is the label on the HUD's route
