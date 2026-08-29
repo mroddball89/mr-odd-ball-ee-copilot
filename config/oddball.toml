@@ -76,7 +76,62 @@ model = "models/hey_mr_odd_ball.onnx"
 # NOT the whole story. 17 of 57 wakes still clear 0.50, and nobody knows which of those were
 # LB and which were the room, because no audio was kept. `--save-captures` is now on in
 # config/oddball.service, so the next session leaves WAVs instead of anecdotes.
-threshold = 0.76
+#
+# ============================================================================================
+# 0.76 -> 0.53 on 2026-08-29. **The rule was right; its INPUT was not.**
+# ============================================================================================
+#
+# 0.76 was not arbitrary and is not a mistake in arithmetic. `tools/verify_wake.py` measures
+# the fixture band as [0.1461, 0.9771], and `POSITION_TARGET = 0.75` of that band is **0.769**.
+# Someone applied the documented rule and got the documented answer.
+#
+# The rule takes "the quietest positive" as its lower anchor, and for the fixture set that is
+# **0.9771** — clean, close-mic recordings of the phrase. LB's actual quietest call, measured
+# live below, is **0.132**, and his attempts fall short anywhere from 0.339 to 0.742. The
+# fixtures do not contain a single marginal call, so every threshold derived from them is
+# calibrated against his best day and refuses his ordinary one.
+#
+# 0.53 is the LOWEST value still inside the position band (46.2%, floor is 45%), which is the
+# most the fixture set will currently allow. It catches 27 of 33 real attempts against 0.76's
+# 21 — 82% instead of 64%.
+#
+# **The durable fix is the fixture set, not this number.** Until `models/` gains recordings of
+# LB calling him quietly, from across the room, and mid-sentence, `verify_wake` will keep
+# certifying thresholds that only work when he leans into the microphone.
+#
+# ## Measured 2026-08-29, because BOTH files cited above are gone
+#
+# `media/data/2026-08-14-oddball-session.log` and `media/data/2026-08-14-false-wakes.csv` are
+# no longer in the repo, so the table above can no longer be re-derived. Today's numbers are
+# recorded here instead, from `python audio/wake.py --meter` on the C270 over WASAPI:
+#
+#     LB saying the phrase, ~2 min   33 attempts: 21 fired, 12 fell short
+#                                    fired 0.769-0.964, fell short 0.132-0.742
+#     the room, 60 s, deliberately   peak 0.005, zero detections
+#      silent
+#
+#     threshold   attempts caught   headroom over the room measured today   fixture position
+#        0.76       21/33  (64%)              152x                            74%
+#        0.60       26/33  (79%)              120x                            55%
+#        0.53       27/33  (82%)              106x                            46%   <- now
+#        0.50       27/33  (82%)              100x                            43%   refused
+#        0.40       31/33  (94%)               80x                            31%   refused
+#
+# **The room reaches 0.005 and LB reaches 0.964.** There is no overlap; the earlier reading
+# that there was one came from `audio/autotune.py` counting "woke him and then said nothing"
+# as a false wake. It is not — see `classify_wake`, which now requires a score the room could
+# actually have produced before calling a wake false.
+#
+# 0.53 and not lower for two independent reasons, and they happen to agree. `verify_wake`
+# refuses anything under 0.52 against the current fixtures; and the only evidence against 0.40
+# and 0.30 is the 2026-08-14 session (57 false wakes at 0.30, median 0.420), which is missing
+# and cannot be re-checked. Sixty seconds of a quiet room does not overturn it.
+#
+# If quiet calls are still refused, the next move is to ADD FIXTURES rather than to lower this
+# by feel: record the calls that fall short, put them in the positive set, and `verify_wake`
+# will then permit the threshold they need. `--save-captures` is on, so the material is being
+# collected already.
+threshold = 0.53
 
 # Seconds to ignore further detections after one fires. Without this, a single utterance
 # triggers on several consecutive frames, because the phrase spans more than one 80ms window.
