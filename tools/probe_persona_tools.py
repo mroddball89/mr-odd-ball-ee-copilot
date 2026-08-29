@@ -62,10 +62,28 @@ PROMPTS: tuple[str, ...] = (
 )
 
 
-def build(slug: str, temperature: float):
-    """A chat model for `slug`, OpenRouter when it has a "/" in it, Gemini otherwise."""
-    from engine.models import (LLM_MAX_RETRIES, OPENROUTER_API_KEY,   # noqa: PLC0415
+def build(slug: str, temperature: float, local: bool = False):
+    """A chat model for `slug`: local when asked, OpenRouter on a "/", Gemini otherwise.
+
+    **`--local` is an explicit flag and not inferred from the name**, unlike
+    `engine.models.persona_provider`, which decides from `ODDBALL_LOCAL_BASE_URL` alone. This
+    is a diagnostic run by hand against a named model, and the two questions LB will want to
+    ask are "does the local one call tools" and "does the hosted one still" — often in the same
+    minute, with the local URL set the whole time. Inferring would make the second unaskable.
+    """
+    from engine.models import (LLM_MAX_RETRIES, LOCAL_API_KEY,        # noqa: PLC0415
+                               LOCAL_BASE_URL, OPENROUTER_API_KEY,
                                OPENROUTER_BASE_URL)
+
+    if local:
+        from langchain_openai import ChatOpenAI                       # noqa: PLC0415
+        if not LOCAL_BASE_URL:
+            sys.exit("  --local given but ODDBALL_LOCAL_BASE_URL is not set.\n"
+                     "  Start the server first:\n"
+                     "      ollama serve\n"
+                     "      setx ODDBALL_LOCAL_BASE_URL http://127.0.0.1:11434/v1")
+        return ChatOpenAI(model=slug, temperature=temperature, max_retries=LLM_MAX_RETRIES,
+                          base_url=LOCAL_BASE_URL, api_key=LOCAL_API_KEY, timeout=60.0)
 
     if "/" in slug:
         from langchain_openai import ChatOpenAI                       # noqa: PLC0415
@@ -80,14 +98,14 @@ def build(slug: str, temperature: float):
                                   max_retries=LLM_MAX_RETRIES)
 
 
-def probe(slug: str, temperature: float) -> tuple[int, int, list[str]]:
+def probe(slug: str, temperature: float, local: bool = False) -> tuple[int, int, list[str]]:
     """Run every prompt through `slug`. Returns (calls, total, notes about lies)."""
     import agents.persona_agent as PA                                  # noqa: PLC0415
     from tools.file_manager import FILE_TOOLS                          # noqa: PLC0415
     from tools.knowledge_vault import VAULT_TOOLS                      # noqa: PLC0415
     from tools.memory_manager import format_memory_for_llm             # noqa: PLC0415
 
-    llm = build(slug, temperature).bind_tools(VAULT_TOOLS + FILE_TOOLS)
+    llm = build(slug, temperature, local).bind_tools(VAULT_TOOLS + FILE_TOOLS)
     called = 0
     lies: list[str] = []
 
@@ -123,6 +141,9 @@ def main(argv: "list[str] | None" = None) -> int:
 
     ap = argparse.ArgumentParser(description="does this model call tools under the real prompt?")
     ap.add_argument("--models", nargs="+", default=[PERSONA_MODEL])
+    ap.add_argument("--local", action="store_true",
+                    help="probe ODDBALL_LOCAL_BASE_URL (Ollama, llama-server) instead of a "
+                         "hosted provider. Costs no quota, so probe as often as you like.")
     ap.add_argument("--temperature", type=float, default=0.8,
                     help="the persona runs at 0.8; lower it to see if that is the variable")
     ap.add_argument("--control", action="store_true",
@@ -140,7 +161,7 @@ def main(argv: "list[str] | None" = None) -> int:
 
     for slug in slugs:
         print(f"  {slug}  (temperature {args.temperature})")
-        called, total, lies = probe(slug, args.temperature)
+        called, total, lies = probe(slug, args.temperature, args.local)
         verdicts.append((slug, called, total, len(lies)))
         print()
 
