@@ -2310,3 +2310,41 @@ Load -> chunk -> embed -> persist -> retrieve -> `format_chunks` all work. `data
 - [ ] **Retrieval-as-router is blocked behind this.** It ranks a query against the corpus to
       decide the route without paying `flash-lite`; there is no corpus to rank against, and a
       similarity threshold cannot be fitted to an empty store.
+
+## The persona gets its own provider, and its own quota (2026-08-28)
+
+`ROUTER_MODEL` and `PERSONA_MODEL` were both `gemini-3.5-flash-lite`, so routing and chit-chat
+shared one bucket of 20 a day — while `engine/core.py` claimed the jobs were "split across three
+model names precisely so that one running dry does not silence the others". Two names, not three.
+
+LB chose to spend the separation on a different **provider** rather than a different Gemini name.
+`engine/models.build_persona_llm()` is the one seam: `agents/persona_agent.py` no longer
+constructs its own model and no longer imports `ChatGoogleGenerativeAI` at all.
+
+**Checked before writing a line**, because PERSONA is also GENERAL and GENERAL is the only route
+that can file an upload — a model without tool calling would break `save_to_vault` and
+`process_inbox_file` silently, on the one route with no other home. `minimax/minimax-m2.7:free`
+accepts `tools` and `tool_choice`, 196,608-token context. Verified on its OpenRouter page.
+
+**It falls back to Gemini rather than failing.** No key, an expired key, or a Gemini name in
+`ODDBALL_PERSONA_MODEL` all take the Google path, and each says which in the log. The character
+must not go offline because a free tier rate-limited.
+
+### Verified here, and what still needs LB's key
+
+- [x] no key -> Gemini `gemini-3.5-flash-lite`, binds tools
+- [x] key set -> `ChatOpenAI`, `minimax/minimax-m2.7:free`, base URL `openrouter.ai/api/v1`,
+      binds tools
+- [x] an explicit Gemini name in `ODDBALL_PERSONA_MODEL` overrides the key
+- [x] `tools/verify_agents.py` covers all four, reloading the module per case
+- [ ] **A live call.** Everything above is construction and wiring; nothing has actually asked
+      minimax a question. When the key is in `.env`: `python main.py --text` then "tell me a
+      joke" (PERSONA), and "remember that I'm using the 2N3904" (a real tool call through the
+      new provider — the one that matters).
+
+### And a real omission the harness caught
+
+`langchain_openai` was **imported but not declared**. It happened to be installed here, so
+nothing failed locally and a fresh clone would have died on import. Now in `requirements.txt`
+with the reason. Same class as the `pypdf` note at the bottom of that file, and
+`tools/verify_agents.py` is what found both.

@@ -463,6 +463,68 @@ def live() -> int:
     return 1 if bad else 0
 
 
+# =========================================================================================
+section("the persona provider — Gemini or OpenRouter, and tools either way")
+# =========================================================================================
+#
+# PERSONA is also GENERAL, and GENERAL is the ONLY route that can file an upload. So the one
+# property that must hold whichever provider answers is that `bind_tools` exists — a persona
+# model without it breaks `save_to_vault` and `process_inbox_file` silently, on the route that
+# has no other home.
+
+import importlib                                                      # noqa: E402
+import os as _os                                                      # noqa: E402
+
+_saved = _os.environ.get("OPENROUTER_API_KEY")
+try:
+    # --- no OpenRouter key: falls back to Gemini rather than failing ---------------------
+    _os.environ.pop("OPENROUTER_API_KEY", None)
+    import engine.models as _m
+    _m = importlib.reload(_m)
+    check(_m.persona_provider() == "google",
+          "with no OPENROUTER_API_KEY the persona falls back to Gemini",
+          f"provider={_m.persona_provider()}, model={_m.PERSONA_MODEL}")
+    check("/" not in _m.PERSONA_MODEL,
+          "and PERSONA_MODEL is a Gemini name, not an OpenRouter slug",
+          _m.PERSONA_MODEL)
+    _llm = _m.build_persona_llm()
+    check(hasattr(_llm, "bind_tools"),
+          "    and it still binds tools, so uploads and the vault keep working",
+          type(_llm).__name__)
+
+    # --- with a key: OpenRouter, and still tool-capable ----------------------------------
+    _os.environ["OPENROUTER_API_KEY"] = "sk-or-v1-not-a-real-key-for-the-harness"
+    _m = importlib.reload(_m)
+    check(_m.persona_provider() == "openrouter",
+          "with OPENROUTER_API_KEY set the persona moves to OpenRouter",
+          f"provider={_m.persona_provider()}, model={_m.PERSONA_MODEL}")
+    check(_m.PERSONA_MODEL == "minimax/minimax-m2.7:free",
+          "and defaults to the model whose tool support was verified",
+          _m.PERSONA_MODEL)
+    _llm = _m.build_persona_llm()
+    check(type(_llm).__name__ == "ChatOpenAI",
+          "    built as ChatOpenAI", type(_llm).__name__)
+    check(str(getattr(_llm, "openai_api_base", "")).startswith("https://openrouter.ai"),
+          "    pointed at OpenRouter, not at OpenAI",
+          str(getattr(_llm, "openai_api_base", "")))
+    check(hasattr(_llm, "bind_tools"),
+          "    and binds tools — the property that keeps GENERAL able to file an upload")
+
+    # --- an explicit Gemini override wins even with a key present ------------------------
+    _os.environ["ODDBALL_PERSONA_MODEL"] = "gemini-3.5-flash-lite"
+    _m = importlib.reload(_m)
+    check(_m.persona_provider() == "google",
+          "naming a Gemini model explicitly overrides the OpenRouter key",
+          f"provider={_m.persona_provider()}, model={_m.PERSONA_MODEL}")
+    _os.environ.pop("ODDBALL_PERSONA_MODEL", None)
+finally:
+    if _saved is None:
+        _os.environ.pop("OPENROUTER_API_KEY", None)
+    else:
+        _os.environ["OPENROUTER_API_KEY"] = _saved
+    importlib.reload(importlib.import_module("engine.models"))
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="verify every agent is reachable and working")
     ap.add_argument("--live", action="store_true",
