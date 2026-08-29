@@ -100,8 +100,13 @@ class Timings:
         return self.stt_s + self.route_s + self.brain_s + self.synth_s
 
     def line(self) -> str:
+        # **"engine", not "route".** `Turnlog.route_s` in engine/core.py is the ROUTER LEG and
+        # prints on the line directly above this one; this field is the whole `Engine.ask`,
+        # router and agent and reminders together. Both were labelled "route", one line apart,
+        # and reading them as the same quantity is how a 2026-08-29 turn looked like a 48-second
+        # router call when the router had taken 1.0s and an embedding model had taken 11.
         return (f"turn: capture {self.capture_s:.2f}s | stt {self.stt_s:.2f}s | "
-                f"route {self.route_s * 1000:.0f}ms"
+                f"engine {self.route_s * 1000:.0f}ms"
                 + (f" | {self.tier} {self.brain_s:.2f}s" if self.tier else "")
                 + f" | synth {self.synth_s:.2f}s"
                 + f" => answered in {self.answer_s:.2f}s"
