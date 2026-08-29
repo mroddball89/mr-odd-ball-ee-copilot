@@ -101,14 +101,30 @@ class Outcome:
     UNKNOWN = "unknown"    # in between: not used as evidence in either direction
 
 
-def classify_wake(voiced_s: float, real_above_s: float = 0.60,
+# The highest score this room has ever been measured to produce with nobody speaking. A wake
+# above this cannot be the room, whatever happened afterwards — see `classify_wake`.
+#
+#     2026-08-14   0.0885   loudest negative over a 127-minute session
+#     2026-08-29   0.005    peak over 60 s of `wake.py --meter`, LB deliberately silent
+#
+# The WORSE of the two is the default, deliberately. Today's 0.005 is one sixty-second sample
+# and using it would be fitting a safety bound to the quietest minute on record.
+ROOM_CEILING = 0.0885
+
+
+def classify_wake(voiced_s: float, score: "float | None" = None,
+                  room_ceiling: float = ROOM_CEILING,
+                  real_above_s: float = 0.60,
                   false_below_s: float = 0.30) -> str:
     """Was this wake a person, or the room?
 
     Args:
         voiced_s: seconds of the capture the VAD called voiced (`Capture.speech_s`).
-        real_above_s: at or above this, treat it as a person.
-        false_below_s: below this, treat it as a false wake.
+        score:    the wake score. Optional; None restores the pre-2026-08-29 behaviour exactly,
+                  so no existing caller changes meaning by upgrading.
+        room_ceiling: the loudest thing the room can produce. See `ROOM_CEILING`.
+        real_above_s: at or above this many voiced seconds, treat it as a person.
+        false_below_s: below this, treat it as a false wake — subject to the score check.
 
     Returns:
         One of `Outcome.REAL`, `Outcome.FALSE`, `Outcome.UNKNOWN`.
@@ -119,9 +135,38 @@ def classify_wake(voiced_s: float, real_above_s: float = 0.60,
     A single cutoff would have to call that one wrong in one direction or the other. Two
     cutoffs let the ambiguous middle be evidence for **nothing**, which is the honest answer
     and costs only a slower tune.
+
+    ## Silence after a wake is not evidence about the wake (2026-08-29)
+
+    This function used to read silence as proof of a false wake, and that inference only holds
+    if LB always speaks after a real one. **He does not**, and the log proves it in the
+    strongest possible way — the same second, from two processes on the same microphone:
+
+        11:22:17  rig    wake: hey_mr_odd_ball (0.767)   -> counted as a FALSE wake
+        11:22:17  meter  near miss: peaked 0.424
+
+    He was running `wake.py --meter` to calibrate. The rig heard him say the wake phrase,
+    fired correctly, and was then never spoken to — so the capture was silent and the tuner
+    recorded a false positive that had not happened. Across one log that produced **35 "false
+    wakes" against 4 real ones**, and `--replay` duly recommended raising the threshold, on a
+    machine whose owner was complaining he could not wake it.
+
+    Meanwhile 60 seconds of that same room, with LB deliberately silent, peaked at **0.005**.
+    A score of 0.767 is 150 times that. It was never the room, and no amount of silence
+    afterwards can make it so.
+
+    So a wake the room provably could not have produced is UNKNOWN when nothing follows —
+    evidence for neither side — rather than FALSE. That is the honest reading, and the cost is
+    stated plainly: **on a quiet machine there is now almost no FALSE evidence at all**, so the
+    tuner only moves downward, bounded by `floor`. That is correct when the room really is
+    quiet, and it is why `floor` exists. If false wakes are ever genuinely observed, raise
+    `room_ceiling` to what the room actually measures and they count again.
     """
     if voiced_s >= real_above_s:
         return Outcome.REAL
+    if score is not None and score > room_ceiling:
+        # Nothing was said, but the room cannot make this score. Evidence for neither side.
+        return Outcome.UNKNOWN
     if voiced_s < false_below_s:
         return Outcome.FALSE
     return Outcome.UNKNOWN
@@ -275,7 +320,7 @@ def _replay(path: str) -> int:
             m = cap_re.search(line)
             if m and pending is not None:
                 voiced = float(m.group(2))
-                tuner.observe(pending, classify_wake(voiced))
+                tuner.observe(pending, classify_wake(voiced, score=pending))
                 pending = None
 
     print(f"\nreplayed {seen} wakes from {path}")
