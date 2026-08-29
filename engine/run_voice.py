@@ -68,6 +68,10 @@ LOG = logging.getLogger("oddball.run")
 # again.
 PREBUFFER_FRAMES = 5        # 5 x 80ms = 0.40s
 
+# How often a wedged frame queue may say so. See the `queue.Full` branch in `_listen_thread`:
+# the condition is worth one line a second, not one line per frame.
+DROP_REPORT_EVERY_S = 1.0
+
 
 def _listen_thread(
     detector: WakeDetector,
@@ -78,6 +82,7 @@ def _listen_thread(
     in_turn: threading.Event | None = None,
     frames_q: "queue.Queue[np.ndarray] | None" = None,
     on_mic_lost=None,
+    capturing: threading.Event | None = None,
 ) -> None:
     """Pull frames from the mic and route them, until told to stop.
 
@@ -94,9 +99,37 @@ def _listen_thread(
     flaky microphone rather than as the deliberate mute they would be. This applies to the
     turn as much as to the detector — it is what stops his own answer being captured as your
     next question.
+
+    ## `in_turn` is not the same question as "is he listening right now" (2026-08-29)
+
+    It was being used as though it were, and a turn has three states rather than two: it is
+    capturing, or it is thinking, or it is speaking. Frames only mean anything in the first.
+
+    Handing them over in all three had two costs, and the second is worse than the first:
+
+    1. **The log.** A turn whose router leg took 286 seconds queued 200 frames, filled the
+       queue, and then logged `utterance buffer full` for every frame after that at 12.5 a
+       second. 8,530 lines in one morning.
+
+    2. **Stale audio, presented as live.** `frames_q` holds 16 seconds. When the turn finally
+       reached its next `_capture()` — the permission gate, asking whether to run a command —
+       the recorder was handed a backlog recorded BEFORE the question was asked, and read it
+       at memory speed, so `max_s` never fired. That is where "capture spoke: 18.08s audio,
+       0.96s voiced" comes from, and that capture transcribed to "Yes. Yes." and approved an
+       OS command. The voiced-ratio floor in `orchestrator/credible.py` now refuses it; this
+       stops it being recorded in the first place.
+
+    So `capturing` is the event that gates the handover, and `in_turn` keeps its original job:
+    it says the wake detector must not be fed, because a wake word inside a turn is a loop.
     """
     recent: deque[np.ndarray] = deque(maxlen=PREBUFFER_FRAMES)
     handed_over = False
+    # [frames dropped since the last report, when that report was]. The timestamp starts at
+    # 0.0 rather than `now`, and that is not a detail: it means the FIRST drop of a wedge is
+    # always reported at once, and only the repeats are throttled. Starting it at `now` made a
+    # burst shorter than the interval log nothing whatsoever — a silence that reads exactly
+    # like a working microphone, which is the failure this whole file exists to stop.
+    dropped = [0, 0.0]
     try:
         for frame in mic_frames(device):
             if stop.is_set():
@@ -104,6 +137,14 @@ def _listen_thread(
             if gate is not None and not gate.is_open():
                 continue
             if in_turn is not None and in_turn.is_set():
+                # Thinking or speaking: the turn is not listening, so these frames are not
+                # its next question and must not be queued as though they were. The prebuffer
+                # keeps rolling, so the moment it DOES start capturing it still gets the run-up.
+                if capturing is not None and not capturing.is_set():
+                    handed_over = False
+                    recent.append(frame)
+                    continue
+
                 if not handed_over:
                     # Hand the turn the moments just BEFORE the wake word fired, or it starts
                     # listening a beat after you already began the question.
@@ -116,10 +157,22 @@ def _listen_thread(
                     handed_over = True
                 try:
                     frames_q.put_nowait(frame)
+                    # The wedge cleared. Arm the immediate report again, so the NEXT burst is
+                    # announced when it starts rather than up to a second into it.
+                    dropped[1] = 0.0
                 except queue.Full:
                     # 200 frames is 16s, well past listen.max_s. If it is full something is
                     # wedged, and dropping the newest is better than blocking the microphone.
-                    LOG.warning("utterance buffer full — dropping a frame")
+                    #
+                    # **Counted, not narrated.** One line per dropped frame is 12.5 a second
+                    # for as long as the wedge lasts; the morning this was found it produced
+                    # 8,530 of them and buried everything else in the log. One line a second,
+                    # carrying the count, says the same thing and can still be read.
+                    dropped[0] += 1
+                    now = time.monotonic()
+                    if dropped[1] == 0.0 or now - dropped[1] >= DROP_REPORT_EVERY_S:
+                        LOG.warning("utterance buffer full — dropped %d frame(s)", dropped[0])
+                        dropped[0], dropped[1] = 0, now
                 continue
             handed_over = False
             recent.append(frame)
@@ -395,6 +448,9 @@ async def main(argv: list[str] | None = None) -> int:
     # `in_turn` switches the microphone thread from scoring the wake word to handing frames
     # to the turn. `frames_q` holds 200 of them — 16s, well past listen.max_s.
     in_turn = threading.Event()
+    # Set only while `Turn._capture` is actually reading. `in_turn` says a turn is running;
+    # this says he is listening, and they are different for most of a turn's wall clock.
+    capturing = threading.Event()
     frames_q: queue.Queue[np.ndarray] = queue.Queue(maxsize=200)
     turn_jobs: queue.Queue[object | None] = queue.Queue(maxsize=1)
     turn_thread = None
@@ -430,6 +486,20 @@ async def main(argv: list[str] | None = None) -> int:
                     continue          # the gate is shut while he talks; that is not an end
             return None
 
+        def drain_frames() -> None:
+            """Throw away anything queued while he was not listening.
+
+            Belt and braces over the `capturing` gate in `_listen_thread`: that gate stops the
+            queue filling, and this empties whatever was in flight when it closed. Cheap, and
+            the failure it guards against — a gate reading audio from before its own question —
+            is the one that approved a command on 2026-08-29.
+            """
+            while True:
+                try:
+                    frames_q.get_nowait()
+                except queue.Empty:
+                    return
+
         turn = Turn(
             recorder=UtteranceRecorder(
                 vad=build_vad(),
@@ -449,6 +519,8 @@ async def main(argv: list[str] | None = None) -> int:
             gate_tail_s=speech_cfg["gate_tail_s"],
             save_dir=Path(args.save_captures) if args.save_captures else None,
             stall_phrase=cfg.get("brain", {}).get("stall_phrase", ""),
+            capturing=capturing,
+            drain=drain_frames,
         )
 
         def turn_finished(result=None) -> None:
@@ -734,7 +806,8 @@ async def main(argv: list[str] | None = None) -> int:
         thread = threading.Thread(
             target=_listen_thread,
             args=(detector, device, on_detect, stop, None if args.no_gate else gate,
-                  in_turn if full_turn else None, frames_q if full_turn else None, mic_lost),
+                  in_turn if full_turn else None, frames_q if full_turn else None, mic_lost,
+                  capturing if full_turn else None),
             name="mic",
             daemon=True,
         )

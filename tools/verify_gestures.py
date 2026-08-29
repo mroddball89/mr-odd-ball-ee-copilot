@@ -525,6 +525,57 @@ def run() -> None:
     check(set(gc._PRIORITY) <= set(gc._VALID), "_PRIORITY names no token _VALID would reject")
     check(gc.MAX_HANDS == 2, "the detector is allowed both hands")
 
+    section("9. a machine with no camera is not asked twice")
+
+    # ## 40 seconds a gate, measured 2026-08-29
+    #
+    #     07:09:34  gesture read timed out after 20s
+    #     07:09:34  gate: nothing readable (camera NO_CAMERA) - asking again
+    #     07:10:04  gesture read timed out after 20s
+    #               -> gate unanswered -> declined
+    #
+    # Three times that morning, on a machine with no webcam. Two subprocess spawns per gate,
+    # 20 seconds each, to rediscover a fact about the hardware that had not changed.
+
+    probes = []
+    real_ask, real_python = gc._ask_sidecar, gc.SIDECAR_PYTHON
+    try:
+        gc.SIDECAR_PYTHON = "python"          # force the sidecar branch, never run it
+        gc._ask_sidecar = lambda py: (probes.append(1), "NO_CAMERA")[1]
+
+        gc.reset_camera_cache()
+        answers = [gc.get_gesture() for _ in range(4)]
+        check(answers == ["NO_CAMERA"] * 4, "four reads all answer NO_CAMERA")
+        check(len(probes) == 1,
+              f"but the camera is probed {len(probes)} time(s), not 4",
+              "" if len(probes) == 1 else
+              "each of these is a 20s subprocess timeout on the machine that reported this")
+
+        gc.reset_camera_cache()
+        check(len(probes) == 1, "the reset itself probes nothing")
+        gc.get_gesture()
+        check(len(probes) == 2,
+              "and a reset re-probes, so a webcam plugged in later is still found",
+              "a permanent latch would need a restart to see new hardware")
+
+        # **A real gesture is never remembered.** It is a live reading about a hand that has
+        # since moved; caching one would let a thumbs up approve a command it was not shown
+        # for, which is a security hole rather than a slow gate.
+        probes.clear()
+        seen = iter(["THUMBS_UP", "NONE", "THUMBS_UP"])
+        gc._ask_sidecar = lambda py: (probes.append(1), next(seen))[1]
+        gc.reset_camera_cache()
+        got = [gc.get_gesture() for _ in range(3)]
+        check(got == ["THUMBS_UP", "NONE", "THUMBS_UP"],
+              "a real gesture is read fresh every single time",
+              "" if len(probes) == 3 else f"only {len(probes)} probe(s) for 3 reads")
+        check(len(probes) == 3,
+              "the camera is asked once per read when it IS answering",
+              "a cached THUMBS_UP would approve a command the hand was not shown for")
+    finally:
+        gc._ask_sidecar, gc.SIDECAR_PYTHON = real_ask, real_python
+        gc.reset_camera_cache()
+
 
 def dump() -> int:
     """Print the raw metrics for each pose. What the live window shows, without a camera."""
