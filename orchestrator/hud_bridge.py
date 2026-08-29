@@ -46,9 +46,71 @@ from pathlib import Path
 
 from websockets.asyncio.server import serve
 from websockets.datastructures import Headers
+from websockets.exceptions import InvalidMessage
 from websockets.http11 import Response
 
 LOG = logging.getLogger("oddball.hud")
+
+# --- the assistant scanning its own port, and then logging a stack trace about it -------------
+#
+# 35 of these in `oddball.log` on 2026-08-29, one per turn, each a 15-line traceback at ERROR:
+#
+#     ERROR  opening handshake failed
+#     ...
+#     EOFError: connection closed while reading HTTP request line
+#     websockets.exceptions.InvalidMessage: did not receive a valid HTTP request
+#
+# **It is talking about itself.** `tools/system_state._is_listening` checks whether the face is
+# up by opening a TCP connection to 127.0.0.1:8765 and closing it — `connect_ex`, no request
+# sent, which is the correct and cheap way to ask "is something bound to this port". That is
+# also, from the server's side, precisely a client that connected and hung up before sending a
+# request line. `system_state.for_prompt()` runs once per turn through `tools/self_context.py`,
+# which is exactly the cadence in the log.
+#
+# The probe is not the bug. A browser preconnect, a health check, a port scanner and half of
+# Windows will do the same thing, and a server that prints a stack trace every time a stranger
+# knocks and walks away is a server whose ERROR level means nothing.
+#
+# **Narrow on purpose.** Only `InvalidMessage` *caused by* the peer vanishing is quietened. A
+# handshake that fails for a reason — a bad Origin, an HTTP/1.0 client, a missing Upgrade — is
+# a different exception and stays loud, because that one is LB's rig failing to connect.
+#
+# The logger is ours rather than the library's default `websockets.server`, because a filter
+# attached to a logger does NOT apply to its children: each connection wraps whatever `serve`
+# is given in a `logging.LoggerAdapter`, and an adapter delegates through to the underlying
+# logger, filters included. Handing in our own is what puts the filter on the emitting path.
+_WS_LOG = logging.getLogger("oddball.hud.ws")
+
+
+class _QuietPortProbe(logging.Filter):
+    """Drop the traceback a bare TCP probe produces, leaving one DEBUG line.
+
+    **Returns False rather than lowering the record's level**, and that is not stylistic.
+    `engine/run_voice.py` calls `logging.basicConfig(level=INFO)`, which gates on the ROOT
+    LOGGER and leaves both handlers at NOTSET — so a record downgraded to DEBUG is still
+    emitted by every handler and nothing is suppressed at all. Dropping it here and saying so
+    on `oddball.hud` puts the decision back where the level actually applies: silent at INFO,
+    one line under `--verbose`, a stack trace never.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.msg != "opening handshake failed":
+            return True
+        failure = record.exc_info[1] if record.exc_info else None
+        why = failure.__cause__ if failure is not None else None
+        if isinstance(failure, InvalidMessage) and isinstance(
+                why, (EOFError, ConnectionResetError, ConnectionAbortedError)):
+            LOG.debug("a client opened a connection and hung up without a request — "
+                      "a port probe, most likely our own liveness check (%s)",
+                      type(why).__name__)
+            return False
+        return True
+
+
+# Attached once, at import, rather than inside `start()` — a bridge that is stopped and started
+# again would otherwise stack a second identical filter on the same logger every time.
+_WS_LOG.addFilter(_QuietPortProbe())
+
 
 HUD_DIR = Path(__file__).resolve().parents[1] / "hud"
 
@@ -184,7 +246,7 @@ class HudBridge:
         """Start serving. Returns the server; use as `async with await bridge.start()`."""
         self._loop = asyncio.get_running_loop()
         server = await serve(self._handle, self._host, self._port,
-                             process_request=self._serve_page)
+                             process_request=self._serve_page, logger=_WS_LOG)
         shown = "localhost" if self._host in ("0.0.0.0", "") else self._host
         LOG.info("hud bridge listening on ws://%s:%d", self._host, self._port)
         LOG.info("open his face at  http://%s:%d/", shown, self._port)
