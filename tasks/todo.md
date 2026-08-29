@@ -2348,3 +2348,171 @@ must not go offline because a free tier rate-limited.
 nothing failed locally and a fresh clone would have died on import. Now in `requirements.txt`
 with the reason. Same class as the `pypdf` note at the bottom of that file, and
 `tools/verify_agents.py` is what found both.
+
+---
+
+# Reading the log instead of guessing — nine fixes in one day (2026-08-29)
+
+LB asked what was wrong, from the conversations he had actually had. The answer came out of
+`data/oddball.log` rather than out of the code, and almost every item below was found by
+reading what the machine had already written down. Nine commits, `52cc5a3` to `1de4c45`.
+
+## What the log said, before any of it was fixed
+
+Eleven turns between 07:06 and 07:31. Four took over two minutes; one took **342.92s**. In the
+same window: 8,530 dropped-frame warnings, 31 near misses against 5 wakes, 35 handshake
+tracebacks, and 20 paid API calls — a whole day's flash-lite budget by half past seven.
+
+## 1. Notes — three phrasings, three separate faults (52cc5a3)
+
+    07:18:02  "can you add to my note about the topic for my English research paper"  128.8s
+    07:20:27  "read me back the notes that you have for me"                           186.1s
+    07:24:45  "tell me what notes you have saved for me"                              302.8s
+
+- `_split_target` read only the words BEFORE the noun, so a note named after it left the
+  target empty. It now looks on both sides.
+- `_POSSESSION_TAIL` strips "that you have for me" — the second one resolved to a note called
+  `you have for`, and he said so out loud.
+- `"tell me"` joined `_PREAMBLE`, and **nothing longer**: "tell me what" would eat the
+  `_LIST` opener the utterance needs.
+- A LIST folder now requires a preposition; the old rule asked for a folder called
+  "you have saved for me" and reported the vault empty.
+
+Fixing the matcher alone would still have found nothing, so `find_notes` gained a **word
+overlap** tier (two words minimum, ties returned whole) and `_plain` learned to split on `_`
+and `-` — `normalise` DELETES them, so `peanut_butter.md` was unreachable by voice from the
+moment `save_to_vault` wrote it.
+
+## 2. The prompt said Raspberry Pi; the tool said PowerShell (e4bc5a8)
+
+Not a stale string — a **contradiction inside one request**, and a model averages those. The
+average was the right cmdlet around a Unix assumption:
+
+    Get-ChildItem -Path "$Home\Desktop"  ->  Cannot find path 'C:\Users\ironi\Desktop'
+
+`~/Desktop` does not exist here; OneDrive Known Folder Move redirects it. `os_controller`
+gained `user_folders()` via `SHGetKnownFolderPath`, resolved per turn:
+
+    Desktop    C:\Users\ironi\OneDrive\Desktop     redirected
+    Documents  C:\Users\ironi\OneDrive\Documents   redirected
+    Downloads  C:\Users\ironi\Downloads            not
+
+No composed path produces all three, which is the argument for the API over string-joining.
+
+## 3. Room tone approved a shell command (6a3f953)
+
+    07:24:10  capture spoke: 18.08s audio, 0.96s voiced  ->  "Yes. Yes."  ->  gate: True
+
+`is_yes` was not wrong. It reads what words MEAN and was handed words nobody said.
+`orchestrator/credible.py` asks the other question, in front of both the gate and the dispatch.
+Thresholds come from all 52 captures in the log, not the handful that prompted it — and that
+corpus **moved the numbers**: genuine speech goes down to 11.1% voiced ratio, and one real
+utterance measures 15 words per voiced second because the VAD undercounted a quiet sentence.
+
+Underneath it, the cause of those captures: **`in_turn` means "a turn is running" and was read
+as "he is listening"**. Frames were queued through the whole 286-second router hang;
+`frames_q` holds 16 seconds; the gate's next `_capture()` got audio recorded before its own
+question and ate it at memory speed, so a wall-clock `max_s` never fired. `capturing` is a
+second event, set for exactly the length of `_capture`, in a `finally`.
+
+Also here: a 20s router deadline falling through to GENERAL, and `NO_CAMERA` cached for ten
+minutes (a TTL, not a latch — a webcam plugged in later still works; and only NO_CAMERA is
+cached, because a THUMBS_UP is a live reading about a hand that has moved).
+
+## 4. He logged a stack trace every time he checked his own port (9caed62)
+
+35 fifteen-line ERRORs, one per turn. `system_state._is_listening` opens a TCP connection to
+127.0.0.1:8765 and closes it — which is, from the server's side, a client that hung up. A
+`logging.Filter` on a logger handed to `serve()`, returning **False** rather than lowering the
+level: `basicConfig(level=INFO)` gates on the root logger and leaves handlers at NOTSET, so a
+downgraded record is still emitted by every handler.
+
+## 5. The tuner reported a threshold it had not measured (092a5d8, 352783e)
+
+`--replay` printed "replayed 0 wakes" and then "settled at 0.300" — the hard-coded default,
+formatted exactly like a result. Its regex wanted the FileHandler format; `data/oddball.log`
+is the console stream.
+
+Then the deeper one. It counted **35 false wakes against 4 real**, and recommended raising the
+threshold on a machine whose owner could not wake it. The log caught the counter-example in
+the same second, from two processes on one microphone:
+
+    11:22:17  rig    wake: hey_mr_odd_ball (0.767)
+    11:22:17  meter  near miss: peaked 0.424
+
+LB was calibrating. `classify_wake` read silence as proof of a false wake, and that only holds
+if he always speaks after waking him.
+
+**threshold 0.76 -> 0.53.** 0.76 was not arbitrary: `verify_wake` measures the fixture band as
+[0.1461, 0.9771] and `POSITION_TARGET` 0.75 of it is 0.769. The rule was applied correctly to
+an unrepresentative input — the fixtures' quietest positive is 0.9771 and LB's quietest live
+call is 0.132. **The durable fix is the fixture set, not the number.**
+
+## 6. He said "sleep" twelve times and paid for every one (e1f160d)
+
+Three faults stacked, each hiding the next: no bare "sleep" in `_SLEEP_PHRASES` (excluded over
+a worry the end-anchor already answered); `_is_bare` stripped ONE phrase, so Whisper's doubling
+("Go to sleep, sleep.") failed the anchor; and `FREE_INTENTS` did not list "sleep", so even
+"goodnight" — which always matched — went to the paid router and came back labelled PERSONA,
+which `turn_finished` reads as NOT dismissed. **Saying "sleep" never put him to sleep.**
+
+Measured over every persona call ever logged: 36 API calls -> 8.
+
+## 7. The persona can run on this machine (36645c4)
+
+`persona_provider()` gained `"local"`, chosen by `ODDBALL_LOCAL_BASE_URL`. Ollama and
+llama.cpp both speak the OpenAI chat API, so it is the same `ChatOpenAI` branch pointed
+elsewhere. **Chosen by URL, never by model name** — `llama3.2:3b` has no "/" and `qwen2.5/3b`
+does.
+
+Measured from LB's own account the same day, which is the number that made this worth
+building: OpenRouter free is **50 requests/day** (429 at noon, `X-RateLimit-Remaining: 0`) and
+its own remedy hint says a one-time $10 credit unlocks **1000/day**. Gemini remains 20 per
+model NAME per day.
+
+## 8. Nine seconds of torch, in a turn about nothing (1de4c45)
+
+`vector_db.warm()`, from a daemon thread at start-up. `HF_HUB_OFFLINE=1` was tried first and
+**failed in the real process**: `huggingface_hub` reads it at import, `faster_whisper` imports
+it while loading base.en, and the rig logged "from the local cache" above 32 requests to
+huggingface.co. `local_files_only` on the constructor instead — scoped, import-order immune,
+and unable to stop faster-whisper fetching a model it does not have.
+
+    warm() cold   8.5s      a query after warming   0.016s
+    warm() again  0.000s    HF network calls        0  (was 32)
+
+## Review
+
+    verify_credible  71   verify_warmup    16   verify_router   216
+    verify_deafness  21   verify_autotune  27   verify_typed    104
+    verify_hud_quiet  8   verify_notes    142   verify_os_guard 119
+    verify_gestures  56   verify_engine   126   verify_launch   238
+    verify_agents    77   verify_wake      42   verify_gate_state 20
+
+New harnesses: `verify_credible`, `verify_deafness`, `verify_hud_quiet`, `verify_autotune`,
+`verify_warmup`. `verify_autotune` is one `audio/autotune.py` has named in its own docstring
+since it was written and which did not exist — which is how the replay parser stayed broken.
+
+## Still open
+
+- [ ] **25 seconds unexplained** on the agent leg. After the OpenRouter 200 came back at
+      12:03:43, nothing was logged until 12:04:08. `get_upcoming_deadlines` (0.02s),
+      `format_deadlines`, `self_context` and `add_message` were all timed and are instant.
+      The two adjacent timing lines both said "route" and meant different things; the outer
+      one now says **engine**, so the next occurrence is readable.
+- [ ] **The wake fixture set.** `models/` has no marginal call — nothing quiet, nothing from
+      across the room. Until it does, `verify_wake` will keep certifying thresholds that only
+      work when LB leans into the microphone. `--save-captures` is on and collecting.
+- [ ] **`start_oddball.bat` passes `--log` AND redirects stdout to the same file**, so the
+      FileHandler cannot open it ("Permission denied" at every start-up) and the log is always
+      the console format with no logger names. Harmless, and it is why the autotune regex
+      missed. Dropping `--log` from that line is the fix.
+- [ ] **Ollama.** LB is installing it and setting `ODDBALL_LOCAL_BASE_URL` /
+      `ODDBALL_PERSONA_MODEL`. The log will say `persona: local llama3.2:3b at ...` if it took.
+- [ ] **A live persona call through a local model** — the same gap the 2026-08-28 entry above
+      records for OpenRouter: everything is construction and wiring until something asks it a
+      question and a tool call comes back.
+- [ ] **Do NOT widen the canned persona tier without log evidence.** Of 18 persona calls ever
+      logged, 5 are now blocked as room tone and 9 answered free; the remaining 4 are all
+      genuine. There is no measured demand for more canned intents, and inventing a corpus is
+      L15.
