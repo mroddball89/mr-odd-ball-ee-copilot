@@ -1161,26 +1161,78 @@ def _recognizer() -> GestureRecognizer:
     return _RECOGNIZER
 
 
+# --- not asking a question this machine has already answered ---------------------------------
+#
+# ## 40 seconds a gate, on a machine with no webcam
+#
+# Measured 2026-08-29 from `oddball.log`. The permission gate reads voice, then the camera, and
+# it gets `GATE_ATTEMPTS = 2` tries:
+#
+#     07:09:34  gesture read timed out after 20s
+#     07:09:34  gate: nothing readable (camera NO_CAMERA) - asking again
+#     07:10:04  gesture read timed out after 20s
+#               -> gate unanswered -> declined
+#
+# Three times that morning. Forty seconds of a turn spent spawning a subprocess to rediscover
+# that a camera absent at 07:09:34 was still absent at 07:10:04, and the turn LB was waiting on
+# ran 171 seconds end to end.
+#
+# **Only NO_CAMERA is remembered, never a gesture.** A thumbs up is a live reading about a hand
+# that has since moved; caching one would let a gesture approve a command it was not shown for,
+# which is a security hole rather than a slow gate. The absence of a camera is a fact about the
+# machine, and that is the only kind of answer worth keeping.
+#
+# **A TTL, not a latch, and the difference is a USB port.** Latching for the life of the
+# process means plugging a webcam in never takes effect until a restart, which is the kind of
+# fix that gets reported as a new bug. Ten minutes bounds the waste at one probe per ten
+# minutes - down from one per gate attempt - while still noticing hardware that arrives.
+NO_CAMERA_CACHE_S = 600.0
+
+_no_camera_until: float = 0.0
+
+
+def reset_camera_cache() -> None:
+    """Forget that the camera was missing. For harnesses, and for a deliberate re-probe."""
+    global _no_camera_until
+    _no_camera_until = 0.0
+
+
 def get_gesture() -> str:
     """What the camera sees right now. **Never raises, never dies, never blocks forever.**
 
     Always out-of-process in the parent — see `_ask_sidecar` for why that is a requirement and
     not an optimisation. In the child (`--once`), this is the in-process read.
+
+    A recent NO_CAMERA is answered from memory rather than by spawning a worker that will time
+    out again; see `NO_CAMERA_CACHE_S`. Nothing else is ever cached.
     """
+    global _no_camera_until
+
     if _DISABLED:
+        return "NO_CAMERA"
+
+    now = time.monotonic()
+    if now < _no_camera_until:
+        LOG.debug("no camera %.0fs ago; not probing again for %.0fs",
+                  NO_CAMERA_CACHE_S - (_no_camera_until - now), _no_camera_until - now)
         return "NO_CAMERA"
 
     python = sidecar_python()
     if python:
-        return _ask_sidecar(python)
+        seen = _ask_sidecar(python)
+    else:
+        # The child. This is the only place mediapipe is ever constructed, and if it takes the
+        # process down with it, the parent sees a returncode.
+        try:
+            seen = _recognizer().get_gesture()
+        except Exception as exc:                                          # noqa: BLE001
+            LOG.warning("gesture read failed (%s: %s)", type(exc).__name__, exc)
+            seen = "NO_CAMERA"
 
-    # The child. This is the only place mediapipe is ever constructed, and if it takes the
-    # process down with it, the parent sees a returncode.
-    try:
-        return _recognizer().get_gesture()
-    except Exception as exc:                                              # noqa: BLE001
-        LOG.warning("gesture read failed (%s: %s)", type(exc).__name__, exc)
-        return "NO_CAMERA"
+    if seen == "NO_CAMERA":
+        _no_camera_until = time.monotonic() + NO_CAMERA_CACHE_S
+        LOG.info("no camera — not probing again for %.0fs", NO_CAMERA_CACHE_S)
+    return seen
 
 
 def gesture_approves() -> bool:

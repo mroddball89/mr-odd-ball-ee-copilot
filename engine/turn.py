@@ -48,7 +48,8 @@ from pathlib import Path
 
 import numpy as np
 
-from audio.listen import Outcome, UtteranceRecorder
+from audio.listen import SAMPLE_RATE_HZ, Outcome, UtteranceRecorder
+from orchestrator import credible
 from orchestrator.classify_yes import is_yes
 
 LOG = logging.getLogger("oddball.turn")
@@ -128,7 +129,9 @@ class Turn:
     def __init__(self, recorder: UtteranceRecorder, transcriber, engine, speaker, bridge,
                  gate, frames, greeting: list[str], gate_tail_s: float,
                  thinking_state: str = "thinking", save_dir: "Path | None" = None,
-                 stall_phrase: str = "") -> None:
+                 stall_phrase: str = "",
+                 capturing: "threading.Event | None" = None,
+                 drain=None) -> None:
         self._rec = recorder
         self._stt = transcriber
         self._engine = engine
@@ -149,6 +152,11 @@ class Turn:
         # at ~890ms. If a HARDWARE or FIRMWARE turn lands past ~2.5s, this is the knob — set it
         # in config and measure the perceived wait, not the total.
         self._stall = stall_phrase
+        # Set for exactly as long as `_capture` is reading, so the microphone thread knows the
+        # difference between "a turn is running" and "he is listening right now". Optional, so
+        # a harness can build a Turn without one and the behaviour is what it always was.
+        self._capturing = capturing
+        self._drain = drain
 
     def _save(self, audio, heard: str) -> None:
         """Write the captured utterance to a WAV, for looking at rather than guessing about.
@@ -176,15 +184,37 @@ class Turn:
             LOG.exception("could not save the capture")
 
     def _capture(self):
-        """Pump frames into the recorder until it decides the utterance is over."""
+        """Pump frames into the recorder until it decides the utterance is over.
+
+        **Announces that it is listening, and throws away whatever arrived while it was not.**
+        Both halves matter and the second is the one that was a bug: `frames_q` holds 16
+        seconds, and a turn that spent 286 seconds in the router came back to a queue full of
+        audio recorded before its question was even asked. The recorder consumed that backlog
+        at memory speed, so the wall-clock `max_s` never fired, and the permission gate read a
+        capture that was 18.08 seconds long with 0.96 seconds of voice scattered through it.
+        It transcribed to "Yes. Yes." and a command ran.
+
+        `orchestrator/credible.py` refuses that capture now. This stops it existing.
+        """
         self._rec.reset()
-        while True:
-            frame = self._frames()
-            if frame is None:
-                return None                     # shutting down
-            done = self._rec.feed(frame)
-            if done is not None:
-                return done
+        if self._drain is not None:
+            self._drain()
+        if self._capturing is not None:
+            self._capturing.set()
+        try:
+            while True:
+                frame = self._frames()
+                if frame is None:
+                    return None                 # shutting down
+                done = self._rec.feed(frame)
+                if done is not None:
+                    return done
+        finally:
+            # In a `finally` because every exit from that loop — a capture, a shutdown, or an
+            # exception out of the recorder — must put the microphone back. A `capturing` flag
+            # left set is the original bug with extra steps.
+            if self._capturing is not None:
+                self._capturing.clear()
 
     def _say(self, text: str, timings: Timings) -> None:
         """Speak, with the mic gated and his mouth driven by the audio."""
@@ -291,6 +321,25 @@ class Turn:
         t.stt_s = heard.took_s
         t.heard = heard.text
         self._save(capture.audio, heard.text)
+
+        # **Is there any reason to believe he said that?** `base.en` hands back a sentence for
+        # near-silence rather than an empty string, and on 2026-08-29 at 07:06:08 "Thank you
+        # for watching." — from 0.08s of voiced audio in 2.48s — was routed to PERSONA and
+        # cost a paid call out of a twenty-a-day budget.
+        #
+        # **The capture is saved BEFORE this check**, deliberately. A rejected turn is exactly
+        # the recording worth having: it is the evidence for retuning the floors, and dropping
+        # it would leave the thresholds unfalsifiable.
+        credit = credible.assess(heard.text, capture.speech_s,
+                                 capture.audio.size / SAMPLE_RATE_HZ)
+        if not credit:
+            # Silence, not an apology. These are turns where NOBODY SPOKE, and answering the
+            # room with "sorry, didn't catch that" teaches LB to talk back to his own noise
+            # floor. `Outcome.SILENT` already ends a turn without a word; this is that case
+            # arriving one step later, after the transcriber invented something.
+            LOG.info("not acting on %r — %s", heard.text, credit.reason)
+            t.extras.append(f"not credible: {credit.reason}")
+            return t
 
         t0 = time.monotonic()
         self._answer(heard.text, t)
@@ -431,8 +480,28 @@ class Turn:
             if capture is not None and capture.outcome is not Outcome.SILENT:
                 got = self._stt.transcribe(capture.audio)
                 t.stt_s += got.took_s          # a second capture is a second transcription
-                answer = got.text
-                LOG.info("gate: heard %r -> %s", answer, is_yes(answer))
+
+                # **THE CHECK THAT MATTERS MOST IN THIS FILE.** On 2026-08-29 at 07:24:10 an
+                # OS command ran because "Yes. Yes." came back from 0.96 seconds of voiced
+                # audio scattered through 18.08 seconds of room tone. The same transcript, at
+                # the same voiced duration, appears twice more in the log on 2026-08-28.
+                #
+                # `is_yes` was not wrong and needs no change: it reads what words MEAN, and it
+                # was handed words nobody said. This is the question nothing was asking — were
+                # there any words at all — and it belongs in front of `is_yes`, not inside it.
+                #
+                # Rejecting leaves `answer` as "", which this loop already handles: look at
+                # the camera, ask once more, then decline. **A decline is what silence means
+                # here**, so a false reject cannot do anything worse than make LB repeat
+                # himself, while a false accept runs a command he never approved.
+                credit = credible.assess(got.text, capture.speech_s,
+                                         capture.audio.size / SAMPLE_RATE_HZ)
+                if credit:
+                    answer = got.text
+                    LOG.info("gate: heard %r -> %s", answer, is_yes(answer))
+                else:
+                    LOG.info("gate: ignoring %r — %s", got.text, credit.reason)
+                    t.extras.append(f"gate not credible: {credit.reason}")
             else:
                 t.extras.append("no answer to the gate")
 

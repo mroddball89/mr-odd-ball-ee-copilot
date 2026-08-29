@@ -55,6 +55,9 @@ _k = os.environ.get("GOOGLE_API_KEY", "").strip()
 if len(_k) < 20 or any(p in _k.lower() for p in ("paste", "here", "your-key", "xxx")):
     os.environ["GOOGLE_API_KEY"] = "harness-not-a-real-key-but-long-enough-to-pass"
 
+import numpy as np                                                    # noqa: E402
+
+from audio.listen import SAMPLE_RATE_HZ, Capture, Outcome             # noqa: E402
 from engine.response import Card, CardKind, Pending, Response         # noqa: E402
 from engine.turn import Turn                                          # noqa: E402
 from orchestrator.classify_yes import is_yes                          # noqa: E402
@@ -270,10 +273,6 @@ class VoiceGateHarness:
         self.captures = 0
         self.camera_checks = 0
 
-        class _Cap:
-            outcome = "SPOKE"                            # never Outcome.SILENT
-            audio = None                                 # _stt is faked; nothing reads it
-
         harness = self
 
         class _Stt:
@@ -287,7 +286,20 @@ class VoiceGateHarness:
                 h.text, h.took_s = text, 0.1
                 return h
 
-        self.turn._capture = lambda: _Cap()
+        # **The REAL `Capture`, not a hand-rolled stand-in.** This was a local class with
+        # `outcome = "SPOKE"` and `audio = None`, on the reasoning that the transcriber is
+        # faked so nothing reads them. That stopped being true on 2026-08-29, when
+        # `_spoken_gate_answer` started asking the capture how much of it was voiced — and the
+        # double had no answer, so this whole section died with an AttributeError.
+        #
+        # The numbers are LB's own, from `oddball.log` 07:06:54: 0.40s of voice in 2.72s of
+        # audio, which is what a genuine spoken "Yes." measures. They have to be a REAL
+        # confirmation, because `orchestrator/credible.py` now refuses one that is not, and a
+        # fixture that could not clear that floor would test the floor instead of the gate.
+        self.turn._capture = lambda: Capture(
+            outcome=Outcome.SPOKE,
+            audio=np.zeros(int(2.72 * SAMPLE_RATE_HZ), dtype=np.float32),
+            speech_s=0.40, waited_s=0.0)
         self.turn._stt = _Stt()
 
     def run(self):

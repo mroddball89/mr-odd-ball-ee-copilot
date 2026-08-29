@@ -43,6 +43,8 @@ from __future__ import annotations
 
 import logging
 import re
+import os
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -50,6 +52,16 @@ from pathlib import Path
 from engine.response import Card, CardKind, Pending, Response
 from engine.split import split
 from router import AgentRoute, router_agent
+
+# How long the router leg may take before the turn gives up on it and goes to GENERAL.
+#
+# 20 seconds is deliberately generous: the routes that WORK land in 0.77-0.88s, so this is
+# more than twenty times the normal cost and cannot be hit by an ordinary slow day. It exists
+# for the pathology measured on 2026-08-29, where four routes took 91s, 127s, 162s and 286s
+# and every one of them returned 200 OK. See `Engine._route_within_deadline`.
+#
+# Overridable, because the right number on a worse connection is not this one.
+ROUTER_DEADLINE_S = float(os.environ.get("ODDBALL_ROUTER_DEADLINE_S", "20"))
 
 LOG = logging.getLogger("oddball.engine")
 
@@ -500,11 +512,22 @@ class Engine:
                         f"FreeTier for {ROUTER_MODEL} (known locally, no request was sent)")
 
                 t0 = time.monotonic()
-                decision = router_agent(text)
+                decision = self._route_within_deadline(text)
                 t.route_s = time.monotonic() - t0
-                t.route = decision.destination.value
-                LOG.info("route %r -> %s (%s)", text, t.route, decision.reasoning)
-                destination = decision.destination
+                if decision is None:
+                    # The router never came back. GENERAL is the documented catch-all and the
+                    # only route that can still file an upload, so it is the least wrong place
+                    # to land — but say so in the log and the Turnlog, because a silent
+                    # fallthrough would look exactly like a router that chose GENERAL.
+                    destination = AgentRoute.GENERAL
+                    t.route = destination.value
+                    t.extras.append(f"router deadline {ROUTER_DEADLINE_S:g}s -> general")
+                    LOG.warning("router did not answer within %gs; sending %r to GENERAL",
+                                ROUTER_DEADLINE_S, text)
+                else:
+                    t.route = decision.destination.value
+                    LOG.info("route %r -> %s (%s)", text, t.route, decision.reasoning)
+                    destination = decision.destination
 
             t0 = time.monotonic()
             if corpus is not None:
@@ -523,6 +546,59 @@ class Engine:
         response = self._with_deadline_reminder(response, t)
         add_message("assistant", response.raw or response.speech)
         return response
+
+    def _route_within_deadline(self, text: str):
+        """`router_agent(text)`, but never for longer than `ROUTER_DEADLINE_S`.
+
+        Returns:
+            The `RouteDecision`, or **None when the deadline passed** — the caller sends that
+            to GENERAL. Exceptions from the router are re-raised unchanged, because the quota
+            latch and the 429 handling above both read them.
+
+        ## Why a wall clock and not a retry setting
+
+        Measured 2026-08-29, from `oddball.log`. Four routes on `gemini-3.5-flash-lite`, every
+        one of them eventually returning **HTTP 200**:
+
+            "organize the STL files"       90,984 ms
+            "add to my note"             126,844 ms
+            "read me back the notes"     162,453 ms
+            "tell me what notes"         285,985 ms
+
+        Two other routes the same morning took 766 ms and 875 ms. Same model, same key, some
+        of them in the same minute. Nothing failed, nothing retried, and `LLM_MAX_RETRIES = 0`
+        was already in force — so none of the existing protections applied. A single request
+        simply took four and three quarter minutes, and the whole assistant waited for it.
+
+        **The thread is abandoned, not killed**, because there is no way to cancel a blocking
+        call inside the google-genai stack. It is a daemon, so it cannot hold up shutdown, and
+        its answer is discarded if it ever arrives. The request was already sent, so its quota
+        is already spent either way; what this reclaims is LB's time, not his budget.
+
+        The one thing lost by abandoning it: if that late answer would have been a 429, the
+        quota latch does not learn from it. That costs one wasted call on some later turn,
+        against 286 seconds of silence now.
+        """
+        result: dict = {}
+
+        def work() -> None:
+            try:
+                # Resolved from module globals at call time, NOT captured. `verify_router.py`
+                # monkeypatches `core.router_agent` to prove which turns reach the router, and
+                # binding it at import would route that harness straight past its own stub.
+                result["decision"] = router_agent(text)
+            except BaseException as exc:                               # noqa: BLE001
+                result["error"] = exc
+
+        worker = threading.Thread(target=work, name="router-deadline", daemon=True)
+        worker.start()
+        worker.join(ROUTER_DEADLINE_S)
+
+        if worker.is_alive():
+            return None
+        if "error" in result:
+            raise result["error"]
+        return result.get("decision")
 
     # Intents allowed to answer WITHOUT consulting the router. Every one is a lookup with a
     # single right answer that no model improves on.
@@ -976,7 +1052,11 @@ class Engine:
         if not request.content:
             self.note_draft = NoteDraft(op="append", awaiting="content", path=path)
             t.extras.append("note: awaiting content to append")
-            return self._say(f"What should I add to {request.target}?",
+            # `path.stem`, not `request.target`. Since `find_notes` gained a word-overlap tier
+            # the two can legitimately differ — "my note about the topic for my English
+            # research paper" resolves to `english research question` — and the name he hears
+            # back is his only chance to catch a wrong resolution BEFORE he dictates into it.
+            return self._say(f"What should I add to {path.stem}?",
                              raw=f"Waiting for text to append to {path}.")
 
         return self._write_draft(
@@ -1056,7 +1136,10 @@ class Engine:
         entries = len(view.entries)
         detail = (f"{view.rel}\n{entries} entr{'y' if entries == 1 else 'ies'}, {size} bytes\n\n"
                   f"{view.body}")
-        spoken = f"Delete your {request.target} note? It's got {entries} " \
+        # The RESOLVED name again, on the one path where getting it wrong destroys something.
+        # The card already carries the full path; this makes the spoken question agree with it,
+        # so approving by voice approves the file the screen is showing.
+        spoken = f"Delete your {path.stem} note? It's got {entries} " \
                  f"{'entry' if entries == 1 else 'entries'} in it."
 
         proposed = Response(

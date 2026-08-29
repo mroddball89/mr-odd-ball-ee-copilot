@@ -998,3 +998,88 @@ utterances into **LB's real conversation log** — `memory_manager.MEMORY_FILE` 
 relative string with no override, the one persistent store in the repo that had neither. Those
 turns were being injected into every agent prompt as things he had recently said. L22 again,
 from the other direction: an old file, and new harnesses that became writers to it.
+
+---
+
+## L28 — A Windows path in a Python string is an escape sequence, and the module stops importing
+
+Migrating `agents/os_agent.py` off the Raspberry Pi prompt meant putting a real path into it —
+`C:\Users\ironi\OneDrive\Desktop` — because the whole point of the fix was that the model should
+quote a fact instead of composing `$Home\Desktop`. Doing that broke the file three times in a
+row, in three different strings:
+
+    OS_PROMPT_TEMPLATE = """...C:\Users\..."""   SyntaxError: truncated \UXXXXXXXX escape
+    the module docstring                          same
+    propose_launch's docstring                    same
+
+`\U` opens an eight-digit unicode escape. `C:\Users` is therefore not a path, it is a malformed
+escape, and the failure is not a wrong string — **the module does not import at all.** Nothing
+downstream of it runs. `\N` and `\x` behave the same way; `\D` and `\O` are merely deprecated,
+which is worse, because those pass today and warn.
+
+### The rule
+
+**Any string in this repo that contains a Windows path gets the `r` prefix — docstrings
+included.** Now that the target is Windows, that is prompts, examples, comments-inside-prose,
+and every harness fixture. `agents/os_agent.py` carries the reasoning at both of its raw strings
+so the next person to add a path does not delete the `r` as noise.
+
+### The part that generalises past the escape
+
+The same bug bit *the patch scripts writing the fix*, twice, for the same reason — a heredoc'd
+`python - <<'EOF'` doing `s.replace(old, new)` is itself Python source, and `new` held the path.
+One of them was worse than a SyntaxError: `\b` in a non-raw literal is a **backspace character**,
+so a regex meant to read `\s*\b(?:that\s+)?...` was written to disk containing `\x08`, compiled
+without complaint, and silently matched nothing. It was caught only because the function it
+belonged to was tested against real utterances immediately after being written.
+
+So: when a fix is applied by a generated script, the script is code too, and a string that
+survives one layer of quoting can still be mangled by the next. **Test the value, not the
+edit** — `print(pattern.pattern)` and run the function on a real input. A `replace()` that
+reports success has proved that the text was written, and nothing whatever about what it says.
+
+---
+
+## L29 — A flag that answers a coarser question than the one being asked
+
+`engine/run_voice.py` had one event, `in_turn`, and the microphone thread used it to decide
+where frames go. It means **a turn is running**. It was being read as **he is listening**, and
+those are different for most of a turn's wall clock — a turn captures for two seconds, then
+thinks for anything up to five minutes, then speaks.
+
+Two failures came out of that single conflation, and only the small one was visible:
+
+    8,530 "utterance buffer full" lines in one morning, at 12.5 a second
+    a permission gate that read 16 seconds of audio recorded BEFORE its own question
+
+The second one approved a shell command. `frames_q` holds 200 frames, the queue was being
+filled the whole time the turn was thinking, and when the gate finally called `_capture()` the
+recorder consumed that backlog at memory speed. `UtteranceRecorder` measures `max_s` against
+the *wall clock*, so a 15-second cap never fired on 16 seconds of buffered audio: the log shows
+`capture spoke: 18.08s audio, 0.96s voiced`, longer than the configured maximum, and it
+transcribed to "Yes. Yes."
+
+### The rule
+
+**When a flag is read somewhere it was not written for, check that it answers that question and
+not merely a related one.** `in_turn` was correct for its own job — do not feed the wake
+detector, because a wake word inside a turn is a loop. It was never a statement about the
+microphone. The fix was a second event, `capturing`, set for exactly the length of
+`Turn._capture`, in a `try/finally` so that no exit path can leave it raised.
+
+The tell was there in the log for anyone reading it: a capture longer than `max_s`. A number
+that exceeds its own configured limit is never a tuning problem — it means the thing being
+measured is not the thing the limit describes.
+
+### And the check that hid the throttle bug for a whole run
+
+Rate-limiting the dropped-frame warning to one line a second seemed obviously right, and the
+first version started its clock at `time.monotonic()`. So a burst shorter than one second
+logged **nothing at all** — a silence indistinguishable from a healthy microphone, in the one
+place whose entire job is to report that the microphone is not being read.
+
+It passed. The harness check was `check(bool(drops) or frames_q.qsize() < 310, ...)`, and the
+second clause was true regardless, so the assertion could not fail. **An `or` in a check is
+almost always a check that has been widened until it stopped biting** — the honest version was
+`check(bool(drops), ...)`, which went red immediately. Initialise the throttle's clock to 0.0
+so the first event of a burst always reports; throttle the repeats, never the onset.
