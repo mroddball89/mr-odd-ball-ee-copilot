@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""
+# The module docstring is RAW: it quotes real Windows paths, and \U in C:\Users is a
+# unicode escape that stops this file importing. Same rule as OS_PROMPT_TEMPLATE below.
+r"""
 Module:  os_agent.py
-Purpose: Control the Pi from a spoken request — with LB's approval, never without.
+Purpose: Control this Windows PC from a spoken request — with LB's approval, never without.
 Author:  LB
 Date:    2026-08-18 (split into propose/resume 2026-08-19)
 
@@ -24,9 +26,10 @@ answer. Silence, a mumble, a timeout and a refusal all decline — see `orchestr
 `Pending.spoken` and `Pending.shown` are different on purpose, and this is the part worth
 being careful about.
 
-Reading `cat /sys/class/thermal/thermal_zone0/temp` out loud gives "cat slash sys slash class
-slash thermal slash thermal underscore zone zero slash temp", which is unusable as a question —
-LB cannot judge what he is approving from it. So the model supplies a plain description for
+Reading `Get-ChildItem -Path 'C:\Users\ironi\OneDrive\Desktop' -Filter *.stl` out loud
+gives "get dash child item dash path c colon backslash users backslash ironi backslash one
+drive backslash desktop dash filter star dot s t l", which is unusable as a question — LB
+cannot judge what he is approving from it. So the model supplies a plain description for
 the ear, and the **exact** command goes on a card for the eye, rendered BEFORE the question is
 asked.
 
@@ -46,20 +49,57 @@ from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Pending, Response
 from engine.split import SPOKEN_INSTRUCTION, split
 from tools.memory_manager import format_memory_for_llm
-from tools.os_controller import KINDS, Outcome, execute_terminal_command, run_command
+from tools.os_controller import (KINDS, Outcome, execute_terminal_command,
+                                 folders_for_prompt, run_command)
 
-OS_PROMPT_TEMPLATE = """
-You are an expert Linux System Administrator running on a Raspberry Pi.
-You have access to the system terminal via the `execute_terminal_command` tool.
+# ## The prompt says Windows because the machine is Windows (2026-08-29)
+#
+# It said "You are an expert Linux System Administrator running on a Raspberry Pi" for three
+# days after the Pi was retired, while `tools/os_controller.execute_terminal_command` — the
+# only tool bound to this agent — told the same model, in its own docstring, that it was
+# running PowerShell on Windows 11.
+#
+# A contradiction inside one prompt does not fail loudly. It gets **averaged**, and the average
+# is a PowerShell command carrying a Unix assumption: `Get-ChildItem -Path "$Home\Desktop"` is
+# the right cmdlet wrapped around `~/Desktop`, and it is the exact command that failed on
+# 2026-08-29 at 07:17:19 after LB had approved it. The example underneath did not help — it
+# read `cat /sys/class/thermal/thermal_zone0/temp`, a path with no meaning on this machine, and
+# an example is the strongest instruction in a prompt.
+#
+# So: one platform, stated once, with examples from the platform it names, and the real folder
+# paths handed in rather than left to be composed. See `os_controller.folders_for_prompt`.
+# **A raw string, and it has to be.** The example below quotes a real Windows path, and
+# `\U` in `C:\Users` is a unicode escape in a plain literal — the module stops importing
+# entirely, which is how this was caught. Any path added here keeps the `r` prefix honest.
+OS_PROMPT_TEMPLATE = r"""
+You are an expert Windows 11 System Administrator. The shell you write for is Windows
+PowerShell 5.1 (powershell.exe), reached through the `execute_terminal_command` tool.
 
+Write PowerShell. Not bash, not cmd:
+- Cmdlets, not coreutils. Get-ChildItem, not ls. Get-Content, not cat. Remove-Item, not rm.
+  Get-Process, not ps. Get-CimInstance, not /proc.
+- Environment variables are $env:NAME — never %NAME% and never a bare $NAME.
+- Paths use backslashes, and any path containing a space must be quoted.
+- PowerShell 5.1 has no && and no || operators. Separate commands with a semicolon.
+- There is no /sys, no /proc and no /etc on this machine, and no sudo. Nothing that reads a
+  file under those paths can work here.
+- The commands run with -NoProfile, so rely only on built-in cmdlets.
+{folders}
 {chat_history}
 
 EXAMPLE 1:
-User: What is the current CPU temperature of the Pi?
-AI: I will check the thermal zone file to get the CPU temperature.
-[Action: AI triggers execute_terminal_command with args: command="cat /sys/class/thermal/thermal_zone0/temp"]
-Result: Terminal Output: 45000
-AI: The current CPU temperature of the Raspberry Pi is 45.0°C.
+User: How much disk space have I got left?
+AI: I will ask the drive holding the user profile how much space is free.
+[Action: AI triggers execute_terminal_command with args: command="Get-PSDrive C | Select-Object Used, Free"]
+Result: Terminal Output: Used Free  152.6 GB 85.2 GB
+AI: You have about 85 gigabytes free on the C drive.
+
+EXAMPLE 2:
+User: What STL files are sitting on my desktop?
+AI: I will list the STL files in the desktop folder given above, using its real path.
+[Action: AI triggers execute_terminal_command with args: command="Get-ChildItem -Path 'C:\Users\ironi\OneDrive\Desktop' -Filter *.stl -File | Select-Object Name, Length"]
+Result: Terminal Output: bracket.stl 41234  mount.stl 88210
+AI: There are two STL files on your desktop, bracket and mount.
 
 User Question: {question}
 """ + SPOKEN_INSTRUCTION
@@ -69,7 +109,7 @@ User Question: {question}
 # is a description of intent; a regex over the command text could only ever produce a
 # description of syntax.
 DESCRIBE_PROMPT = """
-You are about to ask permission to run a command on a Raspberry Pi. The person you are asking
+You are about to ask permission to run a command on a Windows 11 PC. The person you are asking
 will HEAR your question, not read it, so the command itself must not appear in it.
 
 The command is: {command}
@@ -79,12 +119,12 @@ English. No file paths, no flags, no command names, no symbols.
 
 Good: "I want to check the CPU temperature. Should I?"
 Good: "I want to list what's in your home folder. Go ahead?"
-Bad:  "Should I run cat /sys/class/thermal/thermal_zone0/temp?"
+Bad:  "Should I run Get-CimInstance Win32_Processor?"
 
 Write only the question.
 """
 
-_FALLBACK_QUESTION = "I want to run a command on the Pi. It's on the screen. Should I?"
+_FALLBACK_QUESTION = "I want to run a command on your PC. It's on the screen. Should I?"
 
 # What he SAYS for each way an action can end. Lives here, not in `tools/`, because the tools
 # must stay free of persona — they report facts, this file decides how he puts them.
@@ -161,7 +201,11 @@ def propose_os_action(query: str) -> Response:
 
     history = format_memory_for_llm()
     prompt_template = ChatPromptTemplate.from_template(OS_PROMPT_TEMPLATE)
-    prompt = prompt_template.format(chat_history=history, question=query)
+    # Resolved per turn rather than at import. OneDrive can redirect a folder while the process
+    # is running, and a path frozen at start-up is the same class of stale fact this prompt was
+    # just fixed for.
+    prompt = prompt_template.format(chat_history=history, question=query,
+                                    folders=folders_for_prompt())
 
     response = llm_with_tools.invoke(prompt)
 
@@ -183,10 +227,10 @@ def propose_os_action(query: str) -> Response:
 
 
 def propose_launch(app: str, spoken: str) -> Response:
-    """Ask whether to open `app`. **Costs no model call at all.**
+    r"""Ask whether to open `app`. **Costs no model call at all.**
 
     `_describe()` exists because a shell string is unspeakable — reading
-    `cat /sys/class/thermal/thermal_zone0/temp` aloud is unusable as a question. But "Want me
+    `Get-ChildItem -Path 'C:\Users\ironi\OneDrive\Desktop'` aloud is unusable as a question. But "Want me
     to open Firefox?" is already a sentence, so the second Gemini call that produced it is pure
     waste. Together with the free intent in `orchestrator/launch_intent.py`, that takes a
     launch from three API calls to zero.
@@ -254,7 +298,7 @@ _WORTH_REMEMBERING: dict[str, str] = {
     "blocked":       "never propose this again — the safety list refuses it, and correctly",
     "crash":         "",
     "no-display":    "there is no screen up; do not offer to open applications until there is",
-    "not-installed": "this is not installed on this Pi; say so instead of offering to open it",
+    "not-installed": "this is not installed on this PC; say so instead of offering to open it",
     "unknown-app":   "this app is not in the catalogue; do not claim you can open it",
     "ambiguous":     "this name matches several apps; ask which one rather than guessing",
     "launch-failed": "",

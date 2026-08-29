@@ -128,14 +128,117 @@ schema the model sees and `run_os_agent()` still wants prose.
 
 from __future__ import annotations
 
+import ctypes
+import logging
+import os
 import re
 import subprocess
 import sys
+from ctypes import wintypes
 from dataclasses import dataclass
+from pathlib import Path
 
 from langchain_core.tools import tool
 
 TIMEOUT_S = 15
+
+LOG = logging.getLogger("oddball.os")
+
+# --- where LB's folders actually are ----------------------------------------------------------
+#
+# ## `$Home\Desktop` does not exist on this machine, and the model kept writing it
+#
+# Measured 2026-08-29 07:17:19, recorded in `vault/reflections.md` — the OS agent proposed
+#
+#     Get-ChildItem -Path "$Home\Desktop" -File | Select-Object Name, Extension
+#
+# LB approved it, and PowerShell answered:
+#
+#     Cannot find path 'C:\Users\ironi\Desktop' because it does not exist.
+#
+# It does not exist because **OneDrive Known Folder Move has redirected it** to
+# `C:\Users\ironi\OneDrive\Desktop`. That is not an exotic setup; it is the default on a
+# Windows 11 machine signed into a Microsoft account, which is this one. Every guess a model
+# can make about the desktop — `$Home\Desktop`, `%USERPROFILE%\Desktop`, `~/Desktop` — is wrong
+# here, and wrong in the particular way that yields an empty listing or a hard error rather
+# than a visible mistake.
+#
+# So the path stops being guessed. `SHGetKnownFolderPath` is the API that OWNS the answer:
+# redirection updates what it returns, which is the whole reason to prefer it over composing a
+# path out of the home directory. The resolved paths go into the model's prompt, so it quotes a
+# fact instead of inventing one.
+#
+# **The fallbacks are ordered by how likely they are to be right, not by how simple they are.**
+# `~/OneDrive/Desktop` comes before `~/Desktop`, because on a redirected machine the first
+# exists and the second does not — taking the naive one first would reintroduce the measured
+# bug exactly on any box where the ctypes call fails.
+
+# Known folder GUIDs, from `KnownFolders.h`. Braced string form, which `CLSIDFromString` parses.
+_KNOWN_FOLDERS: tuple[tuple[str, str, str], ...] = (
+    ("Desktop", "{B4BFCC3A-DB2C-424C-B029-7FE99A87C641}", "Desktop"),
+    ("Documents", "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}", "Documents"),
+    ("Downloads", "{374DE290-123F-4565-9164-39C4925E467B}", "Downloads"),
+)
+
+
+class _GUID(ctypes.Structure):
+    _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+
+def _known_folder(guid_text: str) -> "Path | None":
+    """One known folder, straight from the shell. None when the call fails for any reason.
+
+    Never raises. A machine that cannot answer this question should fall back to a guess, not
+    take the turn down — the caller has a fallback chain and this is only its first link.
+    """
+    if not _IS_WINDOWS:                                                # pragma: no cover
+        return None
+    try:
+        guid = _GUID()
+        if ctypes.windll.ole32.CLSIDFromString(guid_text, ctypes.byref(guid)) != 0:
+            return None
+        out = ctypes.c_wchar_p()
+        if ctypes.windll.shell32.SHGetKnownFolderPath(
+                ctypes.byref(guid), 0, None, ctypes.byref(out)) != 0:
+            return None
+        try:
+            return Path(out.value) if out.value else None
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(out)
+    except Exception:                                                  # noqa: BLE001
+        LOG.debug("known folder %s could not be read", guid_text, exc_info=True)
+        return None
+
+
+def user_folders() -> "dict[str, Path]":
+    """Desktop, Documents and Downloads, as they are on THIS machine.
+
+    Returns:
+        A mapping of name to resolved path. **Only folders that actually exist are included**,
+        so a caller may state them as fact — an entry here has been checked, not composed.
+    """
+    home = Path(os.path.expanduser("~"))
+    found: dict[str, Path] = {}
+    for name, guid, leaf in _KNOWN_FOLDERS:
+        for path in (_known_folder(guid), home / "OneDrive" / leaf, home / leaf):
+            if path is not None and path.is_dir():
+                found[name] = path
+                break
+    return found
+
+
+def folders_for_prompt() -> str:
+    """The block `agents/os_agent.py` puts in front of the model. "" when nothing resolved."""
+    found = user_folders()
+    if not found:
+        return ""
+    lines = "\n".join(f"- {name}: {path}" for name, path in found.items())
+    return ("\nTHE USER'S REAL FOLDERS on this machine, read from the Windows shell just now. "
+            "These are facts, not guesses: several are redirected into OneDrive, so composing "
+            "a path from the home directory gives one that does not exist. Use these exact "
+            "paths, quoted:\n" + lines + "\n")
+
 
 # Which table `refuse()` uses, and whether `normalise()` folds case. Read once, here, rather
 # than at each call site — a platform test scattered through a safety module is a platform test

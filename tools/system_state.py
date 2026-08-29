@@ -93,7 +93,7 @@ _PROBE_TIMEOUT_S = 0.05
 # list that lies the first time a module is removed, and it lies in the worst direction: he
 # claims an ability he no longer has, and only finds out mid-answer.
 CAPABILITIES: tuple[tuple[str, str], ...] = (
-    ("run shell commands on this Pi, after LB approves each one", "tools/os_controller.py"),
+    ("run PowerShell commands on this PC, after LB approves each one", "tools/os_controller.py"),
     ("open desktop applications", "tools/app_launcher.py"),
     ("look at what is on the screen", "tools/screen_capture.py"),
     ("save and search long-term notes in the Markdown vault", "tools/knowledge_vault.py"),
@@ -302,7 +302,8 @@ def for_prompt() -> str:
     """The block injected into every agent prompt by `tools/self_context.py`.
 
     Written in the second person and as facts, not as a table. The model is being told what it
-    is, so "You are running on a Raspberry Pi called oddball-pi" is the register that works;
+    is, so "You are running on Windows, a machine called DESKTOP-3NFU5EK" is the register that
+    works;
     a CSV row is not something a persona can speak from.
 
     **Anything that could not be read is stated as unknown rather than omitted.** An absent line

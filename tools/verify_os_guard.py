@@ -449,6 +449,74 @@ def probe() -> int:
     return 1
 
 
+# =========================================================================================
+section("5. the machine it thinks it is on is the machine it is on")
+# =========================================================================================
+#
+# Two failures measured on 2026-08-29, ten minutes apart, with one cause between them:
+# `agents/os_agent.py` told the model it was "an expert Linux System Administrator running on
+# a Raspberry Pi" while `execute_terminal_command`'s own docstring told it the shell was
+# PowerShell on Windows 11. The average of a contradiction is a PowerShell command carrying a
+# Unix assumption, and that is exactly what came out:
+#
+#     Get-ChildItem -Path "$Home\Desktop" -File | Select-Object Name, Extension
+#     -> Cannot find path 'C:\Users\ironi\Desktop' because it does not exist.
+#
+# **These checks read the rendered prompt VALUE, never the file's prose.** L-windows-port: a
+# textual grep over `os_agent.py` matches the comment block explaining this bug and passes for
+# the wrong reason. `OS_PROMPT_TEMPLATE` is imported and inspected as a string.
+
+from agents.os_agent import OS_PROMPT_TEMPLATE                        # noqa: E402
+from tools.os_controller import folders_for_prompt, user_folders      # noqa: E402
+
+_prompt = OS_PROMPT_TEMPLATE.lower()
+for _stale in ("raspberry pi", "linux system administrator", "/sys/class/thermal"):
+    check(_stale not in _prompt,
+          f"the OS prompt no longer says {_stale!r}",
+          "the tool docstring says PowerShell on Windows; a prompt that disagrees gets averaged")
+for _wanted in ("windows 11", "powershell"):
+    check(_wanted in _prompt, f"and it does say {_wanted!r}")
+
+check("{folders}" in OS_PROMPT_TEMPLATE,
+      "the prompt has a slot for the real folder paths",
+      "without it the model composes a path, which is the bug this section exists for")
+
+# --- the path itself ----------------------------------------------------------------------
+_folders = user_folders()
+check("Desktop" in _folders, "the desktop resolves to a real directory",
+      f"got {_folders}")
+
+if "Desktop" in _folders:
+    _desktop = _folders["Desktop"]
+    check(_desktop.is_dir(), f"and it exists on disk: {_desktop}")
+
+    # The measured failure, stated as a check rather than as a comment. On a machine with
+    # OneDrive Known Folder Move — the Windows 11 default when signed into a Microsoft
+    # account — the composed path is the one that does NOT exist.
+    _naive = Path(os.path.expanduser("~")) / "Desktop"
+    if not _naive.is_dir():
+        check(_desktop != _naive,
+              "and it is NOT the composed ~/Desktop, which does not exist on this machine",
+              f"resolved {_desktop}, composed {_naive}")
+    else:
+        check(True, "(~/Desktop exists on this machine, so the two may legitimately agree)",
+              f"resolved {_desktop}")
+
+_block = folders_for_prompt()
+check(_block and "Desktop" in _block,
+      "and the prompt block names it, so the model quotes a fact instead of guessing",
+      f"block is {_block[:80]!r}")
+if "Desktop" in _folders:
+    check(str(_folders["Desktop"]) in _block,
+          "with the resolved path spelled out in full")
+
+# Only directories that were actually checked may appear. A folder that is named but absent is
+# worse than one left out: the model will quote it confidently and PowerShell will refuse.
+for _name, _path in _folders.items():
+    check(_path.is_dir(), f"{_name} was verified to exist before being offered to the model",
+          "" if _path.is_dir() else f"{_path} is not a directory")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="verify the OS command blocklist")
     ap.add_argument("--probe", action="store_true")

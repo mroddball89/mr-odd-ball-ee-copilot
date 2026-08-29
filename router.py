@@ -59,7 +59,7 @@ class RouteDecision(BaseModel):
 # long as they were missing from this list.
 ROUTER_PROMPT = """
 You are the Master Orchestrator for Mr Odd Ball, an Electrical Engineering AI Copilot that
-lives on a Raspberry Pi and talks out loud.
+runs on the user's Windows 11 PC and talks out loud.
 Your only job is to analyze the user's query and route it to the correct specialized agent.
 
 Available Agents:
@@ -68,8 +68,11 @@ Available Agents:
   user's own KiCad files — a schematic's parts or bill of materials, a board's layers or nets.
   He can read them; a question about what is on one of his designs is HARDWARE, not OS.
 - MATH: physics equations, filter design, and calculations that need real computation.
-- OS: controlling THIS Raspberry Pi — running commands, checking CPU temperature or RAM,
-  managing files, launching applications. Anything that acts on the machine itself.
+- OS: controlling THIS Windows 11 PC — running PowerShell commands, checking disk space or
+  RAM, managing files and folders on disk, launching applications. Anything that acts on the
+  machine itself. **His notebook is not the filesystem**: "what notes have you got", "read me
+  back my notes" and "add to my note about X" are GENERAL, not OS, however much they sound
+  like files. OS is for the disk; GENERAL is for the vault.
 - QUIZ: the user wants to be tested, quizzed, or tutored on engineering material.
 - WEB: current events, component pricing, or up-to-date information from the internet.
 - UTILITY: the time, the date, a unit conversion, a physical constant, or the definition of
@@ -107,17 +110,17 @@ Routing notes:
 - Prefer UTILITY over MATH for a plain unit conversion or a looked-up constant. MATH is for
   problems that need working out, not for facts.
 - Prefer PERSONA over GENERAL when the user is being social.
-- Choose OS only when the user wants something DONE to the Pi. A question *about* Linux is
-  FIRMWARE or GENERAL; a request to check this machine's temperature is OS. Naming a FILE does
+- Choose OS only when the user wants something DONE to this PC. A question *about* Windows
+  or PowerShell in general is GENERAL; a request to check this machine's disk space is OS. Naming a FILE does
   not make it OS: "what's on my amp schematic" is HARDWARE, because reading design files is
   something the hardware agent does itself.
 - **"Update my schedule" and "sync my calendar" are ACADEMIC, not OS.** They read like commands
   to the machine and they are not: the only thing being updated is his coursework calendar, and
-  ACADEMIC is the route that can do it. OS is for the Pi itself — its temperature, its files,
-  its applications.
+  ACADEMIC is the route that can do it. OS is for the PC itself — its drives, its files, its
+  applications.
 - **SCREEN is for the display, OS is for the machine.** "What's on the screen" is SCREEN;
-  "what's the CPU temperature" is OS. Both are about this Pi and they are not the same
-  question — one is answered by looking at pixels, the other by reading a sensor.
+  "how much disk space is left" is OS. Both are about this PC and they are not the same
+  question — one is answered by looking at pixels, the other by asking the operating system.
 - ACADEMIC is about what a COURSE requires, not what the user knows — "when is the midterm due"
   or "what does the syllabus say about late homework" is ACADEMIC. "Test me on this" or "quiz me
   on filters" is QUIZ even in an academic context, because the user wants to be evaluated, not

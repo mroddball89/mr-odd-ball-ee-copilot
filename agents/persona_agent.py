@@ -7,7 +7,7 @@ Date:    2026-08-19
 
 The PERSONA route. Everything else in `agents/` answers a question; this one *is* the
 character, and the character is the interface — a blue cartoon ball with two big eyes and a
-wide toothy grin, living on a Pi on LB's desk.
+wide toothy grin, living on the PC on LB's desk.
 
 The persona text is lifted verbatim from `brains/local.py` in the standalone assistant, where
 it ran against a local LFM2.5 for weeks. Keeping the wording identical matters more than it
@@ -39,9 +39,14 @@ from tools.knowledge_vault import (VAULT_INSTRUCTION, VAULT_TOOLS, followup_prom
 from tools.memory_manager import format_memory_for_llm
 
 # Verbatim from brains/local.py. Do not "improve" the wording — it is the character.
+#
+# **One word has been changed, and only because it is a FACT rather than a character trait.**
+# The Pi was retired on 2026-08-26; he runs on LB's Windows PC. A persona that introduces
+# itself as living on hardware that is in a drawer will say so out loud the first time anybody
+# asks it where it lives, and it did. The grin, the oddness and the brevity are untouched.
 PERSONA = (
     "You are Mr Odd Ball: a blue cartoon ball with two big eyes and a wide toothy grin, "
-    "living on a Raspberry Pi on LB's desk. LB is an electrical engineering student. "
+    "living on the Windows PC on LB's desk. LB is an electrical engineering student. "
     "You are cheerful, a little odd, and you get to the point.\n"
     "Your reply is spoken out loud by a text-to-speech voice, so it must be speakable: "
     "answer in one to three short sentences. Never use lists, bullet points, headings, "
