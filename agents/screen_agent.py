@@ -34,9 +34,9 @@ for LB to switch off, because he is the thing being protected and he is the one 
 
 He is describing **one frame, captured at the moment of approval.** He cannot watch the screen,
 cannot see what changed, and cannot act on what he sees — there is no click, no keystroke, no
-scroll. `tools/gesture_pointer.py` deliberately has no keyboard capability for related reasons.
-The prompt below says so, because a model shown a screenshot will otherwise happily offer to
-press the button in it.
+scroll. There is no longer any code in this repo that can move a pointer at all: the gesture
+system and its virtual mouse were removed on 2026-08-29. The prompt below says so, because a
+model shown a screenshot will otherwise happily offer to press the button in it.
 """
 
 from __future__ import annotations

@@ -48,6 +48,7 @@ from engine.models import AGENT_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Pending, Response
 from engine.split import SPOKEN_INSTRUCTION, split
+from orchestrator.classify_yes import approve_at_keyboard
 from tools.memory_manager import format_memory_for_llm
 from tools.os_controller import (KINDS, Outcome, execute_terminal_command,
                                  folders_for_prompt, run_command)
@@ -366,30 +367,23 @@ def run_os_agent(query: str) -> str:
     Deliberately NOT the path the voice loop takes. It still reads stdin, which is correct for
     a terminal session and impossible everywhere else.
 
-    ## The camera, added 2026-08-21
+    ## The camera was here, and was removed 2026-08-29
 
-    A thumbs up at the camera counts as the `y`. `tools/gesture_control.py` owns that decision
-    and only a thumbs up returns True — no camera, no hand, an open palm and any exception all
-    fall through to `input()`, so the worst a broken camera can do is make LB type the letter
-    he was already typing. It never *declines* on his behalf either; the keyboard still gets
-    asked.
-
-    What it does not change: the blocklist in `tools/os_controller.py` runs regardless of how
-    approval arrived, and the exact command is on screen before the question. A gesture
-    replaces the keystroke, not the review. Set `ODDBALL_GESTURE=0` to keep the camera shut.
+    A thumbs up used to count as the `y`. It worked and it is gone, along with the rest of the
+    gesture system: approval is voice or keyboard now, everywhere. Nothing about the REVIEW
+    changed when it left, because the camera was never part of it — the blocklist in
+    `tools/os_controller.py` runs regardless of how approval arrives, and the exact command is
+    printed before the question is asked. A gesture only ever replaced the keystroke.
     """
     proposed = propose_os_action(query)
     if proposed.pending is None:
         return proposed.raw or proposed.speech
 
-    # The exact command is printed BEFORE approval is asked for, whichever way it arrives.
-    # That ordering is the property D4 is about and the camera does not change it.
+    # The exact command is printed BEFORE approval is asked for. That ordering is the
+    # property D4 is about, and it is the half of this gate that was never negotiable.
     print("\n⚠️ SECURITY CHECK: The AI wants to execute:")
     print(f"   > {proposed.pending.shown}")
-    print("   👍 thumbs up at the camera to approve, or answer below.")
 
-    from tools.gesture_control import approve_by_gesture_or_keyboard
-
-    if approve_by_gesture_or_keyboard("   Allow execution? (y/n): "):
+    if approve_at_keyboard("   Allow execution? (y/n): "):
         return resume_os_action(proposed.pending).raw
     return "Action aborted by the user. No terminal commands were executed."

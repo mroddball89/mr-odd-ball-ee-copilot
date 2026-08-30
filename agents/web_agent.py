@@ -6,6 +6,7 @@ from engine.models import AGENT_MODEL, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Pending, Response
 from engine.split import SPOKEN_INSTRUCTION, is_speakable, split
+from orchestrator.classify_yes import approve_at_keyboard
 from tools.memory_manager import format_memory_for_llm
 
 WEB_PROMPT_TEMPLATE = """
@@ -107,11 +108,11 @@ def run_web_agent(query: str) -> str:
     Deliberately NOT the path the voice loop takes — it reads stdin, which a spoken turn
     cannot answer.
 
-    A thumbs up at the camera counts as the `y`, same as on the OS path — see
-    `agents/os_agent.py:run_os_agent` for what that does and does not change. The gate here
-    protects the boundary rather than the machine: LB's rule is local-first with cloud opt-in
-    per request, so leaving the Pi is still a thing he agrees to each time, only now he can
-    agree to it from across the room. Set `ODDBALL_GESTURE=0` to keep the camera shut.
+    Approval is the keyboard here, same as on the OS path — see
+    `agents/os_agent.py:run_os_agent`, including what left with the camera on 2026-08-29 and
+    what did not. The gate here protects the boundary rather than the machine: LB's rule is
+    local-first with cloud opt-in per request, so leaving the box is still a thing he agrees
+    to each time.
     """
     proposed = propose_web_search(query)
     if proposed.pending is None:
@@ -119,11 +120,8 @@ def run_web_agent(query: str) -> str:
 
     print("\n⚠️  SECURITY CHECK: The AI wants to search the web for:")
     print(f"   > '{proposed.pending.shown}'")
-    print("   👍 thumbs up at the camera to approve, or answer below.")
 
-    from tools.gesture_control import approve_by_gesture_or_keyboard
-
-    if approve_by_gesture_or_keyboard("   Allow search? (y/n): "):
+    if approve_at_keyboard("   Allow search? (y/n): "):
         print("   Searching...", flush=True)
         return resume_web_search(proposed.pending).raw
     return "Action aborted by the user. No web search was performed."

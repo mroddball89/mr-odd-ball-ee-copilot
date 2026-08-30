@@ -378,10 +378,9 @@ def wired() -> None:
                                      speech_s=voiced_s, waited_s=0.0)
         return t, speaker
 
-    # The camera is the gate's second channel and it spawns a subprocess. Force it to the
-    # answer a machine with no webcam gives, so this harness needs no hardware.
-    import tools.gesture_control as gc
-    gc.get_gesture = lambda *a, **k: "NO_CAMERA"
+    # The camera used to be the gate's second channel, and this block existed to stub out the
+    # subprocess it spawned so the harness needed no hardware. The gesture system was removed
+    # on 2026-08-29; the gate is voice and clicks now, and there is nothing left to stub.
 
     # --- the gate ------------------------------------------------------------------------
     # THE regression. These are the exact numbers from 2026-08-29 07:24:10.

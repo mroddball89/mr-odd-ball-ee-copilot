@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import re
 
-__all__ = ["is_yes", "normalise"]
+__all__ = ["is_yes", "normalise", "approve_at_keyboard"]
 
 # Anything short of a clear yes declines, so the "no" list exists only to distinguish a
 # deliberate refusal (worth a brief acknowledgement) from silence or a misheard mumble.
@@ -83,6 +83,34 @@ def is_yes(transcript: str) -> bool | None:
     if _matches(text, _YES):
         return True
     return None
+
+
+def approve_at_keyboard(prompt: str = "   Allow execution? (y/n): ") -> bool:
+    """Ask for approval at the terminal. **Only a typed `y` returns True.**
+
+    The blocking terminal gates in `agents/os_agent.py` and `agents/web_agent.py` both used to
+    call `gesture_control.approve_by_gesture_or_keyboard`, which tried the camera first and
+    fell through to this. The camera is gone (2026-08-29) and what was left was identical in
+    both files, so it lives here once instead of twice.
+
+    Deliberately stricter than `is_yes` and it stays that way. `is_yes` reads a SPOKEN answer,
+    where "sure" and "go ahead" are what a person actually says and refusing them would make
+    the gate feel broken. This reads a KEYSTROKE, where the only reason to type anything other
+    than `y` is that the answer is not yes.
+
+    Args:
+        prompt: what to print at the terminal.
+
+    Returns:
+        True if approved.
+    """
+    try:
+        return input(prompt).strip().lower() == "y"
+    except (EOFError, KeyboardInterrupt):
+        # No stdin, or ctrl-C at the prompt. Both are declines. A gate that defaults open
+        # under an unexpected condition is not a gate.
+        print()
+        return False
 
 
 if __name__ == "__main__":

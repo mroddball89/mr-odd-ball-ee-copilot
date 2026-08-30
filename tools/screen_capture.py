@@ -23,8 +23,9 @@ have an API key in its scrollback. That is a real cost and it is why:
    captured until LB says yes — the same shape as every shell command, for the same reason, and
    `engine/core.py` holds it with the machinery that already exists. Set
    `ODDBALL_SCREEN_CONFIRM=0` to make it instant once he is happy with it.
-2. **`ODDBALL_SCREEN=0` turns it off entirely**, matching `ODDBALL_GESTURE=0` for the camera.
-   A feature that can see the desktop needs an off switch that is not a code edit.
+2. **`ODDBALL_SCREEN=0` turns it off entirely.** A feature that can see the desktop needs an
+   off switch that is not a code edit. It is the last of these flags now — `ODDBALL_GESTURE`
+   went with the camera on 2026-08-29.
 3. **The frame is kept on disk** under `data/screen/`, so what was sent is a file LB can open
    rather than something he has to take on trust. `KEEP_FRAMES` bounds it; git ignores it.
 
@@ -145,7 +146,7 @@ class Capture:
 
 
 def enabled() -> bool:
-    """Is screen capture switched on? `ODDBALL_SCREEN=0` turns it off, like the camera's flag."""
+    """Is screen capture switched on? `ODDBALL_SCREEN=0` turns it off."""
     return str(os.environ.get("ODDBALL_SCREEN", "1")).strip().lower() not in (
         "0", "false", "no", "off")
 
