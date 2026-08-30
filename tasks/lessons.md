@@ -1083,3 +1083,58 @@ second clause was true regardless, so the assertion could not fail. **An `or` in
 almost always a check that has been widened until it stopped biting** — the honest version was
 `check(bool(drops), ...)`, which went red immediately. Initialise the throttle's clock to 0.0
 so the first event of a burst always reports; throttle the repeats, never the onset.
+
+
+---
+
+## L30 - The gate that rejected the answer for a character nobody can see
+
+2026-08-29, 20:20. LB asked "Can you create a circuit using an LED and Arduino Uno?" and got a
+correct answer on the card. What Piper actually said out loud was one word:
+
+    Sure!
+
+Then the conversation window opened, LB was still reading the screen, and after 1.5s of silence
+the rig played the greeting - "What's up LB? What can I do for you?" - which reads exactly like
+being skipped past. Three separate things had to line up, and the log named none of them.
+
+**One.** The reply had no `SPOKEN:` line, which is correct: `persona_agent.py` says in as many
+words that it writes none, because "the whole reply IS the spoken half". But `engine/split.py`
+never implemented its half of that contract. It sent the reply to `memory.speakable.extract()`
+like any other - and `extract()` is built for corpus paragraphs, where picking the ONE best
+sentence out of a page is the whole point. Given an answer that was already the right length,
+picking one sentence could only lose something.
+
+**Two.** It picked the wrong sentence, and not because the scoring was wrong. The real answer
+scored 7.5 against "Sure!" at 4.25. It was thrown out by `verify()`, which rejects anything
+non-ASCII - and the model had written "built-in" with U+2011 NON-BREAKING HYPHEN. `extract()`
+fell through to the only sentence that verified.
+
+**Three.** The two gates disagreed and neither said so. `is_speakable()` passed the full reply;
+`verify()`, one call deeper, refused it. Nothing logged the refusal, because a fallback is not
+an error.
+
+### The rule
+
+**A rejection rule needs a normalisation step in front of it, or it rejects on spelling rather
+than on substance.** This is the same failure the module already had documented one notch over:
+`expand_symbols()` exists because "The trace needs 0.9 mm for a 20 degree C rise" was never
+spoken, on account of the degree sign. U+2011 is that bug again, and worse, because a degree
+sign is at least visible in a log. A non-breaking hyphen renders identically to the hyphen next
+to it.
+
+So typographic punctuation - the space that is not a space, the hyphen that is not a hyphen,
+the curly quote, the ellipsis, the zero-width joiner - is now normalised to ASCII in
+`expand_symbols()` before any gate judges it. `verify()`'s ASCII rule is untouched and still
+rejects "Cafe" spelled with an accent, because a letter is part of a word and rewriting it
+changes the word. Punctuation is not heard.
+
+And `split()` now says the whole reply when the whole reply is speech, held to BOTH gates so
+that "say all of it" is not a softer route to the speaker than extraction was.
+
+### The tell
+
+`synth 0.27s` on a 20-second turn. Every other answer that evening synthesised in 0.30-0.56s
+carrying a real sentence; the shortest work produced the shortest audio, and the turn line said
+so. **When a stage's cost collapses while the stage before it did the full work, the output of
+that stage got smaller, not faster.**
