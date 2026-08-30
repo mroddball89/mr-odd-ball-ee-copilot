@@ -117,6 +117,39 @@ check(r.speech == "I've put the code and the register details on the screen.",
 check(len(r.cards) == 1 and r.cards[0].kind == CardKind.CODE,
       "and the code is still shown", f"{[c.kind for c in r.cards]}")
 
+# THE 2026-08-29 REGRESSION. The persona/general route writes no SPOKEN: line on purpose —
+# `persona_agent.py` says the whole reply IS the spoken half — but split() sent it to
+# `extract()` anyway, and `extract()` picks ONE sentence because it was built for corpus
+# paragraphs. LB asked how to wire an LED to an Uno, got a correct answer on the card, and
+# heard the word "Sure!". Then the rig went quiet and greeted him, which read as being
+# skipped past.
+#
+# The reply is the LITERAL one from data/oddball.log at 20:20, invisible characters and all:
+# U+202F narrow no-break space before the pin number, U+2011 non-breaking hyphen in "built-in".
+LED_REPLY = ("Sure! Connect the LED's anode to a 220 ohm resistor, then to Arduino "
+             "pin\u202f13, and the cathode to GND; the built\u2011in LED "
+             "will light when you upload the blink sketch.")
+
+r = split(LED_REPLY, route="general")
+check(r.speech != "Sure!", "a two-sentence answer is not reduced to its interjection", r.speech)
+check("220 ohm" in r.speech and "cathode" in r.speech,
+      "the whole reply is spoken, because the whole reply is speech", r.speech)
+check(is_speakable(r.speech) is None, "...and it still clears the filter", r.speech)
+check(r.speech.isascii(), "...with the invisible characters normalised out", repr(r.speech))
+
+# The step is not a softer path to the speaker. A reply carrying markdown is still refused as
+# a whole and still goes to the extractor, which is what stops "say all of it" from becoming
+# "say anything at all".
+r = split("Here are the steps.\n* Wire the anode.\n* Wire the cathode.",
+          route="general")
+check("*" not in r.speech, "a bulleted reply is NOT taken whole", r.speech)
+
+# And a genuinely long reply still gets one sentence, not forty.
+LONG = ("The cutoff frequency is 15.92 hertz for that filter. " + "Padding words follow. " * 20)
+r = split(LONG, route="math")
+check(len(r.speech.split()) <= 40, "prose over the budget still falls to extraction",
+      f"{len(r.speech.split())} words")
+
 # =========================================================================================
 section("3. tables and tool output become cards, not speech")
 # =========================================================================================
@@ -296,6 +329,32 @@ r = split("The rise is 20°C at 4.7 kΩ.", route="hardware")
 shown = " ".join(c.body for c in r.cards)
 check("°C" in shown or "20°C" in shown,
       "the card keeps the original notation — expansion is for the ear only", shown[:70])
+
+# (c) TYPOGRAPHIC PUNCTUATION — the invisible cousin of (a), and the one that actually bit.
+#     `memory.speakable.verify()` refuses anything non-ASCII, so a model writing ordinary
+#     prose loses the sentence to a character that renders identically to the ASCII one.
+#     Nothing on screen explains it, which is what made it expensive to find.
+for original, why in [
+    ("The built\u2011in LED lights up.",          "non-breaking hyphen"),
+    ("Connect it to pin\u202f13 now.",            "narrow no-break space"),
+    ("The LED\u2019s anode goes first.",          "curly apostrophe"),
+    ("Wait for it\u2026 then measure.",           "ellipsis"),
+    ("It runs 3\u20135 volts.",                   "en dash"),
+    ("He said \u201cwire it\u201d there.",        "curly quotes"),
+]:
+    check(not original.isascii(), f"{why:<22} premise: the input is non-ASCII", repr(original))
+    expanded = expand_symbols(original)
+    check(expanded.isascii(), f"{why:<22} -> normalised to ASCII", repr(expanded))
+    check(is_speakable(expanded) is None, f"{why:<22} -> speakable", expanded)
+
+# A soft hyphen is deleted, never spaced: "built-in" must not become "built - in".
+check(expand_symbols("built\u00adin") == "builtin", "a soft hyphen is deleted, not spaced",
+      expand_symbols("built\u00adin"))
+
+# The ASCII rule in `verify()` is UNTOUCHED. It still rejects an accented letter, because é is
+# part of a word and rewriting it changes the word — unlike punctuation, which is not heard.
+check(not expand_symbols("Caf\u00e9 current.").isascii(),
+      "a letter with an accent is left alone", expand_symbols("Caf\u00e9 current."))
 
 # =========================================================================================
 

@@ -15,7 +15,13 @@ by far the most reliable source, because the model writing the sentence is the o
 which of three numbers was the answer and which two were working. A summariser reading the
 finished reply has to guess that, and it guesses wrong on exactly the replies that matter.
 
-**Fallback: extract one.** When the line is missing — the model ignored it, or the reply came
+**Second: say all of it.** Some replies are speech already. `persona_agent.py` writes no
+SPOKEN: line on purpose, because a joke's spoken half is the joke — and the PERSONA and
+GENERAL routes both land there. When the whole reply clears both gates inside the 40-word
+budget, it is said whole. Skipping this step is what once reduced a correct two-sentence
+answer about wiring an LED to an Uno down to the word "Sure!".
+
+**Fallback: extract one.** When the reply is too long to say and the line is missing — the model ignored it, or the reply came
 from a tool path that never saw the prompt — `memory.speakable.extract()` picks the best
 sentence the reply already contains. Extraction, never generation: D30 measured local models
 stating first-year electronics relationships fluently and wrongly, and a generated summary of
@@ -116,6 +122,42 @@ _CODE_IDENT = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b|\b[A-Z]{2,
 # Ordered longest-first, and that ordering is load-bearing: "kΩ" must be seen before "Ω", or
 # it becomes "k ohms", and "°C" before "°" or it becomes "degrees C".
 #
+# Typographic punctuation, normalised to the ASCII a person would have typed.
+#
+# These are INVISIBLE failures, and they are worse than the symbol ones above because there is
+# nothing on screen to explain them. `memory.speakable.verify()` rejects any candidate that is
+# not ASCII, and a model writing perfectly ordinary prose emits U+2011 NON-BREAKING HYPHEN in
+# "built-in", U+202F NARROW NO-BREAK SPACE before a pin number, and curly quotes in "LED's",
+# none of which look like anything at all in a log.
+#
+# 2026-08-29 measured the cost. Asked to wire an LED to an Uno, he replied "Sure! Connect the
+# LED's anode to a 220 ohm resistor, then to Arduino pin 13..." — correct, and thrown away for
+# ONE non-breaking hyphen. `extract()` fell through to the only sentence that verified, and
+# what Piper actually said out loud was "Sure!". The answer was on the card and nowhere else.
+#
+# Note where this DOESN'T reach: `verify()`'s ASCII rule is untouched and still rejects "Café",
+# because é is a letter and changing it changes the word. These are punctuation and spacing —
+# rewriting them loses nothing a listener could have heard.
+_TYPOGRAPHIC: tuple[tuple[str, str], ...] = (
+    # Spaces that are not the space character.
+    ("\u00a0", " "),   # no-break space
+    ("\u202f", " "),   # narrow no-break space — the one before 'pin 13'
+    ("\u2009", " "),   # thin space
+    ("\u2007", " "),   # figure space
+    # Hyphens and dashes. U+2011 is the one that cost the LED answer.
+    ("\u2010", "-"), ("\u2011", "-"), ("\u2012", "-"),
+    ("\u2013", "-"), ("\u2014", "-"), ("\u2212", "-"),
+    # Quotes. A model asked for an apostrophe writes U+2019 about half the time.
+    ("\u2018", "'"), ("\u2019", "'"), ("\u201a", "'"),
+    ("\u201c", '"'), ("\u201d", '"'), ("\u201e", '"'),
+    # Ellipsis, which Piper reads as a stumble even when it survives the ASCII gate.
+    ("\u2026", "..."),
+    # Zero-width and soft characters: DELETED, never spaced. A soft hyphen sits inside a
+    # word, so replacing it with '-' would make 'built-in' out of 'builtin'.
+    ("\u00ad", ""), ("\u200b", ""), ("\u200c", ""),
+    ("\u200d", ""), ("\ufeff", ""),
+)
+
 # The prompts still ask models to write symbols as words (the persona agent says so in as many
 # words). This is the backstop for when they do not — which, per the emoji note in
 # `audio/say.py`, is routinely.
@@ -145,6 +187,10 @@ _EXPANSIONS: tuple[tuple[str, str], ...] = (
 def expand_symbols(text: str) -> str:
     """Rewrite symbols as the words for them, so a correct sentence is not thrown away.
 
+    Two passes, and the order matters: typographic punctuation is normalised to ASCII FIRST,
+    then engineering symbols become words. A curly apostrophe inside "LED's" has to be gone
+    before anything downstream counts the sentence as non-ASCII and discards it.
+
     Applied to candidates INSIDE `split()`, never to card bodies — a card is read, not heard,
     and "0.9 mm at 20°C" is the right thing to show on screen.
 
@@ -152,6 +198,9 @@ def expand_symbols(text: str) -> str:
     """
     if not text:
         return text
+    for symbol, plain in _TYPOGRAPHIC:
+        if symbol in text:
+            text = text.replace(symbol, plain)
     for symbol, word in _EXPANSIONS:
         if symbol in text:
             text = text.replace(symbol, word)
@@ -285,22 +334,48 @@ def split(reply: str, route: str = "", fallback: str = "") -> Response:
     # 1. The agent's own line, if it survives the filter.
     speech = spoken if spoken and is_speakable(spoken) is None else ""
 
-    # 2. Extract one from the prose that is left.
+    # 2. The whole reply, when the whole reply is already speech.
+    #
+    # `persona_agent.py` states this as its contract in as many words — it deliberately emits
+    # no SPOKEN: line because "the whole reply IS the spoken half", and its prompt caps him at
+    # one to three short sentences to make that true. split() never implemented its half of
+    # the bargain: it sent that reply to `extract()` like any other.
+    #
+    # `extract()` is built for corpus paragraphs. Its job is to pick the ONE best sentence out
+    # of a page of textbook, which is right for a retrieved chunk and wrong for an answer that
+    # is already the right length. On 2026-08-29 it reduced a correct two-sentence LED wiring
+    # answer to its opening word, "Sure!", and that is what Piper said.
+    #
+    # Held to BOTH gates — `is_speakable` for what Piper must never read, and
+    # `speakable.verify` for what makes a sentence a usable answer. That is deliberately the
+    # same standard an extracted sentence has to clear, so taking the whole reply is not a
+    # softer path to the speaker: markdown bullets and bare operators still fall through to
+    # extraction, exactly as before.
     if not speech and prose:
-        got = speakable.extract(prose, max_words=MAX_WORDS)
+        whole = expand_symbols(prose)
+        if is_speakable(whole) is None and not speakable.verify(whole, whole):
+            speech = whole
+
+    # 3. Otherwise extract one sentence from prose too long to say in full.
+    #
+    # Normalised first, for the same reason: `verify()` inside `extract()` rejects anything
+    # non-ASCII, so an un-normalised passage loses its best sentence to a character nobody can
+    # see and falls back to a worse one.
+    if not speech and prose:
+        got = speakable.extract(expand_symbols(prose), max_words=MAX_WORDS)
         if got:
             candidate = expand_symbols(got.text)
             if is_speakable(candidate) is None:
                 speech = candidate
 
-    # 3. A rejected SPOKEN line is still evidence of intent — try its first sentence alone,
+    # 4. A rejected SPOKEN line is still evidence of intent — try its first sentence alone,
     #    which is usually the answer with a code identifier trailing after it.
     if not speech and spoken:
         first = speakable.sentences(spoken)
         if first and is_speakable(first[0]) is None:
             speech = first[0]
 
-    # 4. Say something.
+    # 5. Say something.
     if not speech:
         speech = fallback or _FALLBACKS.get(route, _FALLBACKS[""])
 
