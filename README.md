@@ -6,9 +6,8 @@ hands it to the one agent that should answer it.
 
 **Runs on Windows 11.** He lived on a Raspberry Pi 5 until 2026-08-26 and now runs on LB's
 workstation (Ryzen 7 5700X, 32 GB, RX 6600). The Linux code was **deleted, not disabled** —
-`tools/os_controller.py`, `tools/app_catalogue.py` and `tools/gesture_pointer.py` raise on
-import off Windows, deliberately, so that nothing can quietly degrade into a guard that allows
-everything. Restore from git history (or the `v0-terminal` tag) if the Pi ever comes back.
+`tools/os_controller.py` and `tools/app_catalogue.py` raise on import off Windows,
+deliberately, so that nothing can quietly degrade into a guard that allows everything. Restore from git history (or the `v0-terminal` tag) if the Pi ever comes back.
 
 > The `v0-terminal` tag is the engine as it ran in the terminal, before the voice, personality
 > and animated face were merged in. It is kept so the original is always recoverable.
@@ -22,7 +21,6 @@ everything. Restore from git history (or the `v0-terminal` tag) if the Pi ever c
 | **Face** | PyQt6 + QtWebEngine, frameless and always-on-top, optionally click-through via `WS_EX_LAYERED` |
 | **Apps** | the Start Menu shortcut tree, read as this platform's desktop-entry database |
 | **Audio** | `sounddevice`/PortAudio on WASAPI; Piper TTS and faster-whisper, both local |
-| **Gestures** | `SendInput` through `ctypes`, mouse-only by construction |
 | **Autostart** | a shortcut in `shell:startup` → `config/start_oddball.vbs` |
 
 `docs/DEPLOY.md` is the long version, and is what to read when something breaks.
@@ -256,9 +254,10 @@ python main.py --text                         # typing. No audio hardware, no HU
 python main.py                                # voice: wake word, ears, voice, face
 ```
 
-**Needs Python 3.12.** Not 3.13: `mediapipe` — the hand tracker behind the gesture pointer and
-the thumbs-up approval — publishes no wheel that works on it. Everything else is happy on
-either, so this is the one version constraint in the project and it comes from one package.
+**Python 3.12 or 3.13.** The one version constraint this project ever had was `mediapipe`,
+which publishes no working 3.13 wheel — and mediapipe left with the gesture system on
+2026-08-29. Nothing else in `requirements.txt` cares. The box in `docs/DEPLOY.md` is still
+3.12.10 because that is what is installed, not because anything needs it.
 
 The Gemini key goes in `.env`, which is gitignored and must stay that way. Paste it without
 letting it reach your shell history, which PSReadLine keeps in plain text forever:
@@ -309,7 +308,14 @@ make the category obvious, he asks which it is rather than guessing.
 |---|---|---|
 | `academic` | `data/academic/` | vector store **and** deadline calendar rebuild |
 | `datasheet` | `data/<folder>/` | vector store rebuild |
-| `schematic` | `data/projects/<project>/` | nothing — it is readable immediately |
+| `schematic` | `data/projects/<board>/` | nothing for KiCad; a vector rebuild for a PDF |
+
+The project folder is named after the **board**, not the file. Two exports of one board share
+a folder, and a folder that already holds that board is reused — `data/projects/ESP32/` takes
+both `esp32devkitv1_schematics.pdf` and `Schematic__ESP32 Development Board_V2.pdf`. Naming a
+folder after whatever the file happened to be called grew one folder per upload and could
+never answer "show me everything for the ESP32". `python tools/file_manager.py --regroup`
+reports what it would rename; add `--apply` to do it.
 
 Accepts `.pdf`, `.txt`, `.md`, `.csv`, `.kicad_sch`, `.kicad_pcb`, `.kicad_pro`, `.kicad_prl`,
 `.net`, `.zip` and common image formats, up to 64 MB. A zip — a gerber bundle, a zipped KiCad
@@ -351,6 +357,23 @@ python tools/vector_db.py
 It chunks at 500 characters with 150 of overlap — deliberately high, so register tables and
 code blocks are not cut in half — embeds locally with `all-MiniLM-L6-v2`, and persists to
 ChromaDB. Nothing leaves the machine to do it.
+
+**A PDF that is a picture is read with OCR first.** A schematic exported as an image has no
+text layer, so it used to be filed, announced as "being indexed", and contribute nothing — the
+sentence was true about the intent and false about the outcome. `tools/pdf_ocr.py` rasterises
+those pages and reads them, and only those pages: text that a PDF already carries is always
+better than OCR of a picture of it, and is never overwritten. Recovered chunks are marked
+`ocr=True` in their metadata, because a value read off a rendered page is weaker evidence than
+one lifted from a text layer.
+
+```bash
+python tools/pdf_ocr.py --scan     # which PDFs need it, and which are already cached
+python tools/pdf_ocr.py --check    # is the engine installed
+```
+
+It runs at 200 dpi, cached under `data/.ocr_cache/` because the store rebuilds on every
+upload. `ODDBALL_OCR=0` turns it off. The DPI is measured rather than assumed — see
+`media/charts/ocr-dpi-sweep.svg`, which is the finding that going above 150 buys nothing.
 
 **One collection, and one exclusion.** Everything under `data/` goes to the `datasheets`
 collection and is read by the FIRMWARE agent — except `data/academic/`, which is skipped. There

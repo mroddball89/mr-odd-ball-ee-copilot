@@ -114,6 +114,35 @@ icalendar>=6.0,<8
 pypdf>=4.0
 
 # =======================================================================================
+# OCR — reading the PDFs that carry no text. Added 2026-08-29.
+#
+# `tools/vector_db.py` had always REPORTED image-only PDFs and indexed nothing from them, so
+# an uploaded schematic could be filed, announced as "being indexed", and contribute zero
+# chunks. Three files in data/ were in that state.
+#
+# **pypdfium2 rasterises the PAGE, and that is the whole reason it is here rather than a
+# smarter use of pypdf.** The ESP32 DevKit schematic holds 368 embedded JPEG2000 tiles — the
+# drawing was exported as fragments and a net label is routinely split across two of them, so
+# OCR'ing the embedded images reads half a word at a time. Rendering the composed page reads
+# it whole.
+#
+# Permissively licensed and a self-contained wheel, which is what rules out the alternatives:
+# `pytesseract` needs the Tesseract binary installed separately, `pdf2image` needs poppler,
+# and PyMuPDF is AGPL.
+#
+# rapidocr-onnxruntime reuses the `onnxruntime` already declared above for the wake word and
+# Piper, so the OCR models sit on a runtime that is present rather than adding a second one.
+# It pulls opencv-python back in as its own dependency — that is OCR's, not the gesture
+# system's, and it arrives declared by the package that needs it.
+#
+# 200 dpi, measured rather than assumed: media/data/2026-08-29-ocr-dpi-sweep.csv shows the
+# character count flat from 150 dpi up, because RapidOCR resizes to its detector's input size.
+# Cached under data/.ocr_cache/, because file_manager rebuilds the store on every upload.
+pypdfium2>=4.30                      # rasterises a PDF page. Apache/BSD, no system binary
+rapidocr-onnxruntime>=1.3            # the OCR itself; reuses onnxruntime, pulls opencv
+
+
+# =======================================================================================
 # Gesture approval. Added 2026-08-21.
 #
 # There was briefly a `fastapi` / `uvicorn` / `pywebview` block here, for a floating avatar
@@ -122,32 +151,27 @@ pypdf>=4.0
 # and bouncing now animate the real face and need no new dependency at all.
 # =======================================================================================
 
-# Gestures — the camera pointer and the thumbs-up approval.
+# Gestures — REMOVED 2026-08-29, along with mediapipe and opencv-python.
 #
-# **This block used to say "NOTHING IS LISTED HERE, AND THAT IS THE ENTRY", and it was right
-# at the time.** On the Pi, mediapipe went into a SEPARATE Python 3.12 venv built by
-# `tools/install_gesture_venv.sh`, and `tools/gesture_control.py` shelled out to it for one
-# token per approval. The reason, measured on the Pi 2026-08-22:
+# The camera pointer and the thumbs-up approval gate are gone. LB's call, and the reason is
+# worth keeping: approval by voice already worked, so the camera was a second way to say a
+# word he could already say — and it charged for the privilege. On 2026-08-29 at 19:52 a
+# launch approval waited `gesture read timed out after 20s` on a box with no webcam attached,
+# then completed the moment he said "Yes".
 #
-#   mediapipe 1.0.1   on py3.13   installs cleanly, then SIGKILLs at XNNPACK delegate
-#                                 creation. Every vision task. No OOM, 6.4 GB free.
-#   mediapipe 0.10.18 on py3.12   works. Both its APIs work. 88 ms/frame.
-#   mediapipe 0.10.20+            publishes no aarch64 wheel at all.
+# What went with them: tools/gesture_control.py, tools/gesture_pointer.py, tools/win_input.py
+# (the virtual mouse), their two harnesses, the live tester, and models/hand_landmarker.task
+# (7.8 MB, gitignored, re-fetchable from the MediaPipe URL in git history).
 #
-# The only mediapipe that ran there needed a <=3.12 interpreter and the Pi's main venv was
-# 3.13.5, so a 400 MB sidecar was the right trade against moving 1.9 GB of working audio stack.
+# The Pi-era measurement that justified a 400 MB sidecar venv — mediapipe 1.0.1 SIGKILLing at
+# XNNPACK on py3.13, 0.10.18 working on py3.12 at 88 ms/frame, 0.10.20+ publishing no aarch64
+# wheel — is preserved in git history and in docs/DECISIONS.md. It is no longer a dependency
+# question, because there is no longer a dependency.
 #
-# **None of that applies here and the whole argument is void.** This workstation is Python
-# 3.12.10, so mediapipe and opencv import in the main interpreter — verified 2026-08-26,
-# `python tools/gesture_pointer.py --check` reports `detector tasks` with no sidecar at all.
-# There is no aarch64 wheel question because there is no aarch64. `install_gesture_venv.sh` was
-# deleted with the rest of the Pi tooling.
-#
-# So they are declared, like everything else. The model file pip does not carry is still
-# needed, 7.8 MB, gitignored:
-#     python tools/gesture_control.py --fetch-model
-mediapipe>=0.10.18,<0.11             # hand landmarks. Needs a <=3.12 interpreter; this box is 3.12.10
-opencv-python>=4.10                  # the camera, and the frame conversion feeding mediapipe
+# The charts and CSVs in media/ STAY. A feature that was built, measured and then removed is
+# the most useful thing in the repo to have measured, and media/data/2026-08-22-gesture-*.csv
+# is what makes the removal an argument rather than an opinion.
+
 
 # =======================================================================================
 # The face — his window on the desktop (hud/float.py). Added 2026-08-26.
@@ -173,8 +197,7 @@ PyQt6-WebEngine>=6.7                 # the WebView that renders hud/face-preview
 # =======================================================================================
 # The GLM / OpenRouter benchmark (tools/benchmark_glm_vs_gemini.py). Added 2026-08-24.
 #
-# NOT INSTALLED BY DEFAULT, AND THAT IS THE ENTRY — same convention as the mediapipe block
-# above. That module imports `openai` by name, so it is named here; it is left commented
+# NOT INSTALLED BY DEFAULT, AND THAT IS THE ENTRY. That module imports `openai` by name, so it is named here; it is left commented
 # because nothing on the turn path touches it and the Pi should not carry a second SDK for a
 # measurement tool. The benchmark reports it as UNAVAILABLE rather than crashing when absent.
 #

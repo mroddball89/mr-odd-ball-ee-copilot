@@ -331,6 +331,73 @@ def load_pdfs(root: Path, exclude: Path | None = None) -> list:
     return kept
 
 
+def fill_blanks_with_ocr(documents: list) -> tuple[int, int]:
+    """Read the pages that carry no text, in place. Returns (pages rescued, files rescued).
+
+    A PDF exported as a picture is retrievable for nothing and searchable for nothing, and
+    `_build_collection` below has always said so out loud rather than dropping it quietly.
+    Saying so was as far as it went: on 2026-08-29 LB uploaded an ESP32 DevKit schematic, was
+    told it was "being indexed", and it contributed zero chunks. The sentence was true about
+    the intent and false about the outcome.
+
+    This closes that gap, and only that gap. Pages that already carry text are not touched —
+    OCR is strictly worse than the embedded text layer when there is one, and a mostly-text
+    PDF with a single scanned page costs exactly one page of OCR.
+
+    Grouped by source file so `tools/pdf_ocr.py` opens and renders each PDF once, and so its
+    cache is keyed and hit once. Never raises: OCR is an improvement on empty, and a rebuild
+    that indexes sixteen good pages must not die over the three it could not read.
+    """
+    from tools import pdf_ocr                                        # noqa: PLC0415
+
+    blanks: dict[Path, list] = {}
+    for doc in documents:
+        if (doc.page_content or "").strip():
+            continue
+        source = (getattr(doc, "metadata", {}) or {}).get("source")
+        if source:
+            blanks.setdefault(Path(str(source)), []).append(doc)
+
+    if not blanks:
+        return 0, 0
+
+    if not pdf_ocr.ocr_available():
+        # Not a warning. This is the documented state of a machine without the optional OCR
+        # extras, and the blank-page report in `_build_collection` already names the files.
+        print(f"   OCR is off or unavailable — {len(blanks)} image-only file(s) stay unsearchable.")
+        return 0, 0
+
+    print(f"   {len(blanks)} file(s) carried image-only pages; reading them with OCR...")
+    rescued_pages = rescued_files = 0
+    for pdf, docs in sorted(blanks.items()):
+        wanted = [int((getattr(d, "metadata", {}) or {}).get("page", -1)) for d in docs]
+        try:
+            text_by_page = pdf_ocr.ocr_pdf(pdf, pages=[i for i in wanted if i >= 0])
+        except Exception as exc:                                     # noqa: BLE001
+            LOG.warning("OCR failed on %s (%s) — leaving its pages blank", pdf.name, exc)
+            continue
+
+        got = 0
+        for doc in docs:
+            index = int((getattr(doc, "metadata", {}) or {}).get("page", -1))
+            text = text_by_page.get(index, "")
+            if text:
+                doc.page_content = text
+                # Marked, because a chunk read by OCR is not the same evidence as a chunk
+                # lifted from a text layer — it can transpose a digit in a resistor value, and
+                # anything citing it should be able to say where it came from.
+                doc.metadata["ocr"] = True
+                got += 1
+        if got:
+            rescued_files += 1
+            rescued_pages += got
+            print(f"      {pdf.name}: {got} page(s) read")
+        else:
+            print(f"      {pdf.name}: OCR found no usable text")
+
+    return rescued_pages, rescued_files
+
+
 def _build_collection(documents: list, collection_name: str, label: str) -> int:
     """Chunk, embed and persist `documents` into one named collection.
 
@@ -373,8 +440,8 @@ def _build_collection(documents: list, collection_name: str, label: str) -> int:
         blank_files = sorted({Path(str((getattr(d, "metadata", {}) or {}).get(
             "source", "?"))).name for d in documents if not (d.page_content or "").strip()})
         print(f"   {label}: {empty} page(s) carried NO extractable text — {', '.join(blank_files)}")
-        print(f"          These are image-only PDFs. Nothing can be retrieved from them until "
-              f"they are OCR'd or replaced with text-bearing files.")
+        print(f"          These are image-only pages that OCR could not read either (or it is "
+              f"off — see tools/pdf_ocr.py --check). Nothing can be retrieved from them.")
 
     if not usable:
         print(f"   {label}: nothing to embed — every page was empty.")
@@ -416,6 +483,10 @@ def build_vector_database():
               f"folder.)")
         return
 
+    rescued_pages, rescued_files = fill_blanks_with_ocr(datasheets)
+    if rescued_pages:
+        print(f"   OCR recovered {rescued_pages} page(s) from {rescued_files} file(s).")
+
     print(f"2. Chunking and embedding into {CHROMA_PATH}...")
     written = _build_collection(datasheets, DATASHEET_COLLECTION, "datasheets")
 
@@ -431,4 +502,10 @@ def build_vector_database():
 
 # Run this once to build the DB
 if __name__ == "__main__":
+    # Run as a script, `tools/` is on sys.path but the REPO ROOT is not, so `from tools import
+    # pdf_ocr` inside the OCR pass would fail — while the same call works fine when
+    # `tools/file_manager.py` imports this module. Same one-liner every harness in tools/ uses.
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT))
     build_vector_database()

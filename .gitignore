@@ -60,19 +60,15 @@ voices/
 # on Colab from training/hey_mr_odd_ball.ipynb and losing it means retraining.
 models/whisper/
 
-# The mediapipe hand landmarker, 7.8 MB, fetched from Google's published model store by
-# `python tools/gesture_control.py --fetch-model`. Same call as the whisper models: a
-# re-downloadable third-party artifact, not something we made. stage_install.sh fetches it.
-models/hand_landmarker.task
+# OCR text for image-only PDFs, keyed by each file's path, size and mtime. A cache of work
+# that is reproducible from the PDFs themselves in a few seconds a page — regenerable, so it
+# is a build artifact rather than something to carry. See tools/pdf_ocr.py.
+data/.ocr_cache/
 
 # pip install logs from the RAG stack — Pi-side, regenerable
 rag_install.log
 vectordb_build.log
 install.log
-
-# The gesture sidecar venv (tools/install_gesture_venv.sh) — a Python 3.12 interpreter and
-# mediapipe, ~400MB, rebuildable in two minutes. Built on the box; wheels are arch-specific.
-.venv-gesture/
 
 # =========================================================================================
 # Runtime output — his voice, his logs, his desktop. Added 2026-08-26, and the first two

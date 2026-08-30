@@ -598,6 +598,84 @@ def _schematic_case(tmp: Path, fake: _FakeIndexer) -> None:
 with_temp_data(_schematic_case)
 
 
+# =========================================================================================
+section("board grouping — one folder per board, not one per upload")
+# =========================================================================================
+#
+# 2026-08-29: three schematics uploaded in four minutes produced three folders, two of them
+# for the same board. The model named a project once out of three and the rest fell to "name
+# the folder after the file". These are the exact three filenames from that session.
+
+for filename, want in [
+    ("esp32devkitv1_schematics", "ESP32"),
+    ("Schematic__ESP32 Development Board_V2", "ESP32"),
+    ("arduino-uno-schematic", "Arduino Uno"),
+]:
+    got = F.board_family(filename)
+    check(got == want, f"{filename[:38]!r:42} -> {want}", f"got {got!r}")
+
+# The ordering property the table depends on. If "esp32" were matched before "esp32cam", every
+# ESP32-CAM board would land in the DevKit folder and the specific names would be unreachable.
+for filename, want in [("esp32cam_doorbell", "ESP32-CAM"), ("ESP32-S3-devkit", "ESP32-S3"),
+                       ("arduino_nano_every_v2", "Arduino Nano Every"),
+                       ("raspberrypi_pico_hat", "Raspberry Pi Pico")]:
+    got = F.board_family(filename)
+    check(got == want, f"the SPECIFIC name wins: {filename!r} -> {want}", f"got {got!r}")
+
+check(F.board_family("my_amp_board") == "", "a board it does not know maps to nothing")
+check(F.board_family("") == "", "and an empty name does not crash")
+
+
+def _grouping_case(tmp: Path, _fake) -> None:
+    """Two exports of one board, uploaded with no project name, share a folder."""
+    for name in ("esp32devkitv1_schematics.pdf", "Schematic__ESP32 Development Board_V2.pdf"):
+        (F.INBOX_DIR / name).write_bytes(b"%PDF")
+        F.process_inbox_file.invoke({"filename": name, "category": "schematic"})
+
+    esp = tmp / "projects" / "ESP32"
+    check(esp.is_dir() and len(list(esp.glob("*.pdf"))) == 2,
+          "two spellings of one board land in ONE folder",
+          f"{sorted(p.name for p in (tmp / 'projects').iterdir())}")
+    check(not (tmp / "projects" / "Schematic__ESP32 Development Board_V2").exists(),
+          "...and the filename never becomes a folder name")
+
+    # An explicit project name is an INSTRUCTION and is not overridden by family matching,
+    # even with an ESP32 folder sitting right there.
+    (F.INBOX_DIR / "esp32_buzzer.pdf").write_bytes(b"%PDF")
+    F.process_inbox_file.invoke({"filename": "esp32_buzzer.pdf", "category": "schematic",
+                                 "project": "ESP32 Buzzer Rig"})
+    check((tmp / "projects" / "ESP32 Buzzer Rig" / "esp32_buzzer.pdf").is_file(),
+          "an explicitly named project is honoured, not merged into its family")
+
+
+with_temp_data(_grouping_case)
+
+
+def _regroup_case(tmp: Path, _fake) -> None:
+    """The repair for folders that were already made the old way."""
+    old = tmp / "projects" / "arduino-uno-schematic"
+    old.mkdir(parents=True)
+    (old / "arduino-uno-schematic.pdf").write_bytes(b"%PDF")
+
+    planned = F.regroup_projects(apply_changes=False)
+    check(any("Arduino Uno" in line for line in planned),
+          "a dry run says what it would move", str(planned))
+    check((old / "arduino-uno-schematic.pdf").is_file(),
+          "...and moves NOTHING without --apply")
+
+    F.regroup_projects(apply_changes=True)
+    check((tmp / "projects" / "Arduino Uno" / "arduino-uno-schematic.pdf").is_file(),
+          "--apply moves the file onto the board folder")
+
+    # Idempotent: running it again is a no-op, not a second move into a nested folder.
+    again = F.regroup_projects(apply_changes=True)
+    check((tmp / "projects" / "Arduino Uno" / "arduino-uno-schematic.pdf").is_file(),
+          "and running it twice leaves the file exactly where it was", str(again))
+
+
+with_temp_data(_regroup_case)
+
+
 def _zip_case(tmp: Path, fake: _FakeIndexer) -> None:
     archive = F.INBOX_DIR / "gerbers.zip"
     with zipfile.ZipFile(archive, "w") as zf:
