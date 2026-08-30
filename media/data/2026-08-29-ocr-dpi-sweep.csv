@@ -1,0 +1,9 @@
+file,dpi,spans,chars,seconds,megapixels
+esp32devkitv1_schematics,150,93,404,2.1,1.55
+esp32devkitv1_schematics,200,101,432,2.3,2.76
+esp32devkitv1_schematics,300,100,431,1.9,6.21
+esp32devkitv1_schematics,400,99,428,1.89,11.04
+pi_cam3,150,250,2023,5.99,2.18
+pi_cam3,200,244,2062,6.53,3.87
+pi_cam3,300,250,2069,6.01,8.7
+pi_cam3,400,249,2078,6.1,15.47

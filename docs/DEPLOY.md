@@ -23,33 +23,19 @@ single largest thing the port bought: the repo you edit is the repo that runs.
 | Repo | `C:\Users\ironi\OneDrive\Desktop\EE_copilot_project\MR_ODD_BALL` |
 | Branch | `oddball-integration` |
 
-### Python 3.12, not 3.13, and it is one package's fault
+### Python 3.12 here, but nothing requires it any more
 
-`mediapipe` — the hand tracker behind `tools/gesture_pointer.py` and the thumbs-up approval in
-`tools/gesture_control.py` — has no working wheel on 3.13. On the Pi this forced a **separate
-3.12 sidecar venv** (`tools/install_gesture_venv.sh`, 400 MB) that the main process shelled out
-to for one token per approval, because the Pi's main venv was 3.13.5 and moving 1.9 GB of
-verified audio stack to chase one leaf feature was the wrong trade.
+The one hard version constraint this project ever had was `mediapipe`, which publishes no
+working wheel for 3.13 — it installs and then SIGKILLs at XNNPACK delegate creation. It was
+the hand tracker behind the gesture pointer and the thumbs-up approval, and **all of it was
+removed on 2026-08-29** at LB's call: approval by voice already worked, and the camera charged
+every gate for a rescue only a few needed. The measured cost that ended it is in the log —
+`gesture read timed out after 20s`, on a box with no webcam, for a launch he then approved by
+saying "Yes".
 
-None of that applies here. This box is 3.12.10, so `mediapipe` and `opencv` import in the main
-interpreter, the sidecar is deleted, and both are ordinary lines in `requirements.txt`. If you
-ever upgrade this environment to 3.13, **the gesture features are what break**, and they break
-at XNNPACK delegate creation rather than at import — so it will look like a crash, not a
-missing dependency.
-
-Check it in one line:
-
-```powershell
-python tools\gesture_pointer.py --check
-```
-
-```
-  SendInput        present (user32)
-  keyboard struct  absent - the pointer has no vocabulary for typing
-  detector         tasks
-
-  ready
-```
+So this box runs 3.12.10 because that is what is installed, not because anything needs it.
+Nothing in `requirements.txt` now objects to 3.13. The Pi-era sidecar venv
+(`tools/install_gesture_venv.sh`, 400 MB) was already gone with the rest of the Pi tooling.
 
 ---
 
@@ -94,7 +80,6 @@ Gitignored, because they are large, and they do not arrive with a `git clone`:
 | File | Size | Where from |
 |---|---|---|
 | `models/hey_mr_odd_ball.onnx` | ~1 MB | the trained wake word. Already present; back it up |
-| `models/hand_landmarker.task` | 7.8 MB | `python tools\gesture_control.py --fetch-model` |
 | `voices/en_US-joe-medium.onnx` | ~63 MB | `python -m piper.download_voices en_US-joe-medium --data-dir voices` |
 | `models/whisper/` | ~75 MB | downloaded automatically on first STT use |
 
@@ -475,45 +460,44 @@ asks.
 
 ---
 
-## Gestures: `SendInput`, and the guarantee that did not survive
+## Gestures: removed 2026-08-29, and what the removal took with it
 
-`tools/gesture_pointer.py` drives the desktop pointer from a pinch. Motion and dragging only.
-Read its header before changing anything in it — it makes four security guarantees, and
-**one of them is weaker on Windows than it was on the Pi.**
+`tools/gesture_pointer.py` drove the desktop pointer from a pinch, and `tools/win_input.py`
+was the `SendInput` wrapper underneath it. Both are deleted, with `tools/gesture_control.py`
+(the thumbs-up approval), the two harnesses and the live tester.
 
-| Guarantee | Pi | Windows |
-|---|---|---|
-| 2 — press and release never co-located (`CLICK_GUARD_PX = 160`) | logic | **unchanged** |
-| 3 — only the left button exists | device capability | emission chokepoint |
-| 4 — inert while an approval is on screen (`PAUSE_FILE`) | logic | **unchanged** |
-| 1 — **cannot type** | kernel-enforced | **inspection only** |
+**The security argument that section used to make is now vacuous, in the good way.** The
+pointer made four guarantees, and the first — *it cannot type* — was the one that mattered,
+because typing is how a pointer would answer the `input()` prompt that approves a shell
+command. On the Pi that guarantee was kernel-enforced: `evdev.UInput` declared no keyboard
+capability, so no bug in that file could type a `y`. Windows has no user-mode equivalent;
+`SendInput` is one call taking mouse *or* keyboard structures, so `win_input.py` declared only
+`MOUSEINPUT` and never `KEYBDINPUT`. That was the smallest surface the guarantee reduced to,
+and it was still a downgrade: **on the Pi a bug could not type; on Windows an edit could.**
 
-Guarantee 1 stops the pointer answering the `input()` prompt that approves a shell command. On
-the Pi, `evdev.UInput` declared no keyboard capability, so **no bug in that file could type a
-`y`** — the guarantee did not depend on the code being correct.
+That downgrade is now moot, and it is worth being precise about why. Nothing was hardened.
+There is simply no code left in this repo that can move a pointer or synthesise a keystroke,
+so there is no surface to reason about. `pyautogui` and `pynput` are still refused for the
+same reason they always were, should anyone reach for them.
 
-Windows has no user-mode equivalent. `SendInput` is one call that takes mouse *or* keyboard
-structures. `tools/win_input.py` therefore declares **only `MOUSEINPUT`, never `KEYBDINPUT`** —
-typing is not something that process can do wrong, it is something it has no vocabulary for.
-That is the smallest surface the guarantee reduces to here, and it is still a downgrade: on the
-Pi a *bug* could not type; on Windows an *edit* could.
-
-`pyautogui` and `pynput` were both considered and refused for this reason. Either one puts
-move, click, right-click and type behind a single import, and the guarantee becomes "we were
-careful about which functions we called" — a code review, re-run on every future edit.
+The approval gate is **voice or a click**, and on the blocking terminal paths
+(`main.py --text`) a typed `y` via `orchestrator.classify_yes.approve_at_keyboard`. See
+`engine/turn.py:_spoken_gate_answer`, whose docstring records what left and why.
 
 ```powershell
-python tools\win_input.py --check       # prints the INPUT union's members: one is the proof
-python tools\gesture_pointer.py --check
-python tools\gesture_pointer.py --dry-run
-python tools\verify_pointer.py          # 17 checks; sections 2-4 run the real guard code
-python tools\verify_pointer.py --probe
+python toolserify_gate_state.py       # 25 checks; section 6 proves the imports are gone
 ```
 
-**`POINTER_GAIN = 900` is still the libinput figure and needs re-fitting.**
-`MOUSEEVENTF_MOVE` without `MOUSEEVENTF_ABSOLUTE` is a relative delta in mickeys, and Windows
-applies its own acceleration curve to it — non-linearly, so fast hand movement is amplified
-more than slow. `--dry-run` prints the deltas asked for, not the pixels the cursor moved.
+Section 6 of that harness parses every file in the repo with `ast` and fails if anything still
+imports the deleted modules. **It is `ast` and not a grep on purpose** — the prose in
+`engine/turn.py` and `agents/os_agent.py` still discusses the camera at length, correctly, and
+a textual check would read those paragraphs and go red.
+
+The measurements stay: `media/data/2026-08-22-gesture-approval-latency.csv`,
+`media/data/2026-08-22-gesture-approval-breakdown.csv` and
+`media/charts/gesture-approval-latency.svg`. A feature that was built, measured and then
+removed is exactly the one worth having measured — the CSVs are what make this an argument
+rather than an opinion.
 
 ---
 
@@ -570,10 +554,11 @@ The ones worth knowing by name:
 | | |
 |---|---|
 | `verify_os_guard.py` | the blocklist. `--probe` empties it |
-| `verify_pointer.py` | the four gesture guarantees. `--probe` weakens each |
+| `verify_gate_state.py` | the approval gate's state machine, and that the gesture code is really gone |
 | `verify_launch.py` | the catalogue, resolution, roles, and every refusal path. `--probe` runs six mutations |
 | `verify_screen.py` | `--capture` takes a real frame |
 | `verify_agents.py` | that every third-party import is declared in `requirements.txt` |
+| `verify_ocr.py` | the image-only PDF path. `--probe` makes OCR greedy and section 4 bites |
 
 ### Two harness lessons that cost real time
 
@@ -615,11 +600,10 @@ after a sweep. **L22.**
 
 - [ ] **Nothing has run end to end** at the time of writing — `main.py` stops at the key check.
 - [ ] **Re-fit `[wake].threshold`.** Still the Pi's 0.76 against scores of 0.17–0.28.
-- [ ] **Re-fit `POINTER_GAIN`.** Still the libinput 900.
 - [ ] **No restart-on-failure.** See [What autostart does NOT do](#what-autostart-does-not-do).
 - [ ] **14 of the 41 applications he can open carry no readable target** (38 of the 70
       raw shortcuts, before exclusions), so the "is it installed" check is
       skipped for them. They launch correctly, and the card says the check was skipped rather
       than implying it passed. Refusing them would break every Control Panel entry.
-- [ ] `tools/measure_face.py` and `tools/live_test_gestures.py` still carry labwc handling.
-      Both are measurement tools off the turn path; `measure_face.py` will report zeros here.
+- [ ] `tools/measure_face.py` still carries labwc handling. It is a measurement tool off the
+      turn path and will report zeros here.

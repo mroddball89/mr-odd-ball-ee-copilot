@@ -184,6 +184,181 @@ _CATEGORIES = {_slug(word): key for word, key in {
 
 
 # ---------------------------------------------------------------------------------------
+# Which project a board file belongs to
+# ---------------------------------------------------------------------------------------
+#
+# 2026-08-29: LB uploaded three schematics in four minutes and got three folders —
+#
+#     data/projects/ESP32/                                 esp32devkitv1_schematics.pdf
+#     data/projects/Schematic__ESP32 Development Board_V2/ ...the same board family
+#     data/projects/arduino-uno-schematic/                 arduino-uno-schematic.pdf
+#
+# The model named a project once out of three, and the other two fell to "name the folder
+# after the file", which is what `_file_schematic` did when `project` came back empty. That
+# default is the bug: a filename is not a project name, and two exports of one board are two
+# filenames. The result is a projects tree that grows a folder per upload and can never
+# answer "show me everything for the ESP32".
+#
+# So an unnamed file is filed under the BOARD it names, and a board that already has a folder
+# reuses it.
+#
+# **Longest match first, and that ordering is load-bearing.** "arduinouno" has to be seen
+# before "arduino" and "esp32cam" before "esp32", or every board in a family collapses into
+# the family name and an ESP32-CAM doorbell lands in with a DevKit.
+_BOARD_FAMILIES: tuple[tuple[str, str], ...] = (
+    # Espressif. The bare "esp32" is LAST of its group on purpose.
+    ("esp32cam", "ESP32-CAM"), ("esp32s3", "ESP32-S3"), ("esp32s2", "ESP32-S2"),
+    ("esp32c6", "ESP32-C6"), ("esp32c3", "ESP32-C3"), ("esp8266", "ESP8266"),
+    ("esp32", "ESP32"),
+    # Arduino. Same rule: the model name before the brand.
+    ("arduinonanoevery", "Arduino Nano Every"), ("arduinonano", "Arduino Nano"),
+    ("arduinouno", "Arduino Uno"), ("arduinomega", "Arduino Mega"),
+    ("arduinoleonardo", "Arduino Leonardo"), ("arduinomicro", "Arduino Micro"),
+    ("arduinodue", "Arduino Due"), ("arduino", "Arduino"),
+    # Raspberry Pi. "pico" is its own board and must not be swallowed by "raspberrypi".
+    ("raspberrypipico", "Raspberry Pi Pico"), ("rpipico", "Raspberry Pi Pico"),
+    ("rp2040", "RP2040"), ("raspberrypi5", "Raspberry Pi 5"),
+    ("raspberrypi4", "Raspberry Pi 4"), ("raspberrypizero", "Raspberry Pi Zero"),
+    ("raspberrypi", "Raspberry Pi"),
+    # The rest of what turns up on LB's bench.
+    ("atmega328", "ATmega328"), ("atmega", "ATmega"), ("attiny", "ATtiny"),
+    ("stm32", "STM32"), ("msp430", "MSP430"), ("nrf52", "nRF52"), ("teensy", "Teensy"),
+)
+
+
+def board_family(text: str) -> str:
+    """The board `text` names, or "" when it names none.
+
+    Matched on the slug, so "esp32devkitv1_schematics", "Schematic__ESP32 Development Board_V2"
+    and "ESP32" all reduce to the same answer — which is the whole point, since those were the
+    three spellings that produced three folders.
+    """
+    slug = _slug(text)
+    if not slug:
+        return ""
+    for needle, name in _BOARD_FAMILIES:
+        if needle in slug:
+            return name
+    return ""
+
+
+def _existing_project(candidate: str, by_family: bool) -> str:
+    """An existing folder under `data/projects/` that `candidate` means, or "".
+
+    Args:
+        candidate: the folder name being proposed.
+        by_family: also match on board family, not just on an equal slug.
+
+    `by_family` is False when the MODEL named the project explicitly, and that asymmetry is
+    deliberate. An explicit name is an instruction: if it says "ESP32 Buzzer Rig" it gets
+    "ESP32 Buzzer Rig", even with an "ESP32" folder sitting next to it. Family matching exists
+    to clean up the case where nobody named anything, which is where the mess came from.
+    """
+    want = _slug(candidate)
+    if not want:
+        return ""
+    try:
+        existing = sorted(d for d in PROJECTS_DIR.iterdir() if d.is_dir())
+    except OSError:
+        return ""
+
+    for directory in existing:
+        if _slug(directory.name) == want:
+            return directory.name
+    if not by_family:
+        return ""
+
+    family = board_family(candidate)
+    if family:
+        # A folder NAMED for the board beats one that merely mentions it. Without this the
+        # answer depends on `sorted()`, and an empty "arduino-uno-schematic/" left behind by a
+        # regroup could outrank the "Arduino Uno/" the regroup had just created.
+        for directory in existing:
+            if directory.name == family:
+                return directory.name
+        for directory in existing:
+            if board_family(directory.name) == family:
+                return directory.name
+    return ""
+
+
+def project_folder_for(project: str, source: Path) -> str:
+    """The folder under `data/projects/` this file belongs in.
+
+    Args:
+        project: what the model passed, often "".
+        source:  the file being filed.
+
+    Returns:
+        A single safe path component. Never empty.
+    """
+    named = _safe_segment(project, "") if (project or "").strip() else ""
+    if named:
+        return _existing_project(named, by_family=False) or named
+
+    candidate = _safe_segment(board_family(source.stem) or source.stem, "project")
+    return _existing_project(candidate, by_family=True) or candidate
+
+
+def regroup_projects(apply_changes: bool = False) -> list[str]:
+    """Move existing project folders onto the board-family naming. Returns what it did.
+
+    A dry run by default, because this moves LB's files. Everything it does is a directory
+    merge inside `data/projects/`, so undoing it is moving the files back — but he should see
+    the list before it happens rather than after.
+    """
+    lines: list[str] = []
+    try:
+        folders = sorted(d for d in PROJECTS_DIR.iterdir() if d.is_dir())
+    except OSError:
+        return ["data/projects/ does not exist yet — nothing to regroup."]
+
+    for folder in folders:
+        family = board_family(folder.name)
+        if not family or family == folder.name:
+            continue
+        target = PROJECTS_DIR / family
+        if target.resolve() == folder.resolve():
+            continue
+
+        moved = [f for f in folder.rglob("*") if f.is_file()]
+        if moved:
+            lines.append(f"{folder.name}/ -> {family}/  ({len(moved)} file(s))")
+        if not apply_changes:
+            continue
+
+        target.mkdir(parents=True, exist_ok=True)
+        for item in moved:
+            shutil.move(str(item), str(_unique(target, item.name)))
+        # Only ever remove a directory that is now empty, and only with rmdir, which refuses
+        # to do anything else. A recursive delete here would be one bad match away from taking
+        # a project with it.
+        for directory in sorted((d for d in folder.rglob("*") if d.is_dir()), reverse=True):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        try:
+            folder.rmdir()
+        except OSError as exc:
+            # Distinguish the two, because they need different things from LB. A folder with
+            # files in it is a match this function got wrong; one that is empty and will not
+            # go is the repo living under OneDrive, which holds a handle on a synced directory
+            # and answers rmdir with WinError 5 indefinitely. Measured 2026-08-29 — it does
+            # not clear on retry. Harmless: `_existing_project` prefers the folder NAMED for
+            # the board, so an empty leftover never captures a future upload.
+            leftover = [f for f in folder.rglob("*") if f.is_file()]
+            if leftover:
+                lines.append(f"   (left {folder.name}/ — it still has {len(leftover)} file(s))")
+            else:
+                lines.append(f"   (emptied {folder.name}/, but the directory will not delete: "
+                             f"{type(exc).__name__}. Remove it by hand if it bothers you.)")
+
+    return lines or ["Every project folder is already named after its board."]
+
+
+
+# ---------------------------------------------------------------------------------------
 # The background rebuild
 # ---------------------------------------------------------------------------------------
 
@@ -590,7 +765,11 @@ def process_inbox_file(filename: str, category: str, project: str = "",
                       zip, or a PDF of a board. Goes to data/projects/, where the hardware and
                       firmware agents can read it.
     `project`: for 'schematic' only — the project folder to put it in, e.g. 'amp_board'.
-               Leave empty to name the folder after the file.
+               Name the BOARD or the build, never the file: two exports of one board belong in
+               one folder. Call `list_project_files` first and REUSE an existing folder name
+               when the file belongs to a board that is already there. Leave it empty and the
+               board is worked out from the filename, which is right more often than a made-up
+               name is.
     `folder`: for 'datasheet' only — which folder under data/ to use. The ones that already
               exist are 'arduino', 'espressif', 'raspberry_pi' and 'sensors'. Leave empty for
               'datasheets'.
@@ -670,9 +849,10 @@ def _file_datasheet(source: Path, suffix: str, folder: str) -> str:
 
 
 def _file_schematic(source: Path, suffix: str, project: str) -> str:
-    # The project folder is named after the file when the model does not name one. `_safe_segment`
-    # of "" would give the fallback, so the stem is passed as the fallback rather than tested for.
-    name = _safe_segment(project, _safe_segment(source.stem, "project"))
+    # Named after the BOARD when the model does not name a project, and reusing a folder that
+    # already holds that board. See `project_folder_for` for why the filename stopped being
+    # the default.
+    name = project_folder_for(project, source)
     destination = PROJECTS_DIR / name
     where = _where(destination)
 
@@ -811,7 +991,10 @@ stays there until you file it, so an upload he never hears about is an upload th
 - Choose the category from the filename when it is obvious. When it is NOT obvious, ask him
   which it is in one short question and file it on his next answer — a syllabus filed as a
   datasheet is a wrong answer about his coursework three weeks later.
-- For a schematic, pass a `project` name when he gives you one.
+- For a schematic, pass a `project` name when LB gives you one, and otherwise name the BOARD
+  it is for ('ESP32', 'Arduino Uno') rather than repeating the filename. Check
+  `list_project_files` first and reuse a folder that already exists for that board — he asked
+  for one folder per board, not one per upload.
 - `list_project_files` is how you find out which boards he has uploaded.
 - Indexing runs in the BACKGROUND and is not instant. Never tell him a document is searchable,
   and do NOT promise him how long it will take — say it is being indexed, and use
@@ -888,7 +1071,17 @@ def main(argv: list[str] | None = None) -> int:
                     help="academic | datasheet | schematic")
     ap.add_argument("--project", default="", help="project folder, for a schematic")
     ap.add_argument("--folder", default="", help="folder under data/, for a datasheet")
+    ap.add_argument("--regroup", action="store_true",
+                    help="rename project folders onto their board (dry run)")
+    ap.add_argument("--apply", action="store_true", help="with --regroup, actually move files")
     args = ap.parse_args(argv)
+
+    if args.regroup:
+        lines = regroup_projects(apply_changes=args.apply)
+        print("\n".join(f"  {line}" for line in lines))
+        if not args.apply:
+            print("\n  Dry run. Add --apply to move them.")
+        return 0
 
     sys.path.insert(0, str(REPO_ROOT))
     # Windows defaults stdout to cp1252, and every sentence this module returns has an em dash

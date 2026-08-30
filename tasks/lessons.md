@@ -1138,3 +1138,100 @@ that "say all of it" is not a softer route to the speaker than extraction was.
 carrying a real sentence; the shortest work produced the shortest audio, and the turn line said
 so. **When a stage's cost collapses while the stage before it did the full work, the output of
 that stage got smaller, not faster.**
+
+
+---
+
+## L31 - A second way to do something he could already do
+
+Gesture approval worked. A thumbs up at the camera answered the permission gate, four security
+guarantees were written down and tested, `verify_pointer.py` had seventeen checks and a probe
+that weakened each one. None of that was the question.
+
+The question was what it COST the turns that did not need it. 2026-08-29, 19:52:
+
+    19:52:24  launch intent: 'open' + 'arduino ide' -> Want me to open Arduino IDE?
+    19:52:49  gesture read timed out after 20s
+    19:52:49  no camera - not probing again for 600s
+    19:52:58  heard 'Yes' -> True
+
+**Twenty of that turn's thirty-eight seconds were spent asking a camera that was not plugged
+in.** And the thing it would have rescued - a yes Whisper could not hear - was a yes he then
+said out loud successfully. LB's own summary: he can just say yes.
+
+### The rule
+
+**A fallback earns its place by what it costs when it is not needed, not by how well it works
+when it is.** The camera was the gate's second channel and it charged every unreadable
+transcript ~2.2 seconds on the Pi (D15) and up to 20 on a box with no webcam. The retry that
+was already there rescues the same case for the price of asking again.
+
+Two related traps this makes concrete:
+
+- **A guarantee's strength is not evidence the feature is worth having.** The pointer's
+  cannot-type guarantee was the most carefully reasoned thing in `docs/DEPLOY.md`, including an
+  honest note that Windows downgraded it from kernel-enforced to inspection-only. All true, all
+  irrelevant to whether LB wanted the AI moving his mouse. He did not.
+- **Removing it removed the argument, not just the code.** There is now no code in this repo
+  that can move a pointer or synthesise a keystroke, so the downgrade is moot. That is a
+  stronger position than the careful one, and it was available the whole time.
+
+### What was kept, deliberately
+
+`media/data/2026-08-22-gesture-approval-*.csv` and `media/charts/gesture-approval-latency.svg`.
+A feature that was built, measured and then removed is the one most worth having measured - the
+CSVs are what make this an argument rather than an opinion. The `startle` in
+`hud_bridge.play_gesture` also stays: it animates the cartoon face and never touched a camera.
+Same word, different thing, and grepping for "gesture" cannot tell them apart - which is why
+`verify_gate_state.py` section 6 parses imports with `ast` instead.
+
+
+---
+
+## L32 - Reporting a gap honestly is not the same as closing it
+
+`tools/vector_db.py` printed this on every rebuild, for days:
+
+    datasheets: 3 page(s) carried NO extractable text - esp32devkitv1_schematics.pdf,
+                pi_cam3.pdf, pi_cam3_noir_wide.pdf
+                These are image-only PDFs. Nothing can be retrieved from them until
+                they are OCR'd or replaced with text-bearing files.
+
+That message is good. It names the files, explains the cause, and says what would fix it -
+everything the D9 empty-BOM lesson asks for. It was also, for as long as it went unread, a
+**substitute** for the fix. On 2026-08-29 LB uploaded a schematic and was told "its text is
+being indexed in the background", which was true about the intent and false about the outcome:
+it contributed zero chunks and always would have.
+
+### The rule
+
+**A warning that recurs unchanged is a backlog item, not a diagnostic.** The first print is
+information. The hundredth is a decision that has been made by default. Grep the logs for
+messages that appear on every run and ask which of them are describing work nobody scheduled.
+
+The related failure is the honest sentence in front of a user: "it is being indexed" was
+literally true - a rebuild did start - and useless, because the thing he cared about was
+whether he would be able to ask about the board. `agents/persona_agent.py` is told not to
+promise searchability, and it obeyed. Obeying was not enough.
+
+### And one correction to received wisdom, measured
+
+Everyone's instinct for OCR of small schematic text is to raise the DPI. Swept it:
+`media/data/2026-08-29-ocr-dpi-sweep.csv`, charted in `media/charts/ocr-dpi-sweep.svg`.
+
+    esp32devkitv1_schematics    404 -> 432 -> 431 -> 428 chars over 150 -> 400 dpi
+    pi_cam3                    2023 -> 2062 -> 2069 -> 2078 chars
+
+**Flat.** RapidOCR resizes to its detector's input size before doing anything, so a 400 dpi
+raster is downsampled back to roughly what 150 dpi already was - 4x the memory for the same
+characters, on a path that sits between LB pressing the paperclip and hearing an answer. Sweep
+the parameter before you tune it; the curve is often flat where the folklore says it is steep.
+
+### And the fixture that could not fail
+
+`verify_ocr.py` section 4 asserts that a page which already HAS text is never OCR'd over. It
+passed. It also passed with `--probe`, which deliberately makes the OCR pass greedy - because
+the fixture PDF had one page and the "already has text" document pointed at page index 1, which
+did not exist. `ocr_pdf` filtered it as out of range, so the protected thing was **unreachable
+rather than protected**. Same shape as L29's `or` that widened a check until it stopped biting.
+The probe is the only reason it was caught. Run it.
