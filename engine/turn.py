@@ -449,34 +449,37 @@ class Turn:
     #
     # A silent decline is indistinguishable from a crash, which is why he asked four times.
     # This sentence is the difference between "it is broken" and "it did not hear me".
-    GATE_RETRY_LINE = ("I didn't catch that. Please give a thumbs up to the camera "
-                       "or say yes clearly.")
+    GATE_RETRY_LINE = "I didn't catch that. Please say yes or no clearly."
 
     # One retry, not a loop. A gate that keeps asking is a gate that eventually gets a yes out
     # of a television, and the safe default is already a decline.
     GATE_ATTEMPTS = 2
 
     def _spoken_gate_answer(self, t: Timings) -> str:
-        """Read a yes or no from voice, camera or a click. **Anything unclear is a no.**
+        """Read a yes or no from voice or a click. **Anything unclear is a no.**
 
-        Three channels, deliberately in this order:
+        Two channels, deliberately in this order:
 
         1. **Voice**, because it is instant and it is how LB actually answers.
-        2. **The camera**, ONLY when voice was unreadable. A thumbs up costs a subprocess and
-           ~2.2 seconds (D15 measured it), so checking it every time would tax every approval
-           to rescue the few that need rescuing. It is the fallback, not the default.
-        3. **A click** on the HUD, which beats both because it is unambiguous.
+        2. **A click** on the HUD, which beats voice because it is unambiguous.
 
-        Gesture approval existed, worked, and was wired only into `run_os_agent()` — the old
-        blocking terminal function whose own docstring says it is NOT the path the voice loop
-        takes. Built and not wired, the same failure D6 records for the typed channel.
+        ## The camera used to be the third, and was removed 2026-08-29
+
+        A thumbs up at the camera was the fallback for a yes Whisper could not hear. It worked,
+        and it was still the wrong trade: it cost a subprocess and ~2.2 seconds (D15) on the
+        turns that needed rescuing, and on 2026-08-29 at 19:52 it cost **20 seconds** on a turn
+        that did not — `gesture read timed out after 20s`, on a machine with no camera
+        attached, to approve a launch LB then approved by saying "Yes".
+
+        The rescue it offered is available more cheaply from the retry that is already here.
+        Saying "yes" again is faster than any camera path, and a decline is what silence means
+        at this gate either way. Two channels that cost nothing beat three where the third
+        charges every gate for the benefit of a few.
 
         Returns:
             The answer as text. "" means nothing readable arrived, and `Engine.ask("")`
             declines the pending action. Never returns "yes" on a guess.
         """
-        from tools.gesture_control import get_gesture
-
         for attempt in range(1, self.GATE_ATTEMPTS + 1):
             self._bridge.set_state("listening")
             answer = ""
@@ -495,8 +498,8 @@ class Turn:
                 # was handed words nobody said. This is the question nothing was asking — were
                 # there any words at all — and it belongs in front of `is_yes`, not inside it.
                 #
-                # Rejecting leaves `answer` as "", which this loop already handles: look at
-                # the camera, ask once more, then decline. **A decline is what silence means
+                # Rejecting leaves `answer` as "", which this loop already handles: ask once
+                # more, then decline. **A decline is what silence means
                 # here**, so a false reject cannot do anything worse than make LB repeat
                 # himself, while a false accept runs a command he never approved.
                 credit = credible.assess(got.text, capture.speech_s,
@@ -520,23 +523,9 @@ class Turn:
             if is_yes(answer) is not None:
                 return answer                  # a clear yes OR a clear no. Both are answers.
 
-            # Voice said nothing readable. Look at the camera before giving up.
-            self._bridge.set_state(self._thinking)
-            try:
-                seen = self._quiet(get_gesture) or "NO_CAMERA"
-            except Exception:                                          # noqa: BLE001
-                LOG.exception("gate: the camera check failed; treating it as no gesture")
-                seen = "NO_CAMERA"
-
-            t.extras.append(f"gate camera: {seen}")
-            if seen == "THUMBS_UP":
-                LOG.info("gate: approved by thumbs up")
-                return "yes"
-
             if attempt < self.GATE_ATTEMPTS:
                 # THE line. Say what went wrong and what to do about it, then listen again.
-                LOG.info("gate: nothing readable (heard %r, camera %s) — asking again",
-                         answer, seen)
+                LOG.info("gate: nothing readable (heard %r) — asking again", answer)
                 t.extras.append("gate retry")
                 self._say(self.GATE_RETRY_LINE, t)
 

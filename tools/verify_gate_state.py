@@ -247,15 +247,14 @@ check(bridge4.states[0] == "thinking",
 
 
 # =========================================================================================
-section("5. the SPOKEN gate — LB's Firefox failure, and the three ways out")
+section("5. the SPOKEN gate — LB's Firefox failure, and the two ways out")
 # =========================================================================================
 
-import tools.gesture_control as gc                                    # noqa: E402
 from engine.turn import Timings                                       # noqa: E402
 
 
 class VoiceGateHarness:
-    """Drives `_spoken_gate_answer` with scripted transcripts and a scripted camera.
+    """Drives `_spoken_gate_answer` with scripted transcripts.
 
     Reproduces the measured 2026-08-22 failure. LB's COMMANDS transcribed (mic rms 0.28-0.33)
     and his CONFIRMATIONS did not (0.017-0.020 — Whisper returned ""). `is_yes("")` is None,
@@ -263,15 +262,13 @@ class VoiceGateHarness:
     and concluded the launcher was broken. It was not; it was never approved.
     """
 
-    def __init__(self, transcripts, gesture="NO_CAMERA"):
+    def __init__(self, transcripts):
         self.bridge = FakeBridge(approve=None)          # no HUD clicks on this path
         self.speaker = FakeSpeaker()
         self.engine = GateEngine(self.bridge)
         self.turn = build(self.bridge, self.engine, self.speaker)
         self._scripted = list(transcripts)
-        self._gesture = gesture
         self.captures = 0
-        self.camera_checks = 0
 
         harness = self
 
@@ -303,73 +300,97 @@ class VoiceGateHarness:
         self.turn._stt = _Stt()
 
     def run(self):
-        def fake_gesture():
-            self.camera_checks += 1
-            return self._gesture
-
-        saved = gc.get_gesture
-        gc.get_gesture = fake_gesture
-        try:
-            return self.turn._spoken_gate_answer(Timings())
-        finally:
-            gc.get_gesture = saved
+        return self.turn._spoken_gate_answer(Timings())
 
 
-# --- a clear spoken yes still works, and must NOT pay for the camera ----------------------
+# --- a clear spoken yes still works --------------------------------------------------------
 h = VoiceGateHarness(["yes"])
 got = h.run()
 check(is_yes(got) is True, "a clear spoken 'yes' approves", f"got {got!r}")
-check(h.camera_checks == 0,
-      "...and the camera is NOT consulted when voice was readable",
-      f"{h.camera_checks} check(s) — one costs ~2.2s (D15), so this must stay 0")
+check(h.captures == 1, "...on the first capture, with nothing else consulted",
+      f"{h.captures} capture(s)")
 
 h = VoiceGateHarness(["no"])
 check(is_yes(h.run()) is False, "a clear spoken 'no' declines")
 
-# --- THE BUG: an unheard yes, rescued by the camera ---------------------------------------
-h = VoiceGateHarness(["", ""], gesture="THUMBS_UP")
-got = h.run()
-check(is_yes(got) is True,
-      "an unheard 'yes' is rescued by a THUMBS UP — this is the Firefox case",
-      f"got {got!r}, camera consulted {h.camera_checks}x")
-check(h.camera_checks >= 1, "the camera IS consulted once the transcript is empty")
+# --- THE BUG, and what answers it now ------------------------------------------------------
+#
+# The camera used to be the rescue here: a thumbs up approved a yes Whisper could not hear.
+# It was removed 2026-08-29 and the retry is the rescue on its own. That is a WEAKER promise
+# than the camera made, and stating it plainly is the point of this block — the gate does not
+# recover an unheard yes by itself, it asks again and lets LB answer again.
+h = VoiceGateHarness(["", "yes"])
+check(is_yes(h.run()) is True, "an unheard 'yes' is rescued by the RETRY, not by a camera")
 
 # --- the audible decline -------------------------------------------------------------------
-h = VoiceGateHarness(["", ""], gesture="NO_CAMERA")
+h = VoiceGateHarness(["", ""])
 got = h.run()
-check(got == "", "nothing readable anywhere still DECLINES — the gate never defaults open",
-      f"got {got!r}")
+check(got == "", "nothing readable still DECLINES — the gate never defaults open", f"got {got!r}")
 check(any("didn't catch that" in said for said in h.speaker.said),
       "...and he SAYS SO out loud instead of failing silently", f"said: {h.speaker.said}")
-check(any("thumbs up" in said and "say yes" in said for said in h.speaker.said),
-      "...naming both ways to answer", f"said: {h.speaker.said}")
+check(any("say yes or no" in said.lower() for said in h.speaker.said),
+      "...naming what to do about it", f"said: {h.speaker.said}")
+check(not any("thumbs" in said.lower() or "camera" in said.lower()
+              for said in h.speaker.said),
+      "...and never offers a camera he no longer has", f"said: {h.speaker.said}")
 check(h.captures == 2, "he listens again after the retry line, exactly once",
       f"{h.captures} capture(s); GATE_ATTEMPTS={Turn.GATE_ATTEMPTS}")
 
-# --- an open palm is not an approval. D13's whole safety argument. -------------------------
-h = VoiceGateHarness(["", ""], gesture="OPEN_PALM")
-check(h.run() == "", "an OPEN PALM is not an approval, however often it is seen")
 
-# --- the retry is a real second chance -----------------------------------------------------
-h = VoiceGateHarness(["", "yes"], gesture="NO_CAMERA")
-check(is_yes(h.run()) is True, "a 'yes' on the SECOND attempt is heard and approves")
+# =========================================================================================
+section("6. the gesture system is GONE — and gone means not imported")
+# =========================================================================================
+#
+# Deleting files is easy to do most of the way. What is left behind is an import of a module
+# that no longer exists, which does not fail until the one code path that reaches it runs —
+# and in this repo that path is a security gate, which only runs when LB asks for something
+# dangerous. So this is checked rather than assumed.
+#
+# **Parsed with `ast`, never grepped.** A textual search over this repo reads the PROSE, and
+# the prose still discusses the camera at length, correctly: `engine/turn.py` explains why it
+# was removed and `agents/os_agent.py` explains what did not change when it went. Those
+# paragraphs are the record and must not make this go red. An import is a syntax node, so ask
+# the syntax.
 
-# --- a camera that raises must not approve, and must not take the turn down ----------------
-h = VoiceGateHarness(["", ""], gesture="NO_CAMERA")
+import ast                                                            # noqa: E402
 
+REPO = Path(__file__).resolve().parents[1]
+REMOVED_MODULES = {"tools.gesture_control", "tools.gesture_pointer", "tools.win_input",
+                   "gesture_control", "gesture_pointer", "win_input"}
 
-def _boom():
-    raise RuntimeError("camera exploded")
+live_imports: list[str] = []
+scanned = 0
+for path in sorted(REPO.rglob("*.py")):
+    if any(part in (".venv", "__pycache__", "media", "raw_downloads") for part in path.parts):
+        continue
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except SyntaxError:
+        continue
+    scanned += 1
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in REMOVED_MODULES:
+                    live_imports.append(f"{path.name}:{node.lineno} import {alias.name}")
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "") in REMOVED_MODULES:
+                live_imports.append(f"{path.name}:{node.lineno} from {node.module}")
 
+check(not live_imports, f"no module still imports the deleted gesture code ({scanned} files)",
+      "; ".join(live_imports) or "clean")
 
-_saved = gc.get_gesture
-gc.get_gesture = _boom
-try:
-    check(h.turn._spoken_gate_answer(Timings()) == "",
-          "a camera that RAISES declines cleanly rather than crashing the gate")
-finally:
-    gc.get_gesture = _saved
+for name in ("tools/gesture_control.py", "tools/gesture_pointer.py", "tools/win_input.py",
+             "tools/verify_gestures.py", "tools/verify_pointer.py",
+             "tools/live_test_gestures.py"):
+    check(not (REPO / name).exists(), f"{name} is deleted")
 
+# The face rig's own `startle` is a DIFFERENT thing wearing the same word, and it stays.
+# `hud_bridge.play_gesture` animates the cartoon ball; it never touched a camera.
+from orchestrator.hud_bridge import HudBridge                         # noqa: E402
+
+check(hasattr(HudBridge, "play_gesture"),
+      "the rig's face animation is untouched — 'gesture' there means the ball, not a hand")
 
 
 print("\n" + "=" * 78)
