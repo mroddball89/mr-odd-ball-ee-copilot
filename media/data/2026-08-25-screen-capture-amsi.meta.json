@@ -1,0 +1,26 @@
+{
+  "title": "Windows Defender blocks the screenshot script, and it is not the line everybody blames",
+  "taken": "2026-08-25T09:12-04:00",
+  "author": "LB",
+  "hardware": "Windows 11 Home 10.0.26200, Python 3.12.10 — the AUTHORING box, not the Pi",
+  "host": "DESKTOP-3NFU5EK",
+  "conditions": {
+    "target_platform": "Raspberry Pi 5 under labwc/Wayland, where the backend is `grim` and none of this applies",
+    "why_windows_at_all": "D7 requires every harness to run on the authoring box. A screen-awareness feature whose harness cannot capture a screen only proves the argument parser works.",
+    "defender": "Windows Defender real-time protection on, default settings, no exclusions",
+    "screen": "3840x1080 virtual desktop, captured at SCALE=0.5"
+  },
+  "what_this_shows": "PowerShell's System.Drawing screenshot recipe — the one every tutorial gives — is blocked by Windows Defender's AMSI hook on this machine. Two things had to change before it ran, and only one of them is the thing the internet tells you about. The well-known half is that an inline `powershell -Command` is blocked and a `.ps1` run with `-File` is not. That was not sufficient here: the script was still blocked from a file. Bisecting the script found the actual trigger was the JPEG-quality encoder block — `ImageCodecInfo::GetImageEncoders` plus `EncoderParameter` — and NOT `CopyFromScreen`, which is the call everybody assumes is being matched. With the encoder block removed and .NET's default JPEG quality accepted, the identical CopyFromScreen script runs.",
+  "why_it_matters": "The failure presents as a PowerShell *ParserError* — 'This script contains malicious content' with a `ParentContainsErrorRecordException` — which reads exactly like a syntax bug in the script and sends you rewriting working code. Anybody adding a Windows screenshot path will hit this and will bisect the wrong half first, because the received wisdom names CopyFromScreen and the `-Command` versus `-File` distinction, and on this machine neither of those alone was the answer. Losing the explicit quality setting costs nothing measurable: the default-quality downscaled frame is 70 kB, already smaller than the 60-quality setting was aiming for.",
+  "before_after": {
+    "before": "0 bytes, ScriptContainedMaliciousContent, both inline and from a file",
+    "after": "70,080 bytes of legible JPEG from the same CopyFromScreen call, encoder block removed"
+  },
+  "verified_by": [
+    "python tools/verify_screen.py           61/61",
+    "python tools/verify_screen.py --capture real frame, JPEG magic bytes checked",
+    "python tools/verify_screen.py --probe   confirms the gate checks bite"
+  ],
+  "caveat": "One machine, one Defender version, default settings. AMSI signatures change, so this is a record of what was matched on 2026-08-25 and not a stable contract. It says nothing at all about the Pi, where `grim` is the backend and no scanner is involved — the deployment target is unaffected by every number in this file.",
+  "related": ["tools/screen_capture.py", "docs/DECISIONS.md D29"]
+}

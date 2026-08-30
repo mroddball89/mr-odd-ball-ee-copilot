@@ -1,0 +1,82 @@
+measured_at,clip,model,transcript,seconds,audio_s,rtf,free_destination,expected,correct
+2026-08-28T10:41:41,075709_battery-80--yes-dbsk-chop-3-and-a-few,tiny.en,battery 80% yes dpsk chop 3 and a few,0.47,15.84,0.03,,,
+2026-08-28T10:41:41,075737_i-think-a-little-bit-backwards-today--so,tiny.en,"I think a little bit backwards today, so.",0.286,4.16,0.069,,,
+2026-08-28T10:41:41,075806_he-s-got-a-company-with-ben--he-s-got-a-,tiny.en,"That's a good job of working company with Ben. Same overall, Pete. I don't know what that much is. The last jump, the last one.",1.993,10.08,0.198,,,
+2026-08-28T10:41:41,084910_elbow-,tiny.en,elbow.,0.732,2.48,0.295,,,
+2026-08-28T10:41:41,084927_do-you-have-skgop-3-nfu-5vk-,tiny.en,DBSK GOP 3 NFU 5VK.,0.445,6.16,0.072,,,
+2026-08-28T10:41:41,084950_can-you-save-a-note-for-me-in-the-vault-,tiny.en,Can you save a note for me in the vault? Save Mr. Arval.,0.298,5.68,0.052,note,note,yes
+2026-08-28T10:41:41,085047_i-need-to-add-a-note-to-the-vault-,tiny.en,I need to add a note to the vault.,0.287,4.4,0.065,note,note,yes
+2026-08-28T10:41:41,162259_available-,tiny.en,available.,0.733,2.48,0.296,,,
+2026-08-28T10:41:41,162315_family-home--yes--k-t-o-p--3-nsu-5dk-,tiny.en,"Family hub, ESK-T-O-P-3, NSU 5DK.",0.459,6.16,0.075,,,
+2026-08-28T10:41:41,162328_sink-my-schedule,tiny.en,sink my schedule,0.26,3.36,0.078,,academic,no
+2026-08-28T10:41:41,162355_thank-you-,tiny.en,Thank you.,0.262,2.8,0.093,thanks,thanks,yes
+2026-08-28T10:41:41,162405_go-to-sleep-,tiny.en,Go to sleep.,0.27,2.88,0.094,sleep,sleep,yes
+2026-08-28T10:41:41,165448_i-think-my-schedule-,tiny.en,I think my schedule.,0.275,5.36,0.051,,academic,no
+2026-08-28T10:41:41,165508_i-think-my-schedule-,tiny.en,I think my schedule.,0.28,3.52,0.08,,academic,no
+2026-08-28T10:41:41,165531_sick-mass-schedule-,tiny.en,Sick mass schedule.,0.348,3.28,0.106,,academic,no
+2026-08-28T10:41:41,165551_what-s-20-plus-20-,tiny.en,What's 20 plus 20?,0.274,3.52,0.078,calc,calc,yes
+2026-08-28T10:41:41,165557_that-s-20-times-20-,tiny.en,That's 20 times 20.,0.272,3.52,0.077,calc,calc,yes
+2026-08-28T10:41:41,165613_does-electricity-flow-from-positive-to-n,tiny.en,Does electricity flow from positive to negative or negative to positive?,0.299,7.12,0.042,,,
+2026-08-28T10:41:41,165632_so-,tiny.en,So...,0.327,2.56,0.128,,,
+2026-08-28T10:41:41,165645_sink-my-schedule,tiny.en,sink my schedule,0.274,3.44,0.08,,academic,no
+2026-08-28T10:41:41,165705_cool-,tiny.en,Cool.,0.264,2.4,0.11,,,
+2026-08-28T10:41:41,165715_to-meet-them-,tiny.en,"three, two, three, four.",0.879,2.72,0.323,,,
+2026-08-28T10:41:41,165727_go-to-sleep-,tiny.en,Go to sleep.,0.272,2.88,0.094,sleep,sleep,yes
+2026-08-28T10:41:41,170750_i-ll-see-you-in-the-next-video-,tiny.en,"All right, well, sink schedule.",0.545,4.64,0.117,,,
+2026-08-28T10:41:41,170833_sink-my-schedule,tiny.en,sink my schedule,0.269,4.0,0.067,,academic,no
+2026-08-28T10:41:41,170901_go-to-sleep-,tiny.en,Go to sleep.,0.27,2.96,0.091,sleep,sleep,yes
+2026-08-28T10:41:41,181033_we-ll-see-you-in-the-next-one-,tiny.en,,0.284,2.48,0.114,,,
+2026-08-28T10:41:41,075709_battery-80--yes-dbsk-chop-3-and-a-few,base.en,battery 80% yes DSK TOP 3 NF you,0.845,15.84,0.053,,,
+2026-08-28T10:41:41,075737_i-think-a-little-bit-backwards-today--so,base.en,"I think a little bit awkward today, so.",0.568,4.16,0.137,,,
+2026-08-28T10:41:41,075806_he-s-got-a-company-with-ben--he-s-got-a-,base.en,I was not going to do my dishes.,2.023,10.08,0.201,,,
+2026-08-28T10:41:41,084910_elbow-,base.en,ball.,1.583,2.48,0.638,,,
+2026-08-28T10:41:41,084927_do-you-have-skgop-3-nfu-5vk-,base.en,BSKTOP3NFU5EK,0.567,6.16,0.092,,,
+2026-08-28T10:41:41,084950_can-you-save-a-note-for-me-in-the-vault-,base.en,Can you say the note for me in the vault? Say Mr. R. Vault.,0.61,5.68,0.107,,note,no
+2026-08-28T10:41:41,085047_i-need-to-add-a-note-to-the-vault-,base.en,I need to add a note to the volt.,0.571,4.4,0.13,note,note,yes
+2026-08-28T10:41:41,162259_available-,base.en,ball.,1.417,2.48,0.572,,,
+2026-08-28T10:41:41,162315_family-home--yes--k-t-o-p--3-nsu-5dk-,base.en,Family hug. E-S-K-T-O-P-3-N-F-U-5-D-K.,1.313,6.16,0.213,,,
+2026-08-28T10:41:41,162328_sink-my-schedule,base.en,Sync my schedule.,0.538,3.36,0.16,academic,academic,yes
+2026-08-28T10:41:41,162355_thank-you-,base.en,Okay.,0.529,2.8,0.189,,thanks,no
+2026-08-28T10:41:41,162405_go-to-sleep-,base.en,Go to sleep.,0.54,2.88,0.188,sleep,sleep,yes
+2026-08-28T10:41:41,165448_i-think-my-schedule-,base.en,I'm gonna go about sink my schedule.,0.566,5.36,0.106,,academic,no
+2026-08-28T10:41:41,165508_i-think-my-schedule-,base.en,Sync my schedule.,0.533,3.52,0.151,academic,academic,yes
+2026-08-28T10:41:41,165531_sick-mass-schedule-,base.en,Sick my schedule,0.533,3.28,0.163,,academic,no
+2026-08-28T10:41:41,165551_what-s-20-plus-20-,base.en,What's 20 plus 20?,0.544,3.52,0.154,calc,calc,yes
+2026-08-28T10:41:41,165557_that-s-20-times-20-,base.en,That's 20 times 20.,0.544,3.52,0.155,calc,calc,yes
+2026-08-28T10:41:41,165613_does-electricity-flow-from-positive-to-n,base.en,Does electricity flow from positive to negative or negative to positive?,0.583,7.12,0.082,,,
+2026-08-28T10:41:41,165632_so-,base.en,That's all.,0.542,2.56,0.212,sleep,,
+2026-08-28T10:41:41,165645_sink-my-schedule,base.en,Sync my schedule.,0.532,3.44,0.155,academic,academic,yes
+2026-08-28T10:41:41,165705_cool-,base.en,Okay.,2.628,2.4,1.095,,,
+2026-08-28T10:41:41,165715_to-meet-them-,base.en,And we'll see you in the next video.,1.532,2.72,0.563,,,
+2026-08-28T10:41:41,165727_go-to-sleep-,base.en,Go to sleep.,0.969,2.88,0.336,sleep,sleep,yes
+2026-08-28T10:41:41,170750_i-ll-see-you-in-the-next-video-,base.en,Bye bye. Sync schedule.,0.549,4.64,0.118,,,
+2026-08-28T10:41:41,170833_sink-my-schedule,base.en,Think my schedule.,0.547,4.0,0.137,,academic,no
+2026-08-28T10:41:41,170901_go-to-sleep-,base.en,Go to sleep.,0.534,2.96,0.18,sleep,sleep,yes
+2026-08-28T10:41:41,181033_we-ll-see-you-in-the-next-one-,base.en,,0.523,2.48,0.211,,,
+2026-08-28T10:41:41,075709_battery-80--yes-dbsk-chop-3-and-a-few,small.en,Battery 80% Yes DSKTOP 3NFU 5,1.896,15.84,0.12,,,
+2026-08-28T10:41:41,075737_i-think-a-little-bit-backwards-today--so,small.en,"I think it's a little bit backwards today, so.",1.849,4.16,0.445,,,
+2026-08-28T10:41:41,075806_he-s-got-a-company-with-ben--he-s-got-a-,small.en,I was not invited by my kids. The last jump.,2.563,10.08,0.254,,,
+2026-08-28T10:41:41,084910_elbow-,small.en,ball.,1.705,2.48,0.688,,,
+2026-08-28T10:41:41,084927_do-you-have-skgop-3-nfu-5vk-,small.en,BSKTOP3NFU5EK,1.832,6.16,0.297,,,
+2026-08-28T10:41:41,084950_can-you-save-a-note-for-me-in-the-vault-,small.en,Can you save a note for me in the vault? Say Mr. Arvold.,1.958,5.68,0.345,note,note,yes
+2026-08-28T10:41:41,085047_i-need-to-add-a-note-to-the-vault-,small.en,I need to add a note to the volt.,1.857,4.4,0.422,note,note,yes
+2026-08-28T10:41:41,162259_available-,small.en,above.,4.63,2.48,1.867,,,
+2026-08-28T10:41:41,162315_family-home--yes--k-t-o-p--3-nsu-5dk-,small.en,Family on the S k t o p 3 n f u 5 d k.,1.919,6.16,0.311,,,
+2026-08-28T10:41:41,162328_sink-my-schedule,small.en,Sync my schedule.,1.755,3.36,0.522,academic,academic,yes
+2026-08-28T10:41:41,162355_thank-you-,small.en,Okay.,1.697,2.8,0.606,,thanks,no
+2026-08-28T10:41:41,162405_go-to-sleep-,small.en,Go to sleep.,1.723,2.88,0.598,sleep,sleep,yes
+2026-08-28T10:41:41,165448_i-think-my-schedule-,small.en,up. Sync my schedule.,1.774,5.36,0.331,academic,academic,yes
+2026-08-28T10:41:41,165508_i-think-my-schedule-,small.en,Sync my schedule.,1.714,3.52,0.487,academic,academic,yes
+2026-08-28T10:41:41,165531_sick-mass-schedule-,small.en,Sickness schedule,1.722,3.28,0.525,,academic,no
+2026-08-28T10:41:41,165551_what-s-20-plus-20-,small.en,What's 20 plus 20?,1.765,3.52,0.502,calc,calc,yes
+2026-08-28T10:41:41,165557_that-s-20-times-20-,small.en,That's 20 times 20.,1.767,3.52,0.502,calc,calc,yes
+2026-08-28T10:41:41,165613_does-electricity-flow-from-positive-to-n,small.en,Does electricity flow from positive to negative or negative to positive?,1.848,7.12,0.26,,,
+2026-08-28T10:41:41,165632_so-,small.en,That's all.,1.727,2.56,0.674,sleep,,
+2026-08-28T10:41:41,165645_sink-my-schedule,small.en,Sink my schedule.,1.727,3.44,0.502,,academic,no
+2026-08-28T10:41:41,165705_cool-,small.en,Cool.,1.717,2.4,0.715,,,
+2026-08-28T10:41:41,165715_to-meet-them-,small.en,Meepa!,2.424,2.72,0.891,,,
+2026-08-28T10:41:41,165727_go-to-sleep-,small.en,Go to sleep.,1.731,2.88,0.601,sleep,sleep,yes
+2026-08-28T10:41:41,170750_i-ll-see-you-in-the-next-video-,small.en,sync schedule.,4.372,4.64,0.942,,,
+2026-08-28T10:41:41,170833_sink-my-schedule,small.en,Sync my schedule.,1.731,4.0,0.433,academic,academic,yes
+2026-08-28T10:41:41,170901_go-to-sleep-,small.en,Go to sleep.,1.732,2.96,0.585,sleep,sleep,yes
+2026-08-28T10:41:41,181033_we-ll-see-you-in-the-next-one-,small.en,,1.681,2.48,0.678,,,

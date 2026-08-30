@@ -1,0 +1,17 @@
+"# Mr Odd Ball - gesture approval latency, end to end from the assistant venv"
+"# measured 2026-08-22 on oddball-pi (Pi 5, Debian 13 trixie, aarch64)"
+# path: main venv Python 3.13.5 -> subprocess -> .venv-gesture Python 3.12.14
+"#       mediapipe 0.10.18, Tasks HandLandmarker, hand_landmarker.task float16"
+# includes: process spawn + mediapipe init + camera open + 4 warmup frames + inference
+"# camera: USB webcam at 640x480, 15fps cap"
+trial,latency_ms,gesture
+1,2270.6,NONE
+2,2200.0,NONE
+3,2196.6,NONE
+4,2215.2,NONE
+5,2212.7,NONE
+6,2217.3,NONE
+7,2222.5,NONE
+8,2215.4,NONE
+9,2239.6,NONE
+10,2219.0,NONE

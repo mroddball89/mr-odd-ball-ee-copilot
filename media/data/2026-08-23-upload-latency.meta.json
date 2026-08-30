@@ -1,0 +1,19 @@
+{
+  "what": "Wall-clock time for one POST /upload round trip, by uploaded file size.",
+  "why": "The paperclip in hud/face-preview.html is disabled while the POST is in flight, so this is how long the button is dead. engine/server.py reads the whole body into memory and caps it at 64 MB; this is what those two choices cost at the top of their range.",
+  "endpoint": "POST /upload, multipart/form-data, engine/server.py on http.server",
+  "conditions": {
+    "box": "DESKTOP-3NFU5EK \u2014 Windows 11 AMD64",
+    "python": "3.12.10",
+    "network": "loopback (127.0.0.1), no physical link",
+    "payload": "os.urandom, so incompressible \u2014 a real PDF is not easier than this",
+    "trials_per_size": 3,
+    "warmup": "one discarded POST per size"
+  },
+  "headline": "60 MB in 181 ms (347 MB/s)",
+  "caveats": [
+    "Loopback only. There is no physical network in this number and there is not meant to be \u2014 the browser and the server are the same machine by design.",
+    "Measured off the Pi if `conditions.box` is not oddball-pi. The Pi's loopback and its SD card are both slower; re-run there before quoting a number at anyone.",
+    "The index rebuild a PDF triggers is NOT here. It runs on a background thread and takes minutes \u2014 tools/file_manager.py explains why that is deliberate."
+  ]
+}

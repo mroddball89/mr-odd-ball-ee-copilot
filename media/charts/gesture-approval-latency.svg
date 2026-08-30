@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="470" viewBox="0 0 900 470" font-family="DejaVu Sans, Segoe UI, sans-serif">
+<rect width="900" height="470" fill="#ffffff"/>
+<text x="24" y="30" font-size="17" font-weight="600" fill="#111">Gesture approval on the Pi: 2.2 s, and only 102 ms of it is detection</text>
+<text x="24" y="50" font-size="12" fill="#555">Raspberry Pi 5, Debian 13 aarch64 — main venv Python 3.13.5 spawns a Python 3.12.14 child (mediapipe 0.10.18) per approval. Measured 2026-08-22.</text>
+<text x="318" y="90.4" font-size="12.5" text-anchor="end" fill="#222">interpreter start</text>
+<rect x="330" y="70" width="9.8" height="30" fill="#4facfe" rx="3"/>
+<text x="347.8" y="90.4" font-size="12.5" fill="#333">22 ms</text>
+<text x="318" y="132.4" font-size="12.5" text-anchor="end" fill="#222">import mediapipe</text>
+<rect x="330" y="112" width="440.0" height="30" fill="#4facfe" rx="3"/>
+<text x="778.0" y="132.4" font-size="12.5" fill="#333">1009 ms</text>
+<text x="318" y="174.4" font-size="12.5" text-anchor="end" fill="#222">build HandLandmarker</text>
+<rect x="330" y="154" width="24.0" height="30" fill="#1a7f37" rx="3"/>
+<text x="362.0" y="174.4" font-size="12.5" fill="#333">55 ms</text>
+<text x="318" y="216.4" font-size="12.5" text-anchor="end" fill="#222">open camera</text>
+<rect x="330" y="196" width="88.7" height="30" fill="#4facfe" rx="3"/>
+<text x="426.7" y="216.4" font-size="12.5" fill="#333">204 ms</text>
+<text x="318" y="258.4" font-size="12.5" text-anchor="end" fill="#222">4 warmup frames</text>
+<rect x="330" y="238" width="262.6" height="30" fill="#4facfe" rx="3"/>
+<text x="600.6" y="258.4" font-size="12.5" fill="#333">602 ms</text>
+<text x="318" y="300.4" font-size="12.5" text-anchor="end" fill="#222">inference</text>
+<rect x="330" y="280" width="20.5" height="30" fill="#1a7f37" rx="3"/>
+<text x="358.5" y="300.4" font-size="12.5" fill="#333">47 ms</text>
+<text x="318" y="342.4" font-size="12.5" text-anchor="end" fill="#222">unaccounted (numpy/etc imports + subprocess teardown)</text>
+<rect x="330" y="322" width="124.9" height="30" fill="#4facfe" rx="3"/>
+<text x="462.9" y="342.4" font-size="12.5" fill="#333">286 ms</text>
+<line x1="330" y1="372" x2="770" y2="372" stroke="#ccc"/>
+<text x="318" y="398" font-size="13" font-weight="600" text-anchor="end" fill="#111">TOTAL, measured end to end</text>
+<text x="330" y="398" font-size="13" font-weight="600" fill="#111">2217 ms median over 10 trials (min 2197, max 2271)</text>
+<rect x="330" y="422" width="13" height="13" fill="#1a7f37" rx="2"/>
+<text x="350" y="433" font-size="12" fill="#333">actual hand detection</text>
+<rect x="495" y="422" width="13" height="13" fill="#4facfe" rx="2"/>
+<text x="515" y="433" font-size="12" fill="#333">process and device overhead, paid every single approval</text>
+<text x="24" y="462" font-size="11.5" fill="#666">The two big bars are why: a whole interpreter is started per approval because mediapipe 1.x is SIGKILLed in the assistant’s own 3.13 venv (D15), and the webcam delivers ~6.6 fps, not the 15 requested.</text>
+<text x="24" y="479" font-size="11.5" fill="#666">A persistent worker would pay the 1.0 s import once instead of every time. Sum of stages 2226 ms vs 2217 ms wall — the gap is subprocess spawn and teardown.</text>
+</svg>

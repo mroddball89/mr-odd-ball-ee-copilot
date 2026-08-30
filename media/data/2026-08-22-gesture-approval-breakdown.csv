@@ -1,0 +1,16 @@
+# Mr Odd Ball - where the 2.2s of a gesture approval goes
+# measured 2026-08-22 on oddball-pi (Pi 5, Debian 13 trixie, aarch64, Cortex-A76)
+# path: main venv Python 3.13.5 -> subprocess -> .venv-gesture Python 3.12.14
+#       mediapipe 0.10.18, Tasks HandLandmarker, hand_landmarker.task float16
+# camera: USB webcam, requested 640x480 @ 15fps
+# single run; stage timings are perf_counter deltas inside the worker,
+# TOTAL is wall clock measured by the parent around subprocess.run
+stage,ms
+interpreter start,22.5
+import mediapipe,1009.3
+import cv2,0.0
+build HandLandmarker,55.0
+open camera,203.5
+4 warmup frames,602.3
+inference,47.1
+unaccounted (numpy/etc imports + subprocess teardown),286.5

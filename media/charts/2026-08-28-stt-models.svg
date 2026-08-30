@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="620" viewBox="0 0 1040 620" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1040" height="620" fill="#FFFFFF"/>
+<text x="40" y="46" font-size="23" font-weight="600" fill="#1B1B1B">Which Whisper model, on LB&#8217;s own voice, on the workstation</text>
+<text x="40" y="72" font-size="14" fill="#666666">27 real recordings from captures/, int8, 4 threads, Ryzen 7 5700X, 2026-08-28. Scored on where the transcript ROUTES, which needs no ground truth.</text>
+<text x="60" y="132" font-size="15" font-weight="600" fill="#1B1B1B">&#8220;sync my schedule&#8221;, said 6 times &#8212; how many reached ACADEMIC</text>
+<line x1="60" y1="402.0" x2="384" y2="402.0" stroke="#E3E3E3"/>
+<text x="50" y="406.0" font-size="12" fill="#666666" text-anchor="end">0</text>
+<line x1="60" y1="360.3" x2="384" y2="360.3" stroke="#E3E3E3"/>
+<text x="50" y="364.3" font-size="12" fill="#666666" text-anchor="end">1</text>
+<line x1="60" y1="318.7" x2="384" y2="318.7" stroke="#E3E3E3"/>
+<text x="50" y="322.7" font-size="12" fill="#666666" text-anchor="end">2</text>
+<line x1="60" y1="277.0" x2="384" y2="277.0" stroke="#E3E3E3"/>
+<text x="50" y="281.0" font-size="12" fill="#666666" text-anchor="end">3</text>
+<line x1="60" y1="235.3" x2="384" y2="235.3" stroke="#E3E3E3"/>
+<text x="50" y="239.3" font-size="12" fill="#666666" text-anchor="end">4</text>
+<line x1="60" y1="193.7" x2="384" y2="193.7" stroke="#E3E3E3"/>
+<text x="50" y="197.7" font-size="12" fill="#666666" text-anchor="end">5</text>
+<line x1="60" y1="152.0" x2="384" y2="152.0" stroke="#E3E3E3"/>
+<text x="50" y="156.0" font-size="12" fill="#666666" text-anchor="end">6</text>
+<rect x="94.0" y="399.0" width="40" height="3.0" fill="#C0504D"/>
+<text x="114.0" y="390.0" font-size="17" font-weight="600" fill="#C0504D" text-anchor="middle">0/6</text>
+<text x="114.0" y="424.0" font-size="13" fill="#1B1B1B" text-anchor="middle">tiny.en</text>
+<rect x="202.0" y="277.0" width="40" height="125.0" fill="#E8A33D"/>
+<text x="222.0" y="268.0" font-size="17" font-weight="600" fill="#E8A33D" text-anchor="middle">3/6</text>
+<text x="222.0" y="424.0" font-size="13" fill="#1B1B1B" text-anchor="middle">base.en</text>
+<rect x="310.0" y="235.3" width="40" height="166.7" fill="#4F8A5B"/>
+<text x="330.0" y="226.3" font-size="17" font-weight="600" fill="#4F8A5B" text-anchor="middle">4/6</text>
+<text x="330.0" y="424.0" font-size="13" fill="#1B1B1B" text-anchor="middle">small.en</text>
+<line x1="60" y1="402" x2="384" y2="402" stroke="#1B1B1B"/>
+<text x="60" y="452" font-size="12.5" fill="#C0504D">tiny.en &#8212; the shipping default &#8212; got it right none of the six times.</text>
+<text x="480" y="132" font-size="15" font-weight="600" fill="#1B1B1B">What each one costs</text>
+<text x="480" y="166.0" font-size="13" font-weight="600" fill="#1B1B1B">tiny.en</text>
+<rect x="480" y="174.0" width="11.7" height="13" fill="#4F8A5B"/>
+<rect x="491.7" y="174.0" width="70.0" height="13" fill="#E3E3E3"/>
+<text x="569.8" y="185.0" font-size="12" fill="#1B1B1B">0.29s median, 1.99s worst</text>
+<text x="480" y="204.0" font-size="12" fill="#666666">8/14 routed right, 0 false routes</text>
+<line x1="530.3" y1="168.0" x2="530.3" y2="193.0" stroke="#666666" stroke-dasharray="3 3"/>
+<text x="480" y="249.3" font-size="13" font-weight="600" fill="#1B1B1B">base.en</text>
+<rect x="480" y="257.3" width="23.2" height="13" fill="#4F8A5B"/>
+<rect x="503.2" y="257.3" width="84.6" height="13" fill="#E3E3E3"/>
+<text x="595.8" y="268.3" font-size="12" fill="#1B1B1B">0.57s median, 2.63s worst</text>
+<text x="480" y="287.3" font-size="12" fill="#C0504D">9/14 routed right, 1 false route</text>
+<line x1="572.7" y1="251.3" x2="572.7" y2="276.3" stroke="#666666" stroke-dasharray="3 3"/>
+<text x="480" y="332.7" font-size="13" font-weight="600" fill="#1B1B1B">small.en</text>
+<rect x="480" y="340.7" width="72.4" height="13" fill="#E8A33D"/>
+<rect x="552.4" y="340.7" width="117.6" height="13" fill="#E3E3E3"/>
+<text x="678.0" y="351.7" font-size="12" fill="#1B1B1B">1.76s median, 4.63s worst</text>
+<text x="480" y="370.7" font-size="12" fill="#C0504D">11/14 routed right, 1 false route</text>
+<text x="480" y="436" font-size="11.5" fill="#666666">Dashed marks = what the SAME model measured on the Pi, from config/oddball.toml.</text>
+<text x="480" y="454" font-size="11.5" fill="#666666">base.en here is faster than tiny.en was there.</text>
+<text x="40" y="564" font-size="14" fill="#1B1B1B">The model was chosen on the Pi, where tiny.en was the only one that fit the 2-second turn. On this box all three fit, and</text>
+<text x="40" y="584" font-size="14" fill="#1B1B1B">tiny.en is the only one that never hears &#8220;sync my schedule&#8221;. The accuracy is bought with a false dismissal: a mumbled &#8220;So.&#8221; becomes &#8220;That&#8217;s all.&#8221;</text>
+</svg>

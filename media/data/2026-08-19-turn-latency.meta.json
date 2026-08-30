@@ -1,0 +1,26 @@
+{
+  "what": "Time from question in to Response out, per question, on the UTILITY route.",
+  "why": "The merge replaced a pure-function tier selector (orchestrator/classify.py, ~0ms) with a Gemini structured-output router. LB chose that; this measures what it costs. docs/PLAN.md in the standalone assistant budgets 2.0s for the whole spoken turn.",
+  "arms": {
+    "2026-08-19-turn-latency-before-acronyms.csv": "before 20 EE acronym rows were added to orchestrator/ee_terms.py",
+    "2026-08-19-turn-latency.csv": "after"
+  },
+  "headline": "\"what does i2c stand for\" missed the instant tables, fell through to the persona agent, and took 2.20s while spending one of the day's 20 free requests. After adding the acronym rows it is 0.73s and free. 1/10 over the 2.0s budget became 0/10.",
+  "conditions": {
+    "box": "Windows 11 desktop, NOT the Pi",
+    "router_model": "gemini-3.5-flash-lite",
+    "agent_model": "gemini-3.5-flash",
+    "network": "home broadband",
+    "repeats": 1
+  },
+  "excludes": [
+    "speech-to-text — measured separately on the Pi at 1.05-1.40s for tiny.en, int8, 4 threads",
+    "Piper synthesis — roughly 0.4s to the first sample",
+    "So a real SPOKEN turn is this number plus about 1.5-1.8s, and the 2.0s budget is for that total, not for this."
+  ],
+  "caveats": [
+    "One sample per question. The router is a network call and its spread is real: the same question measured 1047ms and 922ms across the two runs.",
+    "Measured off-Pi. The router leg is a network round trip and should be similar; the STT and TTS legs are not measured here at all.",
+    "Only the UTILITY route is sampled. A full sweep of the agent routes costs more than the 20/day free tier allows (D3)."
+  ]
+}
