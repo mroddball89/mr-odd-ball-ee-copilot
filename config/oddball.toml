@@ -131,7 +131,58 @@ model = "models/hey_mr_odd_ball.onnx"
 # by feel: record the calls that fall short, put them in the positive set, and `verify_wake`
 # will then permit the threshold they need. `--save-captures` is on, so the material is being
 # collected already.
-threshold = 0.53
+#
+# ============================================================================================
+# 0.53 -> 0.76 on 2026-08-31. **The 2026-08-29 change optimised recall and never counted the
+# cost.** It is reverted, and this block is the accounting that was missing.
+# ============================================================================================
+#
+# LB, unprompted, on 2026-08-31: *"mr odd ball is still randomly waking up from my voice when
+# im in another room i have not used him at all today but have heard him wake up multiple
+# times."*
+#
+# He had not used it once. Measured from `data/oddball.log`, segmented by clock rollover
+# because the log carries no dates (see the `start_oddball.bat` item in tasks/todo.md):
+#
+#     2026-08-31, 01:37:58 -> 16:17:02      27 wakes      107 near misses      0 uses
+#
+# All 27 are false. `captures/` holds 25 WAVs from the same day and the filenames are the
+# proof — "you-know--he-said--is-he-not-a-comment-l", "i-m-not-even-supposed-to-be-able-to-be-s",
+# "we-always-have-it-for-you". Ordinary conversation, twelve of them inside three minutes at
+# 14:49-14:52. Not one is the wake phrase.
+#
+# What each threshold would have done to those same 27 wakes:
+#
+#     0.53      27 of 27 still fire      <- was
+#     0.60      22
+#     0.70       9
+#     0.76       6                       <- now. removes 78% of them
+#     0.82       5
+#
+# **On the fixture set this costs nothing measurable.** Every positive that fires at 0.53 has
+# a `true_peak` at or above 0.822 (media/data/2026-08-30-wake-fixtures.csv), so all fourteen
+# still fire at 0.76. The detector resets on firing, so `fired_at` understates them — that is
+# the superseded bug documented below, and `true_peak` is the number that answers this.
+#
+# WHAT IT COSTS LIVE, stated rather than discovered later: the 2026-08-29 meter run measured
+# his real attempts firing between 0.769 and 0.964 and falling short between 0.132 and 0.742.
+# Calls peaking between 0.53 and 0.76 worked yesterday and stop working now — on that day's
+# sample, about 6 of 33 attempts. **He will notice.** The trade is 21 fewer false wakes a day
+# against roughly one call in five needing a second go, and it is the right way round only
+# while false wakes are the complaint. They are: he raised it, and he had not used the machine.
+#
+# THIS IS NOT THE FIX AND MUST NOT BE MISTAKEN FOR ONE. Six false wakes a day remain, and 107
+# near misses today reached as high as 0.753 — the room is routinely scoring in the band his
+# own voice occupies. `media/data/2026-08-30-wake-fixtures.meta.json` measured the reason and
+# it is not calibration: `positive/quiet-marginal-01.wav` is transcribed by whisper as "Hey,
+# Mr. Oddball." — the cleanest transcript in the whole fixture set — and the wake model scores
+# it 0.0277, while `known-limits/hey-mr-on-call-01.wav`, which is NOT the wake word, scores
+# 0.8214 and fires. A model that confident in both wrong directions has no threshold that
+# separates the two. **The fix is retraining**, and the 18 clips recorded on 2026-08-30 are the
+# material the 2026-08-11 model never had.
+#
+# Revert with one number if quiet calls turn out to matter more than the false wakes.
+threshold = 0.76
 
 # Seconds to ignore further detections after one fires. Without this, a single utterance
 # triggers on several consecutive frames, because the phrase spans more than one 80ms window.
