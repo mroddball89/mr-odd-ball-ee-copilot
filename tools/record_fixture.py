@@ -36,7 +36,7 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from audio.wake import SAMPLE_RATE_HZ, list_devices  # noqa: E402
+from audio.wake import SAMPLE_RATE_HZ, _wasapi_settings, list_devices  # noqa: E402
 
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "wake"
 
@@ -314,7 +314,32 @@ def level_verdict(samples: np.ndarray) -> tuple[bool, str]:
 
 
 def record(seconds: float, device: str | int | None) -> np.ndarray:
-    """Capture `seconds` of 16 kHz mono int16 audio. Blocks until done."""
+    """Capture `seconds` of 16 kHz mono int16 audio. Blocks until done.
+
+    ## `extra_settings`, and why recording on the rig's own device used to be impossible
+
+    Added 2026-08-30. Without it, recording through the device `config/oddball.toml` pins —
+    `"C270 HD WebCam), Windows WASAPI"` — dies before the first take with an error that names
+    nothing useful:
+
+        sounddevice.PortAudioError: Error opening InputStream:
+            Invalid sample rate [PaErrorCode -9997]
+
+    WASAPI is the only Windows host API that refuses a rate the hardware does not natively
+    support; the C270 is 48000 and `SAMPLE_RATE_HZ` is 16000. `audio/wake.py` met this on
+    2026-08-26 during the Windows port and fixed it there (`_wasapi_settings`, passed to its
+    InputStream at wake.py:350). **This file was not fixed with it**, because it was written
+    on the Pi where ALSA was the only host API and the whole class of problem did not exist.
+
+    So the recorder could not record on the microphone the rig actually listens through. The
+    default device is MME, which resamples silently and therefore always worked — which is
+    exactly what kept this hidden: every fixture ever recorded came through a different host
+    API from the one being tested against.
+
+    `_wasapi_settings` is imported rather than reimplemented. Two copies of this reasoning is
+    how the recorder and the detector come to disagree about what a stream is, and the whole
+    value of a fixture is that it went through the same path as the live audio.
+    """
     import sounddevice as sd
 
     frames = int(round(seconds * SAMPLE_RATE_HZ))
@@ -324,6 +349,7 @@ def record(seconds: float, device: str | int | None) -> np.ndarray:
         channels=1,
         dtype="int16",
         device=device if device not in ("", None) else None,
+        extra_settings=_wasapi_settings(device),
     )
     sd.wait()
     return buf[:, 0].copy()
