@@ -171,6 +171,64 @@ PLAN: list[Item] = [
 ]
 
 
+# --------------------------------------------------------------------------------------
+# The MARGINAL set — the fixtures that do not exist, and the reason every threshold this
+# repo has chosen was calibrated against LB's best day.
+#
+# `config/oddball.toml` states the problem and names this as the durable fix:
+#
+#     "The rule takes 'the quietest positive' as its lower anchor, and for the fixture set
+#      that is 0.9771 — clean, close-mic recordings of the phrase. LB's actual quietest
+#      call, measured live, is 0.132, and his attempts fall short anywhere from 0.339 to
+#      0.742. The fixtures do not contain a single marginal call, so every threshold
+#      derived from them is calibrated against his best day and refuses his ordinary one."
+#
+# Measured 2026-08-29 with `python audio/wake.py --meter`: of 33 real attempts 21 fired and
+# **12 fell short**, between 0.132 and 0.742. Not one clip in `positive/` lives in that band.
+#
+# ## Why the standard PLAN could never have produced these
+#
+# `level_verdict` rejects a take under QUIET_DBFS (-40 dBFS), one whose speech touches either
+# edge, and one that does not stand clear of the room by MIN_DYNAMIC_DB. Those gates are right
+# for the clean set — a truncated phrase reads as a broken model rather than a broken
+# recording — and they are **exactly the gates a marginal call fails**. The recorder has been
+# discarding the material the threshold needs, by design, since 2026-08-11. So every item here
+# sets `level_check=False` and the take is kept whatever it measures.
+#
+# ## Why these land in `positive/` and not in `known-limits/`
+#
+# `known-limits/` is reported and never enforced (`tools/verify_wake.py:442`), so a clip filed
+# there cannot move anything. `worst_pos` — the quietest positive's true peak — is the band's
+# lower anchor (`verify_wake.py:480`), and lowering it is the entire mechanism by which
+# `verify_wake` comes to permit the threshold LB's real voice needs. These have to be enforced
+# positives or they change nothing at all.
+#
+# **Expect red, and read it before changing anything.** At threshold 0.53 any take scoring
+# under it fails `positive/<name> wakes him`. That is the harness doing its job: it has
+# stopped certifying a threshold that works on close-mic clips and started asking for one that
+# catches an ordinary call. The single outcome that is NOT a threshold problem is
+# `positives and negatives are separable` going red — a positive scoring below the loudest
+# negative (0.1461 today) means no threshold can tell that call from a near-miss, and the
+# answer there is retraining the model, not moving a number.
+MARGINAL: list[Item] = [
+    Item("positive", "quiet-marginal", 4, 5.0,
+         'say "Hey Mr Odd Ball" as quietly as you would with someone asleep in the next '
+         'room — quieter than positive/quiet-*, near the edge of being worth saying',
+         level_check=False),
+    Item("positive", "midsentence", 3, 6.0,
+         'say it INSIDE a sentence with no pause around it: '
+         '"...so anyway hey Mr Odd Ball what time is it"',
+         level_check=False),
+    Item("positive", "offaxis", 3, 5.0,
+         'say it at normal volume while turned away from the webcam, or leaning back',
+         level_check=False),
+    Item("positive", "room", 3, 5.0,
+         'say it from where you sit when you are NOT at the desk — a few steps back, still '
+         'in the room. NOT across the room; known-limits/far already covers that',
+         level_check=False),
+]
+
+
 def peak_dbfs(samples: np.ndarray) -> float:
     """Peak level in dBFS. -inf for digital silence."""
     peak = int(np.abs(samples).max()) if samples.size else 0
@@ -378,6 +436,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("label", nargs="?", help="filename stem, e.g. 'normal' or 'ambient'")
     ap.add_argument("--plan", action="store_true",
                     help="record the full standard set: 10 positives, 8 negatives, ~6 min")
+    ap.add_argument("--marginal", action="store_true",
+                    help="record the MARGINAL positives the standard set cannot produce — "
+                         "quiet, mid-sentence, off-axis and a few steps back. Level and "
+                         "placement gates are OFF for these, on purpose. Expect verify_wake "
+                         "to go red afterwards: that is it asking for a workable threshold")
     ap.add_argument("--takes", type=int, default=1)
     ap.add_argument("--seconds", type=float, default=5.0)
     ap.add_argument("--say", default="say the phrase", help="prompt text for an ad-hoc group")
@@ -404,6 +467,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.plan:
         items = PLAN
+    elif args.marginal:
+        # level_check is already False on every MARGINAL item — the point of the set is the
+        # takes the gates throw away — so `--no-level-check` is redundant here, not required.
+        items = MARGINAL
     elif args.kind and args.label:
         # `command` takes live under tests/fixtures/commands/, not under wake/ — the same
         # split the PLAN uses, because whisper grades them and the wake model does not.
@@ -411,7 +478,7 @@ def main(argv: list[str] | None = None) -> int:
                       level_check=not args.no_level_check,
                       root="commands" if args.kind == "command" else "wake")]
     else:
-        ap.error("give KIND and LABEL, or --plan")
+        ap.error("give KIND and LABEL, or --plan, or --marginal")
 
     try:
         import sounddevice  # noqa: F401
@@ -433,6 +500,12 @@ def main(argv: list[str] | None = None) -> int:
         cmd_takes = sum(i.takes for i in PLAN if i.root != "wake")
         print(f"full plan: {wake_takes} wake takes + {cmd_takes} command takes, "
               f"{total_s / 60:.1f} min of audio")
+    if args.marginal:
+        total_s = sum(i.takes * i.seconds for i in MARGINAL)
+        print(f"marginal set: {sum(i.takes for i in MARGINAL)} takes, "
+              f"{total_s / 60:.1f} min of audio, level and placement gates OFF.")
+        print("these are ENFORCED positives — run tools/verify_wake.py --fixtures after, "
+              "and read the reds before touching config/oddball.toml.")
 
     written: list[tuple[Path, float]] = []
     try:
