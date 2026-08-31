@@ -1,0 +1,21 @@
+phrase,source,expected,now,alnum,title
+can you add to my note about the topic for my english research paper,REAL,english research question,RESOLVED,RESOLVED,RESOLVED
+can you add to my note to my english research paper note thats in the vault,REAL,english research question,RESOLVED,RESOLVED,RESOLVED
+whats the topic of my english research paper from my notes,REAL,english research question,RESOLVED,RESOLVED,RESOLVED
+read me back the notes that you have for me,REAL,(nothing),RESOLVED,RESOLVED,RESOLVED
+tell me what notes you have saved for me,REAL,(nothing),RESOLVED,RESOLVED,RESOLVED
+whats on my schedule for today,REAL,(nothing),RESOLVED,RESOLVED,RESOLVED
+my english paper topic,SYNTHETIC,english research question,MISS,MISS,MISS
+the english paper,SYNTHETIC,english research question,MISS,MISS,MISS
+my research question,SYNTHETIC,english research question,RESOLVED,RESOLVED,RESOLVED
+robot arm,SYNTHETIC,robot_arm,RESOLVED,RESOLVED,RESOLVED
+the robot arm project,SYNTHETIC,robot_arm,RESOLVED,RESOLVED,RESOLVED
+my servo note,SYNTHETIC,robot_arm,MISS,MISS,MISS
+EEGR 105,SYNTHETIC,EEGR105,MISS,RESOLVED,RESOLVED
+eegr105,SYNTHETIC,EEGR105,RESOLVED,RESOLVED,RESOLVED
+my EEGR 105 syllabus,SYNTHETIC,EEGR105,MISS,RESOLVED,RESOLVED
+my intro to electrical engineering class,SYNTHETIC,EEGR105,MISS,MISS,RESOLVED
+posc 201,SYNTHETIC,POSC201,MISS,RESOLVED,RESOLVED
+my american government class,SYNTHETIC,POSC201,MISS,MISS,RESOLVED
+peanut butter,SYNTHETIC,peanut_butter,RESOLVED,RESOLVED,RESOLVED
+scratch,SYNTHETIC,scratch,RESOLVED,RESOLVED,RESOLVED

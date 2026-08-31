@@ -215,9 +215,16 @@ MARGINAL: list[Item] = [
          'say "Hey Mr Odd Ball" as quietly as you would with someone asleep in the next '
          'room — quieter than positive/quiet-*, near the edge of being worth saying',
          level_check=False),
-    Item("positive", "midsentence", 3, 6.0,
+    # 8s, not 6s. Measured 2026-08-30: of the first four takes at 6s, ONE ran out of window
+    # mid-phrase — midsentence-03 transcribes as "Last night I went to the store and got some
+    # potato chips. Hey, Mr." — and a second had no "hey" in it at all. A lead-in sentence
+    # plus the phrase plus a trailing question does not fit in six seconds at a natural pace,
+    # and a truncated take here is indistinguishable from a model failure until something
+    # transcribes it. The level gates that would normally catch a cut-off phrase are OFF for
+    # this whole set, so the window is the only thing protecting these takes.
+    Item("positive", "midsentence", 3, 8.0,
          'say it INSIDE a sentence with no pause around it: '
-         '"...so anyway hey Mr Odd Ball what time is it"',
+         '"...so anyway hey Mr Odd Ball what time is it". Keep the lead-in SHORT',
          level_check=False),
     Item("positive", "offaxis", 3, 5.0,
          'say it at normal volume while turned away from the webcam, or leaning back',
