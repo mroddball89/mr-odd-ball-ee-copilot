@@ -4,12 +4,10 @@ A specialised Electrical Engineering copilot for **LB**. He listens for his name
 loud, and floats on the desktop as an animated face. A Gemini router reads each question and
 hands it to the one agent that should answer it.
 
-**Runs on Windows 11** — LB's workstation (Ryzen 7 5700X, 32 GB, RX 6600). He lived on a
-Raspberry Pi 5 until 2026-08-26; that chapter is closed, and the Linux code was **deleted,
-not disabled** — `tools/os_controller.py` and `tools/app_catalogue.py` raise on import off
-Windows, deliberately, so that nothing can quietly degrade into a guard that allows
-everything. The Pi-era history is in `docs/DECISIONS.md` and `tasks/lessons.md`, not carried
-here.
+**Runs on Windows 11** — LB's workstation (Ryzen 7 5700X, 32 GB, RX 6600). Windows-only by
+design, not by default: `tools/os_controller.py` and `tools/app_catalogue.py` raise on
+import off Windows, deliberately, so that nothing can quietly degrade into a guard that
+allows everything.
 
 > The `v0-terminal` tag is the engine as it ran in the terminal, before the voice, personality
 > and animated face were merged in. It is kept so the original is always recoverable.
@@ -308,10 +306,6 @@ reminder to copy it somewhere else.
 > Creation time, not modification time — the file is rewritten on every single turn, so a clock
 > built on mtime could never fire either. `python tools/memory_manager.py --backed-up` restarts
 > it, and that command exists because a reminder with no off switch is one you learn to ignore.
->
-> The file was called `sd_card_memory.json` until the same day. That was accurate on the Pi,
-> where the whole repo lived on a removable card and that card was the only copy — which is why
-> the 15-day clock exists at all.
 
 That same function carries three more things in front of the conversation log, and because every
 agent already calls it, every agent gets them. `tools/self_context.py` composes the block.
@@ -403,7 +397,7 @@ provides them — CPU temperature, load average, free memory and uptime into eve
 hot are you" is answered without a tool call.
 
 **On Windows most of those sensors are not there, and he says so rather than guessing.** The
-readings come from `/proc` and `/sys`, which is a Linux interface; off the Pi they return nothing
+readings come from `/proc` and `/sys`, which is a Linux interface; on this machine they return nothing
 and the block renders *"CPU temperature: you cannot read it on this machine."* That is the design,
 not a gap — an assistant that confidently reports a temperature it never read is worse than one
 that admits it cannot see the sensor. Disk, ports and capabilities work everywhere.
@@ -498,9 +492,12 @@ project — is unpacked into the project folder, with any member pointing outsid
 reported.
 
 **An index rebuild runs in the background**, because it loads torch and re-embeds everything
-under `data/` — measured on the Pi at **11.4 s before it embeds anything** (not re-measured
-since the move to Windows, where it will be substantially faster), then 14.4 ms per
-chunk, and the per-chunk part multiplies by your whole library rather than by the new file. He
+under `data/` — **not yet re-measured on this hardware.** The only figures on record —
+11.4 s cold start, then 14.4 ms per chunk — are both from a single 2026-08-23 measurement on
+the Raspberry Pi (`media/data/2026-08-23-index-rebuild-familyhub.csv`) and do not carry over
+to a Ryzen 7 5700X. Quoted here as provenance, not as a current estimate. The per-chunk part
+multiplies by your whole library rather than by the new file, which is the shape that matters
+regardless of platform. He
 is prompted to say a document is *being indexed*, never that it is ready, and never to promise
 you a duration; ask him whether it is done and he checks. A KiCad file needs no rebuild at all —
 it is parsed off the disk at question time, so it is answerable the moment it is filed.
