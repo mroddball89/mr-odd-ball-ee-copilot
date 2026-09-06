@@ -124,3 +124,8 @@ data/face.log
 # The remembered window size (hud/float.py, Ctrl+/Ctrl-). Per-machine state, and committing
 # it would mean one person's screen deciding everyone else's default.
 data/face_scale
+
+# The unredacted transcripts behind media/data/2026-09-03-wasted-turns.csv. 127 verbatim
+# lines of speech in LB's house, captured by false wakes. The published CSV keeps only the
+# short fragments the analysis rests on. See memory: never-publish-personal-data.
+media/data/*.raw.csv
