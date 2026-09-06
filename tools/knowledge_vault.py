@@ -14,7 +14,7 @@ Date:    2026-08-21
 
 They are different things, and the difference is the whole reason for this file.
 
-`memory_manager.py` is the **conversation log**: the last 40 turns, on the SD card, rotated,
+`memory_manager.py` is the **conversation log**: the last 40 turns, on the local disk, rotated,
 fed to every agent as `PREVIOUS CONTEXT`. It is short-term by construction — say forty more
 things and what you said today is gone.
 

@@ -1524,3 +1524,79 @@ Both stubs are now `**_`-tolerant, which is right - a harness about what `credib
 with numbers should not break when the signature above it grows. But the real lesson is the
 sweep: **when a change alters a signature that harnesses stub, run all of them, not the ones
 that seem related.** The related ones are exactly the ones that already stub it correctly.
+
+## L50 - Ask how old the running process is before you believe a session
+
+Five ImportErrors, a quiz mode that ignored "go to sleep", and a greeting string that exists
+nowhere in the repo. Every one of them was explained by one fact that took thirty seconds to
+check: `pythonw` had been up since 2026-08-31 21:21 and it was now the 4th.
+
+Python caches a module at first import. A module imported LAZILY - which this repo does
+everywhere, with `# noqa: PLC0415` on hundreds of function-level imports - loads whatever is on
+disk **at the moment it is first used**. So a four-day-old process was running August
+`engine/core.py` against a September `agents/quiz_agent.py` that had been imported for the first
+time that morning, and the September file wanted a constant the August module had never heard of.
+
+    Get-Process pythonw | Select-Object Id,StartTime
+    git log -1 --pretty="%h %ad"
+
+Two commands. **When a live session behaves in a way the code cannot explain, the code being read
+is not the code that is running.** Check the process age against the last edit before diagnosing
+anything else - and treat a greeting or an error string that greps to zero hits in the tree as
+proof of it, because that is what it is.
+
+## L51 - A check about where a path resolves has no business writing to it
+
+`verify_harness_env.py` was written to stop harnesses polluting `sd_card_memory.json`. One of its
+checks proves the guard does NOT catch a real entry point, by running a child script named
+`main.py` and requiring the resolved path to be the real file. The child script it reused
+appended a turn.
+
+So the harness for the fix appended "quiz me on underwater basket weaving" to the real
+conversation log - committing, in the act of verifying it, the precise defect it exists to
+prevent. It went unnoticed for two minutes and was caught only because the probe printed a last
+entry that could not possibly be real.
+
+The write proved nothing that resolving the path had not already proved. It was pure surplus, and
+surplus in a test is where the damage lives. **When a check asserts something about production
+data, give it the read-only version of the operation** - and when reusing a fixture, check what
+the fixture does, not just what it returns.
+
+The general shape, which is worth more than the instance: a harness that must reference real
+state at all is a harness that needs its blast radius stated out loud before it is written.
+
+## L52 - Two weak models agreeing is not evidence; go back to the recording
+
+`vault/corrections.md` held one standing rule, at the top of every agent prompt, with more
+authority than anything else in it: "Don't make sure you can explain yourself." Stage 20 wrote
+down what it obviously had to be - LB saying "don't-" and then "make sure you can explain
+yourself", with the pause dropped - and moved on.
+
+That was wrong, and the audio had been sitting in `captures/` for five days.
+
+    tiny.en    "Don't make sure you can clean it yourself."
+    base.en    "Don't make sure you can explain yourself."     <- what shipped into the rule
+    small.en   "go make sure you can explain yourself."
+
+    small.en word confidences:  ' go' p=0.145   ' make' p=0.894   ' sure' p=0.999
+
+There was never a "don't". The first word occupies 0.00-0.22s of the capture - the wake phrase's
+own tail, the exact 220ms Stage 19 built `wake_tail_s` for - and the recogniser is guessing at
+it with p=0.145 while it is 89-99% sure of every word after.
+
+Two things to take from it.
+
+**tiny.en and base.en agreed, and that agreement was worth nothing.** They are the same
+architecture at two sizes, fed the same 220ms of noise; they are wrong in the same direction
+because they are wrong for the same reason. Independent agreement is evidence, correlated
+agreement is one observation reported twice. Check whether the sources can fail together before
+counting them.
+
+**A transcript is a lossy summary of a file you still have.** When a decision rests on what
+somebody said, and the audio is on disk, re-run it at a bigger model and look at the per-word
+probabilities before writing anything down. Ten seconds of compute against five days of a
+negated instruction outranking every prompt in the system.
+
+And the design fix that outlives the instance: a correction becomes a STANDING RULE off one
+un-reviewed pass of the fastest model in the box. Anything with that much authority should be
+read back for confirmation before it is written, or should record its own confidence.

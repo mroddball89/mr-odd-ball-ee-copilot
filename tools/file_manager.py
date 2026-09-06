@@ -33,7 +33,7 @@ and transformers**, and then re-embeds every page under `data/`.
 
 **Measured on the Pi 2026-08-23: 11.4 s before a single chunk is embedded**, then 14.4 ms per
 chunk — `import torch` 2.1 s, `import langchain_huggingface` 1.3 s, and 8.0 s loading
-`all-MiniLM-L6-v2` off the SD card. The first rebuild after a reboot pays ~2 s more for a cold
+`all-MiniLM-L6-v2` off local disk. The first rebuild after a reboot pays ~2 s more for a cold
 page cache. `media/data/2026-08-23-index-rebuild-familyhub.csv`.
 
 That fixed toll is paid however small the upload, and the per-chunk part multiplies by **the
@@ -734,7 +734,7 @@ def _extract_zip(archive: Path, destination_dir: Path) -> tuple[list[Path], str]
     - the name is normalised, and anything absolute or containing `..` is skipped
     - symlink members are skipped, because a symlink is a traversal that passes a name check
     - the member count and the total UNCOMPRESSED size are capped, so a 40 KB zip cannot
-      become a full SD card
+      become a full disk
 
     Returns:
         (written_paths, note) — the note names anything skipped, and is empty when nothing was.

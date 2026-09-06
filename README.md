@@ -221,7 +221,7 @@ deliberately not a note verb — it means *recall* as often as it means *record*
 
 ## Memory
 
-`tools/memory_manager.py` logs the last 40 messages to `sd_card_memory.json` on the local
+`tools/memory_manager.py` logs the last 40 messages to `conversation_memory.json` on the local
 card and injects them into every agent prompt as `{chat_history}`. It also watches a **15-day
 clock** — once the oldest message in the log passes that age, every answer carries a reminder
 to copy the file to an external drive before the card is the only copy.

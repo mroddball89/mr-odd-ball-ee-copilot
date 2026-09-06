@@ -155,7 +155,7 @@ class HudBridge:
         self.inbound: "queue.Queue[dict]" = queue.Queue(maxsize=64)
         # The last N chat messages, replayed to a client that connects mid-session. Capped:
         # this is a convenience for a reopened panel, not the conversation log — that lives on
-        # the SD card in tools/memory_manager.py, and having two of them is how they disagree.
+        # the local disk in tools/memory_manager.py, and having two of them is how they disagree.
         self._history: "deque[dict]" = deque(maxlen=HISTORY)
 
     @property

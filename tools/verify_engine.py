@@ -110,7 +110,7 @@ def install_os_fakes() -> None:
 
 install_os_fakes()
 
-# tools.memory_manager writes sd_card_memory.json on every turn. Silenced so the harness does
+# tools.memory_manager writes conversation_memory.json on every turn. Silenced so the harness does
 # not scribble in LB's real conversation log — a test that edits production data is a test
 # nobody runs twice.
 import types                                                          # noqa: E402

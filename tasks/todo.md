@@ -3531,3 +3531,304 @@ It surfaced here only because this stage touched `_capture` as well. Two stubs a
       later, the window is inert and the mechanism is something else — most likely the room,
       which would point at `wait_s = 1.5` rather than at the wake.
 - [ ] **Re-run `measure_wasted_turns.py`** after a week. 32% is the number to watch.
+
+# Stage 20 — The ledger recorded the wrong things, and the harnesses wrote to the log
+
+Three defects in the memory, found on 2026-09-04 by reading a session that had gone wrong and
+then asking what the memory had learned from it. The answer was: nothing, twice over.
+
+## First, the thing that made the session look worse than it was
+
+The rig had been up since **2026-08-31 21:21** — `pythonw` PIDs 8656 and 20696, four days
+without a restart. Everything built since is uncommitted working tree: 3,369 insertions across
+30 files, including the whole local quiz-marking rewrite.
+
+Python caches a module at first import; a module imported LAZILY loads whatever is on disk at
+the moment it is first used. So the process was running **August `engine/core.py` and September
+`agents/quiz_agent.py` at the same time** — the September file imports `CLOUD_TIMEOUT_S`, added
+to `engine/models.py` on the 3rd, from an `engine.models` object cached on the 31st.
+
+    07:24  "Teach me about kind."   -> "Entering Quiz Mode." — a string that exists nowhere in
+                                       the tree; it is in HEAD:engine/core.py:1258
+    07:25  five turns               -> ImportError: cannot import name CLOUD_TIMEOUT_S
+    07:26  "Go to sleep."           -> ignored. `_QUIZ_EXITS` is a September addition
+    07:26  "Sleep, X-equiz."        -> ignored
+    07:27  "exit quiz"              -> free, after 5 wasted turns and ~40s of engine time
+
+**A long-lived process plus lazy imports is a deployed system with holes in it, and the holes
+fill from disk at unpredictable times.** Nothing in the repo was wrong. L50.
+
+## What the memory did about it: nothing, and nothing
+
+- [x] **The mistake ledger never saw the mistake of the day.** Five identical ImportErrors, each
+      logged at ERROR with a full traceback, and **zero entries in `vault/reflections.md`** —
+      because `explain_quiz_answer` is documented as never raising. It catches, returns a
+      sentence, and `Engine.ask` sees a turn that succeeded. The instrument was bolted to the
+      exception boundary in a codebase whose entire style is to never let an exception reach one.
+      **Every well-written `except` was a hole in the memory.**
+
+      Moved to `engine/core._failure_line`, which is the seam every graceful degradation already
+      goes through — `agents/quiz_agent.py` imports it across a package boundary precisely so a
+      handled failure says the right thing. Anything that degrades is now recorded, including the
+      next one, written by someone who never reads this. `Engine.ask` passes `record=False`,
+      because `_reflect_on_failure` above it already writes a richer entry with the route in it.
+
+- [x] **The ledger was one bug written down twenty-two times.** Of 37 entries, 22 were slow-turns
+      carrying the identical lesson, eight of them for false-wake noise — "ball.", "Okay.",
+      "Mr. Albo.", "Yeah, yeah, yeah, yeah.". Six rode on every agent prompt. The caps were
+      being honoured perfectly and the block was still worthless: **bounding the file did not
+      bound the information.**
+
+      `note()` now merges on a signature and carries `count` and `first`. The signature is
+      asymmetric and that is the design: quoted spans are stripped from *what* (the transcript is
+      volatile), numbers are stripped from *why* (the elapsed seconds are volatile). Numbers are
+      **kept** in *what*, because `similar()` was measured into weighting a digit-bearing token
+      double — collapsing ECE350 and ECE250 would destroy the token that makes the ledger
+      findable. `PROMPT_MAX_AGE_DAYS = 7` is the decay, and it is driven by recurrence, so
+      nothing has to decide when a problem is over.
+
+- [x] **The harnesses were still writing to the real conversation log.** `sd_card_memory.json`
+      was measured **60% test fixture** — 24 of 40 turns were "quiz me on underwater basket
+      weaving" and "something no free tier can answer about quantum widgets", written by the quiz
+      harnesses added on 2026-09-02. `memory_manager.py` documents this exact defect at length in
+      its own header. The escape hatch existed; nothing forced its use.
+
+      `tools/harness_env.py`. `isolate()` is what a harness calls; `running_under_harness()` is
+      what `memory_manager` asks, so **a harness that never heard of any of this still cannot
+      reach the real file.** An explicit `ODDBALL_MEMORY_FILE` always wins.
+
+- [x] **One verbose entry could take the whole prompt budget.** After compaction, two OpenRouter
+      429s — each carrying a full JSON body with rate-limit headers and a reset epoch — were
+      eating 1,000 of the 2,000-character block between them. `LINE_MAX_CHARS = 160` clips the
+      PROMPT line only; the file keeps the whole error, because that is what LB reads to debug.
+
+- [x] `tools/verify_harness_env.py` — 14 checks, with `--probe`.
+- [x] `tools/verify_reflections.py` — sections 6-9 added, 71 checks total.
+- [x] `python tools/reflections.py --compact` — **40 entries -> 11**, all 40 occurrences kept,
+      `.bak` written first.
+
+## Review — Stage 20
+
+**Done, and verified.** Full sweep, all 38 harnesses: 37 green, `verify_wake` at 44/60 which is
+the same number it has shown since Stage 19 on a clean tree. `sd_card_memory.json` came out of
+the sweep byte-identical, which is the check the last three fixes were each supposed to make
+unnecessary.
+
+    ledger        40 entries -> 11        all 40 occurrences preserved
+    injected      8 near-duplicates -> 6 distinct problems, each with a count
+    slow-turns    22 paragraphs -> 2 entries: persona x9, general x10
+
+### The harness for the fix committed the defect the fix prevents
+
+The first version of `verify_harness_env.py` proved that a normal entry point is NOT guarded by
+running the innocent child script under the name `main.py` — and that child **writes a turn**.
+So it appended "quiz me on underwater basket weaving" to the actual conversation log, from
+inside the harness written to stop exactly that.
+
+It was caught two minutes later because the probe printed a last entry that could not be real.
+The entry was removed; one Sep-3 test fixture was evicted off the front of the 40-turn window by
+it and is gone, and re-inventing a fake turn to replace a fake turn would have been worse.
+
+The fix is `_RESOLVE_ONLY`, and the rule is the general one: **a check about where a path
+resolves has no business writing to it.** The write proved nothing the resolved path did not
+already prove, and it was the only part that could do harm. L51.
+
+### What didn't work
+
+**Stripping numbers from both fields.** The obvious signature normalises everything volatile out
+of both `what` and `why`. Applied to `what` it merges ECE350 with ECE250 and stm32 with stm8 —
+and `similar()`'s docstring already says, from a measurement, that those tokens carry *more*
+signal than words, not less. Caught by section 6's negative checks before it shipped, but only
+because the checks were written from that docstring rather than from the happy path.
+
+**Rewriting the file from the parse.** The first merge parsed the ledger, dropped the match and
+wrote everything back — which silently deletes any block `_parse` cannot read, and the module
+docstring promises the file is safe to hand-edit. Now the merge is textual, and
+`_annotations()` carries a hand-written line across a merge that happens around it.
+
+### Still open
+
+- [x] **`vault/corrections.md` holds one rule and it is a mis-transcription.** Done in Stage 22,
+      and the guess in this line was wrong — see there. Not "don't— make sure"; there was no
+      "don't" at all.
+- [x] **`check_for_backup_reminder` measures the wrong thing.** Done in Stage 22.
+- [ ] **Restart the rig and confirm the September code is live.** Nothing above is running yet.
+
+
+# Stage 21 (not started) — The scored environment: episode ledger, then offline gym
+
+Asked on 2026-09-04: *can we build a virtual environment to train him and reward correct
+answers?* Yes for the parts that are code, no for the parts that are model weights, and the
+value is entirely in the first. **No code written yet — this is the architecture only.**
+
+## Ruled out first, so it stops being reconsidered
+
+**Fine-tuning the answering model on reward.** Gemini and OpenRouter are hosted: no gradient
+access, and the free tiers are counted in requests, not tokens. The local models here are
+`models/whisper` and `hey_mr_odd_ball.onnx` — STT and wake, not the answerer. RLHF on a local LLM
+needs a GPU that is not on this desk and thousands of labelled episodes that do not exist.
+
+**The constraint that sets the whole order:** you cannot train against a reward you cannot
+measure, and outside quiz mode this rig has no way to know whether an answer was right. Quiz mode
+is the only place with ground truth. So the staging is forced, not chosen.
+
+## Step 1 — The episode ledger (do this first; it is also worth having on its own)
+
+One JSONL, appended once per turn, next to `data/oddball.log`:
+
+    {utterance, route, paid, latency_s, verdict, reward, params, ts}
+
+`Turnlog` already holds `route`, `route_s`, `agent_s` and `extras`; this is a serialiser on the
+`finally` block that already logs `t.line()`, not new instrumentation.
+
+It is worth building even if nothing below ever gets built, because it is the **outcome field
+the conversation memory does not have**. `format_memory_for_llm` dumps 40 turns with no marker
+for which of them failed — which is how five copies of "I could not get you a deeper explanation"
+became context on 2026-09-04.
+
+## Step 2 — The offline gym
+
+Replay a corpus, score it, change one parameter, replay again, compare. Deterministic, free, and
+fast enough to run between takes. Most of it exists and is not yet pointed at this:
+
+    captures/                  197+ real WAVs; the transcript is in the log beside each one
+    data/oddball.log           23,933 lines of turns with routes and timings
+    tools/quiz_grade.py        Grade.scored returns 1.0 / 0.5 / 0.0 — already a reward function
+    tools/quiz_bank.py         ground truth
+    tools/verify_*.py          38 episode runners in all but name
+    media/scripts/measure_*.py the measurement idiom, already house style
+
+## Step 3 — Learn the three decisions that already have knobs
+
+A contextual bandit over a handful of discrete arms. **Not deep RL** — tens of samples, not
+millions, and Thompson sampling over a few arms is the whole algorithm.
+
+| decision | reward | note |
+|---|---|---|
+| free path vs paid model | correct (or uncorrected) minus cost minus latency | the ledger already says the persona path spends 85s on "ball.", nine times |
+| wake threshold | fixture hits minus false wakes | hand-tuned 0.76 to 0.53 to 0.76 across one week; a script should own this |
+| quiz item selection | his score | Elo per item, pick nearest 50% predicted-correct |
+
+The last row is the only place *"reward him for getting correct answers"* is literally the right
+frame — and note that it improves **LB's studying**, not the model's weights. That is the honest
+version of the original question, and it is the most useful one.
+
+## Step 4 — Only then, general answer quality
+
+Needs an LLM judge, which costs requests off a 20-a-day tier. Defer until steps 1-3 have paid
+for themselves.
+
+## The part that is half-built already
+
+`corrections.md` is supervised labels from LB. `reflections.md` is self-labels. Stage 20 gave the
+second one counts, decay and honest recording — which is what turns it from prose into a dataset.
+An entry that says "this happened 22 times" is a training signal. Twenty-two paragraphs were not.
+
+
+# Stage 22 — A filename about hardware nobody has, a clock that could not tick, and a rule he never gave
+
+## The name
+
+`sd_card_memory.json` -> `conversation_memory.json`. It was accurate on the Pi: the whole repo
+lived on a removable card, and the 15-day reminder exists because that card was the only copy of
+it. The Pi was retired on 2026-08-26. A filename that describes hardware nobody has is a filename
+that makes people ask what it means, which is exactly what happened.
+
+- [x] Renamed, and the file moved — creation time survived, which the backup clock below needs.
+- [x] `_adopt_legacy_file` moves the old name across on first run. Three states on disk, and the
+      third is the one that matters: **when BOTH exist the live log is not overwritten and the
+      old one is not deleted**, only named in a warning. The only safe merge of two conversation
+      logs is one a person looks at.
+- [x] Both names stay in `.gitignore`. A rig still running August code recreates the old one, and
+      an untracked file beats a surprise commit.
+- [x] References updated in `engine/core.py`, `README.md`, `docs/DEPLOY.md`, four harnesses.
+      `tasks/` keeps the old name where it is describing something that happened.
+
+## The clock that had never ticked
+
+`check_for_backup_reminder` compared now against `history[0]["timestamp"]` — the oldest entry in
+a **rolling 40-turn window**. On any day LB actually uses the rig that entry is hours old. The
+check was asking *"was the 40th-most-recent thing he said more than a fortnight ago"*, and on a
+system in use the answer is always no.
+
+    file created                2026-08-19      15 days
+    oldest of the rolling 40    2026-09-03       1 day
+
+Fifteen days to the day, and the check said one. **It had never fired once in the life of the
+project.**
+
+- [x] Measured off the file's **creation** time — not mtime, which `save_history` moves on every
+      single turn, so a clock built on it could never fire either. The file is truncated in
+      place rather than replaced, which is what keeps creation time honest.
+- [x] `acknowledge_backup()` and `python tools/memory_manager.py --backed-up`. **Without an off
+      switch the fix is a downgrade**: the old check fired never, and a correct one fires on
+      every turn from the moment it comes true, forever, because nothing in the system can watch
+      LB copy a file to a drive. A reminder that cannot be dismissed is one he learns to ignore,
+      and then he ignores the next one too. Not wired to a voice intent on purpose — "I backed it
+      up" is a sentence `base.en` would have to get right to silence a data-loss warning.
+- [x] The acknowledgement is a sidecar, not a field in the log. The log is a plain JSON *list*
+      that seven agents and four harnesses read positionally; wrapping it in an object to store
+      one date would break all of them.
+
+It fires right now, correctly, because the log genuinely has never been backed up.
+
+## The rule he never gave
+
+`vault/corrections.md` held exactly one standing rule, injected at the TOP of every agent prompt
+with the highest authority in the preamble:
+
+    Rule: Don't make sure you can explain yourself
+
+Not a logical instruction. The capture was still on disk, so it was re-transcribed rather than
+guessed at — `captures/153754_don-t-make-sure-you-can-explain-yourself.wav`, three model sizes:
+
+    tiny.en    "Don't make sure you can clean it yourself."
+    base.en    "Don't make sure you can explain yourself."      <- what the rig recorded
+    small.en   "go make sure you can explain yourself."
+
+Word-level confidence on `small.en` settles it:
+
+    0.00-0.22   ' go'      p=0.145
+    0.22-0.46   ' make'    p=0.894
+    0.46-0.68   ' sure'    p=0.999
+    0.68-0.88   ' you'     p=0.991
+
+**The imperative is certain and the first word is noise.** It occupies 0.00-0.22s — the very
+start of the capture, which is precisely where Stage 19 found the wake phrase's own tail landing.
+`ignore_start_s` and `wake_tail_s` were built for that 220ms and this entry predates them.
+
+- [x] Rule corrected to **"Make sure you can explain yourself"** — the opposite of what had been
+      overriding every agent prompt for five days.
+- [x] `LB said` left verbatim. It is documented as the record of record; only the derived Rule
+      was changed, and the Context now carries the evidence so LB can reverse it.
+
+## Review — Stage 22
+
+**Done, and verified.** `tools/verify_memory_file.py` — 28 checks, probe bites. Full sweep, all
+39 harnesses: 38 green, `verify_wake` at 44/60, the same number since Stage 19. The conversation
+log, both ledgers: byte-identical across the sweep, and the legacy filename was not recreated.
+
+The probe is the part worth keeping: it reimplements the old rolling-window check and runs it
+against the same file, and has to answer "no backup needed" where the new one answers "yes".
+Section 3 asserts the reminder fires on an old file with recent turns — which is only evidence if
+the implementation it replaced would have said no.
+
+### What didn't work
+
+**Guessing the correction.** Stage 20 wrote down that the rule was "almost certainly *don't-*
+make sure you can explain yourself with the pause dropped" — a confident reconstruction of a
+sentence, from a transcript, with the audio sitting in `captures/` the whole time. There was no
+"don't". Two weaker models hallucinated it independently and agreed with each other, which is the
+failure mode that makes agreement worthless: **they are wrong in the same direction because they
+are wrong for the same reason.** L52.
+
+**Demonstrating `--backed-up` on the real file.** Running it to show the CLI worked silenced a
+reminder that was genuinely due. The state file was deleted and the reminder is live again. Same
+shape as L51: the demonstration wrote to production state when reading it would have done.
+
+### Still open
+
+- [ ] **Restart the rig.** PIDs 8656 and 20696 are still the 2026-08-31 processes, still holding
+      the OLD path. The next turn they take recreates `sd_card_memory.json`, and those turns will
+      not be in `conversation_memory.json`. Restart before talking to him again; if the old file
+      reappears first, its turns are in there and the warning will say so.

@@ -45,7 +45,7 @@ def run_math_agent(query: str) -> str:
                                  timeout=CLOUD_TIMEOUT_S)
     llm_with_tools = llm.bind_tools([math_repl_tool])
     
-    # Retrieve saved history from SD card
+    # Retrieve saved history from the conversation log
     history = format_memory_for_llm()
     
     prompt_template = ChatPromptTemplate.from_template(MATH_PROMPT_TEMPLATE)

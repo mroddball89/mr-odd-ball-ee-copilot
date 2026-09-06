@@ -41,6 +41,8 @@ import argparse
 import shutil
 import sys
 import tempfile
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -214,6 +216,257 @@ try:
     check(reflections.SLOW_TURN_S >= 20,
           f"the slow-turn threshold is {reflections.SLOW_TURN_S}s, not a hair trigger",
           "the router alone measured 9.8s on the Pi; a low threshold logs every normal turn")
+
+    # =====================================================================================
+    section("6. the same mistake twice is ONE entry with a count")
+    # =====================================================================================
+
+    # The measured pathology of 2026-09-04: 22 slow-turn entries, identical but for the
+    # transcript and the number of seconds, six of which rode on every single agent prompt.
+    reflections.clear()
+    started = datetime.now().isoformat(timespec="seconds").replace("T", " ")
+    for spoken, secs in (("ball.", 85), ("Okay.", 57), ("Mr. Albo.", 135),
+                         ("Yeah, yeah, yeah, yeah.", 149), ("Whoa.", 51)):
+        reflections.note("slow-turn", f"answer {spoken!r} via the persona path",
+                         f"it took {secs} seconds — 1s to route and {secs - 1}s in the agent",
+                         "prefer the free path for this kind of question where one exists")
+
+    entries = reflections.recent(limit=0)
+    check(len(entries) == 1, "five false-wake slow-turns collapse to one entry",
+          f"got {len(entries)}: {[e.what for e in entries]}")
+    check(entries[0].count == 5, "...carrying the count", f"got {entries[0].count}")
+    check("×5" in entries[0].line(), "...and the prompt line says how many times",
+          entries[0].line())
+    check(entries[0].what.endswith("via the persona path"),
+          "...keeping the NEWEST wording, not the oldest")
+    # These five land inside one second, so `first` and `when` are equal here and that is
+    # correct. What this can prove is that `first` is anchored at the START of the run rather
+    # than blank or copied from the last recording; section 7 proves it survives a real gap.
+    check(started <= entries[0].first <= entries[0].when,
+          "...and `first` marks the start of the run, not the latest occurrence",
+          f"started={started} first={entries[0].first} when={entries[0].when}")
+
+    # The count is the whole point, so it has to survive being written and read back.
+    check(reflections.recent()[0].count == 5, "the count round-trips through the file")
+    check("**Seen:** 5 times" in reflections.LEDGER.read_text(encoding="utf-8"),
+          "...and reads as a sentence in the file LB opens")
+
+    # A DIFFERENT route is a different mistake and must not be swallowed by the count.
+    reflections.note("slow-turn", "answer 'look in the vault' via the general path",
+                     "it took 48 seconds — 1s to route and 47s in the agent", "")
+    check(len(reflections.recent(limit=0)) == 2,
+          "a slow turn on a different path is a SEPARATE entry",
+          "collapsing these would hide which path is actually slow")
+
+    # The negative that matters most: a digit-bearing token names a specific thing, and
+    # `similar()` was measured into weighting it double. Merging on it would be self-defeating.
+    reflections.clear()
+    reflections.note("academic", "read the ECE350 syllabus", "the note was not in the vault")
+    reflections.note("academic", "read the ECE250 syllabus", "the note was not in the vault")
+    check(len(reflections.recent(limit=0)) == 2,
+          "two course codes stay two entries",
+          "ECE350 and ECE250 are different courses; the digits ARE the identity")
+
+    reflections.clear()
+    reflections.note("os/timeout", "run `apt-get update`", "killed at 15 seconds")
+    reflections.note("os/timeout", "run `pip install numpy`", "killed at 15 seconds")
+    check(len(reflections.recent(limit=0)) == 2,
+          "two different commands stay two entries",
+          "backticks mark a command, and the command is what failed")
+
+    reflections.clear()
+    reflections.note("handled/quiz", "quiz explanation degraded",
+                     "ImportError: cannot import name 'CLOUD_TIMEOUT_S' from 'engine.models'")
+    reflections.note("handled/quiz", "quiz explanation degraded",
+                     "ImportError: cannot import name 'AGENT_MODEL' from 'engine.models'")
+    check(len(reflections.recent(limit=0)) == 2,
+          "two different missing names stay two entries",
+          "an exception names what it could not find IN QUOTES; that is not a transcript")
+
+    # A lesson written once must not be lost by a later recording that had nothing to add.
+    reflections.clear()
+    reflections.note("crash", "answer 'a' via the persona path", "it took 60 seconds",
+                     "prefer the free path")
+    reflections.note("crash", "answer 'b' via the persona path", "it took 90 seconds", "")
+    check(reflections.recent()[0].lesson == "prefer the free path",
+          "the earlier lesson survives a later recording that had none")
+
+    # `note` merges on TEXT so that a block it cannot parse is not quietly deleted around it.
+    reflections.clear()
+    reflections.note("crash", "answer 'a' via the persona path", "it took 60 seconds", "")
+    hand = reflections.LEDGER.read_text(encoding="utf-8") + "\nLB wrote this by hand.\n"
+    reflections.LEDGER.write_text(hand, encoding="utf-8")
+    reflections.note("crash", "answer 'b' via the persona path", "it took 90 seconds", "")
+    check("LB wrote this by hand." in reflections.LEDGER.read_text(encoding="utf-8"),
+          "a hand-written line survives a merge happening around it",
+          "the file is documented as safe to edit; a merge must not be a rewrite")
+
+    # --- the negatives a code review found on 2026-09-06 --------------------------------
+
+    # An exception names what it could not find IN QUOTES, and that name is the identity even
+    # when it contains digits. Stripping every number from `why` merged two different missing
+    # decks into one — the same mistake `_QUOTED` refuses to make in `what`, by the other door.
+    reflections.clear()
+    for deck in ("ece350", "ece250"):
+        reflections.note("handled/quiz", "load a deck",
+                         f"FileNotFoundError: No such file: 'data/quiz/{deck}.json'")
+    check(len(reflections.recent(limit=0)) == 2,
+          "two different missing FILES stay two entries",
+          "the digits inside the quoted path are the identity, not a duration")
+    both = reflections.LEDGER.read_text(encoding="utf-8")
+    check("ece350.json" in both and "ece250.json" in both,
+          "...and BOTH deck names survive in the file",
+          "a merge keeps only the newest text, so the older identifier would be gone")
+    check(reflections.similar("data/quiz/ece350.json") != [],
+          "...and the ece350 failure is still findable by its path")
+
+    # ...while the volatile numbers OUTSIDE quotes still collapse, or nothing merges at all.
+    reflections.clear()
+    reflections.note("slow-turn", "answer 'a' via the general path", "it took 48 seconds")
+    reflections.note("slow-turn", "answer 'b' via the general path", "it took 103 seconds")
+    check(len(reflections.recent(limit=0)) == 1,
+          "durations outside quotes still collapse")
+
+    # `_flatten` caps a field at 400 chars. Substituting AFTER that cap loses the closing quote
+    # on a long transcript, `_QUOTED` stops matching, and the entry never merges with itself.
+    # `agents/screen_agent.py` builds `what` from an unbounded question, so this is reachable.
+    reflections.clear()
+    for tail in ("first", "second"):
+        reflections.note("screen-capture",
+                         f"look at the screen to answer {'x' * 420 + tail!r}",
+                         "no-tool: grim is not installed")
+    check(len(reflections.recent(limit=0)) == 1,
+          "a transcript longer than the field cap still merges",
+          f"got {len(reflections.recent(limit=0))} — the closing quote was being truncated away")
+
+    # `_annotations` must carry a hand-added field, not just hand-added prose. The house style
+    # for this file IS `- **Name:** value`, so that is the shape LB will reach for.
+    reflections.clear()
+    reflections.note("crash", "answer 'a' via the persona path", "it took 60 seconds")
+    text = reflections.LEDGER.read_text(encoding="utf-8").rstrip()
+    reflections.LEDGER.write_text(
+        text + "\n- **Note:** LB — watch this one after the timeout change\n"
+               "- **Ticket:** ODD-14\n", encoding="utf-8")
+    reflections.note("crash", "answer 'b' via the persona path", "it took 90 seconds")
+    after = reflections.LEDGER.read_text(encoding="utf-8")
+    check("- **Note:** LB — watch this one" in after,
+          "a hand-added **Note:** field survives a merge",
+          "only the four fields this module regenerates may be dropped")
+    check("- **Ticket:** ODD-14" in after, "...and so does a hand-added **Ticket:**")
+    check(after.count("**Seen:**") == 1,
+          "...and the module's own fields are still regenerated once, not duplicated")
+
+    # `--compact` must not overwrite its own backup on a second run. The second run is the
+    # likely one: compact, read the file, wonder if something was dropped, run it again.
+    reflections.clear()
+    for i in range(4):
+        reflections.note("bulk-compact", f"do the thing", f"it failed after {i} seconds")
+    for stale in reflections.LEDGER.parent.glob(reflections.LEDGER.name + ".*.bak"):
+        stale.unlink()
+    reflections.note("other", "something else", "a different failure")
+    first_before, _ = reflections.compact()
+    time.sleep(1.05)                       # the backup name is stamped to the second
+    reflections.compact()
+
+    baks = sorted(reflections.LEDGER.parent.glob(reflections.LEDGER.name + ".*.bak"))
+    counts = [b.read_text(encoding="utf-8").count("\n## ") for b in baks]
+    check(len(baks) == 2, "each --compact writes its OWN dated backup", f"got {len(baks)}")
+    check(first_before in counts,
+          "...so the FIRST run's pre-compaction file is still recoverable",
+          f"entries per backup {counts}, first run compacted {first_before}")
+
+    # =====================================================================================
+    section("7. a mistake that stopped happening stops being injected")
+    # =====================================================================================
+
+    reflections.clear()
+    old = (datetime.now() - timedelta(days=reflections.PROMPT_MAX_AGE_DAYS + 10))
+    stamp = old.isoformat(timespec="seconds").replace("T", " ")
+    reflections.LEDGER.write_text(
+        reflections._BANNER + f"\n## {stamp} — os/not-installed\n"
+        "- **Tried:** open `firefox`\n"
+        "- **Went wrong:** firefox is not on the pinned PATH\n", encoding="utf-8")
+
+    check(reflections.recent() == [],
+          f"an entry older than {reflections.PROMPT_MAX_AGE_DAYS} days is not 'recent'")
+    check(len(reflections.recent(limit=0, max_age_days=0)) == 1,
+          "...but it is still in the FILE, which is LB's to read in full")
+    check(reflections.similar("can you open firefox") != [],
+          "...and `similar` still finds it",
+          "'have I broken this before' does not have an expiry date; 'what went wrong lately' does")
+
+    block = reflections.for_prompt("")
+    check(block == "", "a ledger of only stale entries injects NOTHING into a prompt",
+          f"got {block!r}")
+
+    # Recurrence is what keeps an entry alive — nothing has to decide when a problem is over.
+    reflections.note("os/not-installed", "open `firefox`", "firefox is not on the pinned PATH")
+    fresh = reflections.recent()
+    check(len(fresh) == 1 and fresh[0].count == 2,
+          "recording it again revives the SAME entry rather than starting a new one",
+          f"got {[(e.what, e.count) for e in fresh]}")
+    check(fresh[0].first.startswith(stamp[:10]),
+          "...and it still remembers when the run started",
+          f"first={fresh[0].first}")
+
+    # =====================================================================================
+    section("8. an existing ledger can be compacted in place")
+    # =====================================================================================
+
+    # A ledger written before any of this existed: no `Seen:` lines anywhere.
+    legacy = [reflections._BANNER]
+    for n, secs in enumerate((85, 57, 135, 149, 51, 66, 94, 103), start=1):
+        legacy.append(f"\n## 2026-09-0{n} 07:2{n}:14 — slow-turn\n"
+                      f"- **Tried:** answer 'thing {n}' via the persona path\n"
+                      f"- **Went wrong:** it took {secs} seconds — 1s to route and "
+                      f"{secs - 1}s in the agent\n")
+    reflections.LEDGER.write_text("".join(legacy), encoding="utf-8")
+
+    check(len(reflections.recent(limit=0, max_age_days=0)) == 8, "eight legacy entries to start")
+    before_n, after_n = reflections.compact()
+    check((before_n, after_n) == (8, 1), "compaction merges them to one",
+          f"got {before_n} -> {after_n}")
+    check(reflections.recent(limit=0, max_age_days=0)[0].count == 8,
+          "...with the full count")
+    baks = sorted(reflections.LEDGER.parent.glob(reflections.LEDGER.name + ".*.bak"))
+    check(bool(baks), "...and a dated .bak is written first, so it is reversible")
+    check(any("07:21:14" in b.read_text(encoding="utf-8") for b in baks),
+          "...containing the original entries")
+
+    # =====================================================================================
+    section("9. one verbose entry cannot take the prompt budget")
+    # =====================================================================================
+
+    # A real OpenRouter 429: the message, a headers dict, a limit source and a reset epoch.
+    # Two of these were consuming half the injected block after the 2026-09-04 compaction.
+    fat = ("RateLimitError: Error code: 429 - {'error': {'message': 'Rate limit exceeded: "
+           "free-models-per-day. Add 10 credits to unlock 1000 free model requests per day', "
+           "'code': 429, 'metadata': {'headers': {'X-RateLimit-Limit': '50', "
+           "'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': '1788048000000'}}}}")
+    reflections.clear()
+    reflections.note("crash", "answer 'a question' via the persona agent", fat)
+
+    stored = reflections.recent()[0]
+    check(len(stored.why) > reflections.LINE_MAX_CHARS,
+          "the FILE keeps the long error, because LB reads it to debug",
+          f"stored {len(stored.why)} chars")
+    check(len(stored.line()) < len(fat),
+          "...but the prompt line is clipped", f"line is {len(stored.line())} chars")
+    check("RateLimitError" in stored.line() and "free-models-per-day" in stored.line(),
+          "...keeping the part that identifies the failure")
+    check("X-RateLimit-Reset" not in stored.line(),
+          "...and dropping the part no model needs")
+
+    reflections.clear()
+    for i in range(reflections.PROMPT_ENTRIES + 2):
+        reflections.note(f"crash-{i}", f"answer 'question {i}' via the persona agent", fat)
+    block = reflections.for_prompt("")
+    check(block.count("\n- [") >= reflections.PROMPT_ENTRIES,
+          f"all {reflections.PROMPT_ENTRIES} recent mistakes now fit in the block",
+          f"got {block.count(chr(10) + '- [')} — before clipping, two of these filled it")
+    check(len(block) <= reflections.MAX_PROMPT_CHARS,
+          "...and the block is still under the cap", f"got {len(block)}")
+
 finally:
     reflections.LEDGER = _real_ledger
     reflections.VAULT_DIR = _real_vault

@@ -102,7 +102,11 @@ def explain_quiz_answer(question: str, correct_answer: str, user_answer: str = "
         # The failure line rather than a generic apology: it distinguishes a dry free tier —
         # which is not a fault — from an actual break, and LB needs to know which before he
         # decides whether to ask again.
-        return (f"I could not get you a deeper explanation. {_failure_line(exc)} "
+        #
+        # `where` names this call in the ledger. Without it the five identical ImportErrors of
+        # 2026-09-04 were logged and never remembered — the whole reason `_failure_line` records.
+        return (f"I could not get you a deeper explanation. "
+                f"{_failure_line(exc, where='quiz explanation')} "
                 f"The answer is still: {correct_answer}")
 
 

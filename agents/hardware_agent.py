@@ -117,7 +117,7 @@ def run_hardware_agent(query: str) -> str:
                                  timeout=CLOUD_TIMEOUT_S)
     llm_with_tools = llm.bind_tools(TOOLS)
 
-    # Retrieve saved history from SD card
+    # Retrieve saved history from the conversation log
     history = format_memory_for_llm()
 
     prompt_template = ChatPromptTemplate.from_template(HARDWARE_PROMPT_TEMPLATE)

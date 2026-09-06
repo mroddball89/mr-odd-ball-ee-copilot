@@ -339,7 +339,7 @@ def for_prompt() -> str:
 
         if state.disk_free_gb is not None and state.disk_total_gb is not None:
             lines.append(f"- Disk: {state.disk_free_gb:.1f} GB free of "
-                         f"{state.disk_total_gb:.0f} GB on the card holding your files.")
+                         f"{state.disk_total_gb:.0f} GB on the drive holding your files.")
 
         if state.listening:
             for port, what in SERVICES:

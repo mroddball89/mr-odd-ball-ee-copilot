@@ -25,7 +25,7 @@ State that outlives a single question, and nothing else:
     pending     an action waiting on approval; the next ask() is read as the answer
 
 It deliberately does NOT hold the conversation history. That already lives in
-`tools/memory_manager.py`, on the SD card, and having two of them is how they disagree.
+`tools/memory_manager.py`, on the local disk, and having two of them is how they disagree.
 
 ## Ordering inside ask()
 
@@ -219,7 +219,27 @@ def _is_quiz_exit(text: str) -> bool:
     return any(re.search(rf"(?<![a-z0-9]){w}(?![a-z0-9])", flat) for w in _QUIZ_EXIT_WORDS)
 
 
-def _failure_line(exc: Exception) -> str:
+def _note_handled(exc: Exception, where: str) -> None:
+    """Record a failure that was CAUGHT and turned into a sentence. **Never raises.**
+
+    See `_failure_line` for why this exists at all. Kept as a separate function so the recording
+    cannot get tangled up in the branching above it, and so it is one obvious place to look when
+    an entry appears in the ledger that nobody can account for.
+    """
+    try:
+        from tools import reflections
+
+        slug = re.sub(r"[^a-z0-9]+", "-", str(where or "").lower()).strip("-")
+        reflections.note(
+            kind=f"handled/{slug}" if slug else "handled",
+            what=f"{where or 'a model call'} — degraded to a fallback sentence",
+            why=f"{type(exc).__name__}: {exc}",
+            lesson="")
+    except Exception:                                  # noqa: BLE001
+        LOG.debug("could not record a handled failure", exc_info=True)
+
+
+def _failure_line(exc: Exception, *, where: str = "", record: bool = True) -> str:
     """What he says when a turn fails. Names the layer, because "something went wrong" helps
     nobody and costs LB the debugging time of finding out which layer it was.
 
@@ -227,6 +247,33 @@ def _failure_line(exc: Exception) -> str:
     tier doing exactly what it says, and reporting it as a crash sends LB looking for a bug
     that is not there. `brains/gemini.py` in the standalone assistant made the same
     distinction for the same reason.
+
+    Args:
+        exc:    what went wrong.
+        where:  which call degraded, in words — "quiz explanation". Becomes the entry's kind.
+        record: False when the caller has ALREADY written a better entry. `Engine.ask` has the
+                route and the utterance, so `_reflect_on_failure` says more than this can; two
+                entries for one failure would read as two problems.
+
+    ## Why the ledger is written from here
+
+    On 2026-09-04 the quiz explanation call failed five times in one session with the same
+    ImportError. Every one was logged at ERROR with a full traceback — and **the mistake ledger
+    recorded none of them**, because `explain_quiz_answer` is documented as never raising: it
+    catches, returns a sentence, and `Engine.ask` sees a turn that succeeded.
+
+    That is not a bug in the quiz agent. It is the consequence of hanging the instrument on the
+    exception boundary in a codebase whose whole style is to never let an exception reach one.
+    Every well-written `except` was a hole in the memory.
+
+    `_failure_line` is the seam that does not have that problem, and it is already the
+    convention: `agents/quiz_agent.py` imports it across a package boundary precisely so a
+    graceful degradation says the right thing. Anything that degrades calls this, so anything
+    that degrades is now recorded — including the next one, written by someone who never read
+    this docstring. That is the same argument `tools/self_context.py` makes about
+    `format_memory_for_llm`, and it is the reason both work.
+
+    **So: if you catch an exception and answer anyway, say it with `_failure_line`.**
     """
     text = str(exc)
     if "RESOURCE_EXHAUSTED" in text or "429" in text:
@@ -236,17 +283,27 @@ def _failure_line(exc: Exception) -> str:
         if quota.is_daily_exhaustion(text):
             # LB's words, first, because this is the sentence he asked to hear and the one
             # that stops him debugging a fault that is not there.
+            #
+            # Returned WITHOUT recording, and that is the same call `_reflect_on_failure` makes:
+            # a dry free tier is a budget running out, it is true for every turn until midnight,
+            # and writing it down would fill the ledger with identical entries and push out the
+            # ones that mean something.
             return ("API quota exceeded for today. That's my "
                     f"{FREE_TIER_DAILY_LIMIT} free questions gone until it resets. "
                     "The utility stuff still works — ask me the time.")
         # A per-MINUTE 429 is a different animal: it clears in seconds, and telling him to
         # come back tomorrow over a burst would be wrong.
-        return "I'm being rate limited for a moment. Ask me again in a few seconds."
-    if "NOT_FOUND" in text or "404" in text:
-        return "That model name isn't valid any more. The details are on the screen."
-    if "PERMISSION_DENIED" in text or "API key" in text:
-        return "My API key isn't working. The details are on the screen."
-    return "Something went wrong on my end. It's on the screen."
+        said = "I'm being rate limited for a moment. Ask me again in a few seconds."
+    elif "NOT_FOUND" in text or "404" in text:
+        said = "That model name isn't valid any more. The details are on the screen."
+    elif "PERMISSION_DENIED" in text or "API key" in text:
+        said = "My API key isn't working. The details are on the screen."
+    else:
+        said = "Something went wrong on my end. It's on the screen."
+
+    if record:
+        _note_handled(exc, where)
+    return said
 
 
 @dataclass
@@ -452,7 +509,9 @@ class Engine:
 
             self._reflect_on_failure(text, t, exc)
             return Response(
-                speech=_failure_line(exc),
+                # `record=False`: the line above has already written a richer entry, with the
+                # route and the utterance in it. Recorded twice, one failure reads as two.
+                speech=_failure_line(exc, record=False),
                 cards=[Card(CardKind.ERROR, type(exc).__name__, str(exc))],
                 route=t.route,
             )
@@ -942,6 +1001,11 @@ class Engine:
 
         Applies to free turns too — a reminder that only fires when he happens to make an API
         call is a reminder that stops firing on exactly the days he is being careful with quota.
+
+        **The card now names the command that silences it**, which it did not need to when the
+        clock was measured off the rolling 40-turn window and could therefore never fire at all.
+        A reminder that appears on every turn with no stated way out is one LB learns to ignore,
+        and then he ignores the next one too. See `memory_manager.acknowledge_backup`.
         """
         from tools.memory_manager import check_for_backup_reminder
 
@@ -952,8 +1016,8 @@ class Engine:
             speech=response.speech,
             cards=list(response.cards) + [Card(
                 CardKind.ERROR, "Back up your memory",
-                "sd_card_memory.json is more than 15 days old. Copy it to the portable "
-                "drive before the SD card is the only copy of it.")],
+                "conversation_memory.json has gone more than 15 days without a backup. Copy "
+                "it somewhere else, then run: python tools/memory_manager.py --backed-up")],
             route=response.route, pending=response.pending, raw=response.raw)
 
     # How far ahead a deadline has to be before it stops being LB's problem today. His number.

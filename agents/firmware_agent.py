@@ -169,7 +169,7 @@ def _answer(query: str, retrieved: "tuple[str, list[dict]] | None" = None
             # the prompt already requires him to say so.
             LOG.exception("retrieval failed; answering without the datasheets")
 
-    # 3. Retrieve saved history from SD card (or local storage)
+    # 3. Retrieve saved history from the conversation log
     history = format_memory_for_llm()
 
     # 4. Build the prompt with datasheet context, memory context and the user's new question

@@ -61,7 +61,7 @@ os.environ.setdefault("ODDBALL_VAULT_DIR", _HARNESS_TMP)
 # `Engine.ask()` calls `memory_manager.add_message`. Without this the harness writes its own
 # test utterances into LB's actual log, where `format_memory_for_llm` then feeds them to every
 # agent as things he recently said. Added 2026-08-29, when a sweep was measured still touching
-# `sd_card_memory.json` after `tools/verify_notes.py` had been fixed — this was the other one.
+# `conversation_memory.json` after `tools/verify_notes.py` had been fixed — this was the other one.
 os.environ.setdefault("ODDBALL_MEMORY_FILE",
                       os.path.join(_HARNESS_TMP, "harness_memory.json"))
 

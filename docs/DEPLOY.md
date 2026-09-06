@@ -584,7 +584,7 @@ regex for imports reported `a` and `his` as undeclared dependencies, from senten
 | `data/screen/` | screenshot frames, rotated |
 | `data/inbox/` | uploads land here before filing |
 | `vault/` | notes, corrections, reflections — gitignored |
-| `sd_card_memory.json` | the last 40 messages |
+| `conversation_memory.json` | the last 40 messages |
 | `chroma_db/` | the vector store, if the RAG extra is installed |
 | `models/`, `voices/` | gitignored, see [The model files](#3-the-model-files) |
 

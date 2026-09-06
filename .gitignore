@@ -11,13 +11,23 @@ venv/
 # The vector store is a build artifact — rebuild it with `python tools/vector_db.py`.
 chroma_db/
 
-# LB's own data, not source. sd_card_memory.json is the conversation log the 15-day
+# LB's own data, not source. conversation_memory.json is the conversation log the 15-day
 # backup clock watches; quiz_data.json is regenerated with defaults if absent.
+#
+# sd_card_memory.json is its pre-2026-09-04 name and stays ignored on purpose: a rig still
+# running the old code recreates it, and an untracked file is better than a surprise commit.
+conversation_memory.json
+conversation_memory.backup-state.json
 sd_card_memory.json
+# Dated safety copies and the spill past the 40-turn cap, written when the two logs
+# above had to be merged by hand. Still LB's data.
+conversation_memory.*.bak
+sd_card_memory.*.bak
+conversation_memory.archive-*.json
 quiz_data.json
 
 # The Markdown vault is LB's own long-term notes, written by tools/knowledge_vault.py — his
-# data, not source, same call as sd_card_memory.json. Deliberately NOT ignored wholesale
+# data, not source, same call as conversation_memory.json. Deliberately NOT ignored wholesale
 # though: the folder itself is tracked via the .gitkeep, because a vault that vanishes on a
 # fresh clone looks like a missing feature rather than an empty notebook.
 vault/**
