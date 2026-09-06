@@ -112,6 +112,27 @@ _WINDOWS_MUST_REFUSE = [
     "Remove-Item -Recurse -Force C:\\Users\\user",
     "remove-item -recurse -force .",
     "ri -Recurse -Force C:\\",
+    # --- abbreviated -Recurse. PowerShell resolves any UNAMBIGUOUS PREFIX of a parameter
+    # name, and -Recurse is the only Remove-Item parameter beginning with "r" — so `-r` deletes
+    # a tree exactly as `-Recurse` does. Measured 2026-09-02: all three of these were ALLOWED
+    # while the spelled-out form directly above was blocked.
+    "Remove-Item C:\\Users\\user -Rec -Force",
+    "Remove-Item C:\\Users\\user -r -Force",
+    # NOT `ri -rec -force C:\` — that was the first version of this fixture and it was DEAD:
+    # a bare drive root is already refused by the "drive root or profile as the target" rule
+    # below, so it passed before the abbreviation was understood and proved nothing about it.
+    # An ordinary directory isolates the abbreviation, which is the thing under test.
+    "ri -rec -force C:\\Users\\user\\Documents\\build",
+    # --- the recursion on the LEFT of the pipe, which is how a person actually writes it.
+    # Every other filesystem pattern uses `[^|]*` to stay inside one pipeline segment, which is
+    # correct for them and is precisely why none of them could see this. The third one has two
+    # pipes, because a Where-Object in the middle is the normal shape.
+    "Get-ChildItem C:\\Users\\user -Recurse | Remove-Item -Force",
+    "gci C:\\ -Recurse | ri -Force",
+    "Get-ChildItem C:\\ -Recurse | Where-Object { $_.Length -gt 0 } | Remove-Item",
+    # --- PowerShell's own escape character as a bypass. A backtick is a no-op in front of an
+    # ordinary letter, so this IS `Remove-Item` to the shell and was not to the regex.
+    "Remove-It`em C:\\Users\\user -Recurse",
     "Clear-Disk -Number 0 -RemoveData -Confirm:$false",
     "Format-Volume -DriveLetter C",
     "Remove-Partition -DiskNumber 0 -PartitionNumber 1",
@@ -184,6 +205,15 @@ _WINDOWS_MUST_ALLOW = [
     "Get-Command shutdown",                      # names it, does not run it
     "Get-Content .\\formatting_notes.md",        # contains the word "format"
     "Get-History | Select-String python",        # not a bare history dump
+    # --- near-misses for the piped-recursion rule added 2026-09-02. A recursive Get-ChildItem
+    # is an ordinary thing to run, and it is only a refusal when a DELETE is downstream of it.
+    # If any of these four ever goes red, that pattern has been widened into a ban on listing
+    # files — and a guard that refuses `ls` is a guard LB switches off, which is the failure
+    # this whole file exists to prevent.
+    "Get-ChildItem C:\\Users\\user -Recurse | Select-Object Name",
+    "Get-ChildItem -Recurse | Measure-Object",
+    "Get-ChildItem C:\\repo -Recurse | Select-String TODO",
+    "Get-ChildItem . -Recurse -Filter *.kicad_sch | Sort-Object LastWriteTime",
 ]
 
 # The corpus for the platform this is running on. Selected the same way, and for the same

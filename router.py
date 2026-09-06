@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from engine.models import ROUTER_MODEL, LLM_MAX_RETRIES
+from engine.models import ROUTER_MODEL, CLOUD_TIMEOUT_S, LLM_MAX_RETRIES
 
 
 # 1. Define the possible destinations
@@ -73,7 +73,10 @@ Available Agents:
   machine itself. **His notebook is not the filesystem**: "what notes have you got", "read me
   back my notes" and "add to my note about X" are GENERAL, not OS, however much they sound
   like files. OS is for the disk; GENERAL is for the vault.
-- QUIZ: the user wants to be tested, quizzed, or tutored on engineering material.
+- QUIZ: the user wants to be TESTED on what he knows — "quiz me", "test me on calculus", "ask
+  me some questions about Kant". This covers EVERY subject he takes, not just engineering:
+  calculus, philosophy, physics, chemistry, history, whatever is in his question bank. He may
+  name a subject and he may not; either way it is QUIZ.
 - WEB: current events, component pricing, or up-to-date information from the internet.
 - UTILITY: the time, the date, a unit conversion, a physical constant, or the definition of
   an engineering term. Cheap lookups with one right answer and no reasoning required.
@@ -122,10 +125,13 @@ Routing notes:
   "how much disk space is left" is OS. Both are about this PC and they are not the same
   question — one is answered by looking at pixels, the other by asking the operating system.
 - ACADEMIC is about what a COURSE requires, not what the user knows — "when is the midterm due"
-  or "what does the syllabus say about late homework" is ACADEMIC. "Test me on this" or "quiz me
-  on filters" is QUIZ even in an academic context, because the user wants to be evaluated, not
-  told a policy. A datasheet or component question stays FIRMWARE even if it came up because of
-  a class; ACADEMIC is for the course paperwork itself.
+  or "what does the syllabus say about late homework" is ACADEMIC. "Test me on this", "quiz me
+  on filters" or "quiz me on philosophy" is QUIZ even in an academic context, because the user
+  wants to be evaluated, not told a policy. A datasheet or component question stays FIRMWARE
+  even if it came up because of a class; ACADEMIC is for the course paperwork itself.
+- **A subject he is not an engineer in does not make it GENERAL.** "Quiz me on Kant" and "test
+  me on the French Revolution" are QUIZ, not GENERAL — the question bank holds every subject he
+  uploads a practice paper for, and being tested is the request whatever the subject is.
 
 User Query: {question}
 """
@@ -133,7 +139,8 @@ User Query: {question}
 # ==========================================
 # 🚀 OPTIMIZATION: Pre-build the engine once!
 # ==========================================
-_llm = ChatGoogleGenerativeAI(model=ROUTER_MODEL, temperature=0.0, max_retries=LLM_MAX_RETRIES)
+_llm = ChatGoogleGenerativeAI(model=ROUTER_MODEL, temperature=0.0,
+                              max_retries=LLM_MAX_RETRIES, timeout=CLOUD_TIMEOUT_S)
 _structured_llm = _llm.with_structured_output(RouteDecision)
 _prompt = ChatPromptTemplate.from_template(ROUTER_PROMPT)
 _router_chain = _prompt | _structured_llm

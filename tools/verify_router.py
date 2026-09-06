@@ -400,6 +400,91 @@ def s7_social() -> None:
     check("formula" not in Engine.FREE_INTENTS,
           "`formula` is STILL behind the router — it claims questions belonging to MATH")
 
+    s7b_acknowledgements(r)
+
+
+# =========================================================================================
+# 7b. acknowledgements, promoted 2026-09-03 off the log
+#
+# Every phrase in ACK_YES is one `data/oddball.log` shows reaching the PERSONA agent through
+# the router — two API calls each, and with no timeout on the cloud branch at the time, up to
+# 147.8 seconds of a shut microphone to answer a word that wanted no answer. Thirty such turns
+# came to 16.2 minutes.
+#
+# ACK_NO is the half that matters more. "okay", "right" and "sure" are the opening word of an
+# enormous number of real requests, and this intent does not merely answer wrongly — it STOPS
+# THE TURN. D38 is a list of six times a bare keyword swallowed a real question; this is the
+# seventh candidate, and the end-anchor is what stops it becoming one.
+# =========================================================================================
+
+ACK_YES = (
+    "okay", "ok", "alright", "all right", "right", "sure", "cool", "nice", "great",
+    "yeah", "yep", "yup", "mhm", "hmm", "huh", "whoa", "wow", "gotcha", "got it",
+    "understood", "makes sense", "fair enough", "i see", "oh i see", "interesting",
+    # Straight out of the log, verbatim.
+    "yeah yeah yeah yeah", "okay mr odd ball", "thank you for watching",
+)
+
+ACK_NO = (
+    # An acknowledgement in front of a real request. Every one of these used to route
+    # correctly and must continue to.
+    "okay whats the trace width for 5 amps",
+    "right what time is it",
+    "sure open firefox",
+    "cool can you quiz me on calculus",
+    "yeah save that to my notes",
+    "alright whats due tomorrow",
+    "nice how do i configure the esp32 uart",
+    "got it now show me the schematic",
+    "wow that resistor is hot what should i check",
+    "okay read me back my regulator note",
+    # And the collisions with intents that already own these words. A dismissal answered
+    # "Mm-hm." leaves him awake and listening, which is the exact failure the `sleep`-above-
+    # `stop` ordering in instant.py was written to prevent.
+    "okay thats all",
+    "alright goodnight",
+    "okay never mind",
+    "nice one",
+)
+
+# Genuinely ambiguous, and asserted only on the property that matters. "sure thanks" is an
+# acknowledgement and a thank-you at once; `ack` answers "Mm-hm." and `thanks` answers "Any
+# time." Both are right, both are free, and pinning one would be writing a preference into a
+# corpus as though it were a fact — which is how a corpus starts lying about what it proves.
+ACK_EITHER = ("sure thanks", "okay thanks", "cool thanks", "great thank you")
+
+
+def s7b_acknowledgements(r) -> None:
+    section("7b. an acknowledgement is free, and an acknowledgement in front of a question "
+            "is a question")
+    from engine.core import Engine
+
+    for utterance in ACK_YES:
+        got = r.route(utterance).intent
+        check(got == "ack", f"{utterance!r} -> ack", f"got {got!r}")
+
+    for utterance in ACK_NO:
+        got = r.route(utterance).intent
+        check(got != "ack", f"{utterance!r} is NOT a bare acknowledgement",
+              f"claimed ack: {utterance!r}")
+
+    for utterance in ACK_EITHER:
+        got = r.route(utterance).intent
+        check(got in {"ack", "thanks"},
+              f"{utterance!r} is answered FREE, as an ack or a thanks — either is right",
+              f"got {got!r}")
+
+    check("ack" in Engine.FREE_INTENTS,
+          "`ack` is in FREE_INTENTS — it is answered without a router call")
+    check("ack" not in Engine.SOCIAL_INTENTS,
+          "...and is NOT one of the social three: it answers with a shrug, not a greeting")
+
+    # The dismissals specifically, because getting this wrong keeps him awake.
+    for utterance in ("okay thats all", "alright goodnight", "ok im done"):
+        check(r.route(utterance).intent == "sleep",
+              f"{utterance!r} is still a DISMISSAL, not an acknowledgement",
+              f"got {r.route(utterance).intent!r}")
+
 
 # =========================================================================================
 # 8. end to end: the router is not called, and the right agent is

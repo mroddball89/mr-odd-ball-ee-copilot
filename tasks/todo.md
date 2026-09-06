@@ -184,6 +184,21 @@ The pre-merge assistant at `~/oddball` is stopped and disabled, kept as a fallba
 | The textbook KiCad parser: **7 of 12 questions error, 3 answered wrong**, and every schematic question failed on one wrong attribute name | `kiutils` used properly; 12/12 right, 0 wrong; D9 |
 | A two-layer board's layer table has **29 entries**, and every net count is **one too high** | copper counted separately, net 0 named and excluded; L7 |
 
+And two more from filing a SECOND paper — a two-question history review — which is the whole
+argument for running it again with different input rather than once with the input you designed:
+
+7. **A short paper's answer key was thrown away.** `_find_answer_key` demanded three entries
+   before it would believe a heading. The history paper had two, so its key was discarded, both
+   questions were then dropped for having no answer, and the import reported **zero questions**
+   out of a perfectly ordinary paper. Threshold is now two, with the reasoning written down.
+8. **`` does not match between a digit and an underscore.** The course-code regex ended in
+   ``, so `HIST110_MIDTERM_REVIEW` never matched and the deck was named "Hist110" — a name
+   he cannot say out loud. `posc201_quiz.pdf` was the only one that worked in testing, and only
+   because "posc" happens to be a keyword fingerprint as well, which hid the bug behind a
+   coincidence. Course-code prefixes now map to real subject names (HIST → History, EEGR →
+   Electrical Engineering), which is how his vault is already organised — `EEGR105.md`,
+   `POSC201.md`.
+
 ### What didn't work
 
 - **PyQt6 for the floating face** — proposed in the plan; LB had already shipped GTK4 +
@@ -2512,7 +2527,1007 @@ since it was written and which did not exist — which is how the replay parser 
 - [ ] **A live persona call through a local model** — the same gap the 2026-08-28 entry above
       records for OpenRouter: everything is construction and wiring until something asks it a
       question and a tool call comes back.
-- [ ] **Do NOT widen the canned persona tier without log evidence.** Of 18 persona calls ever
-      logged, 5 are now blocked as room tone and 9 answered free; the remaining 4 are all
-      genuine. There is no measured demand for more canned intents, and inventing a corpus is
-      L15.
+- [x] **Do NOT widen the canned persona tier without log evidence.** The evidence arrived
+      2026-09-03: 49 persona turns, of which the 13 slowest are all fragments, and 32% of all
+      agent time spent on non-requests. The answer was NOT a wider persona tier — it was an
+      `ack` intent that stops them reaching the router. D55.
+
+# The vault: what is actually hard to retrieve, measured before it was redesigned (2026-08-30)
+
+LB asked for the vault to be "more accessible and more organized so info can easily be
+retrieved and altered". The first thing that came out of measuring it is that **the
+organization is not the problem, and the resolver is not the problem either.** Two files that
+were never LB's notes are sitting in the middle of his notebook, and they account for most of
+what looks like disorder.
+
+`python media/scripts/measure_vault_recall.py` -> `media/data/2026-08-30-vault-recall.csv`.
+
+## What the vault holds, on 2026-08-30
+
+Nine files. Seven are LB's; two are the machine's own control files, and they are not marked
+as different in any way the code can see:
+
+    vault/corrections.md        <- written by tools/corrections.py, injected into EVERY prompt
+    vault/reflections.md        <- written by tools/reflections.py, injected into EVERY prompt
+    vault/courses/EEGR105.md    derived from a PDF by syllabus_to_vault.py, 2026-08-29
+    vault/courses/POSC201.md    derived from a PDF by syllabus_to_vault.py, 2026-08-29
+    vault/notes/english research question.md
+    vault/notes/peanut_butter.md
+    vault/notes/scratch.md      "note"  <- test residue, 2026-08-21
+    vault/etc/pwned.md          "nope"  <- test residue, 2026-08-21
+    vault/projects/robot_arm.md
+
+## 1. The control files answer to the note verbs, and one of them is destructible
+
+`knowledge_vault.notes()` walks `vault/**/*.md` and skips only dot-directories. `corrections.md`
+and `reflections.md` are neither dotted nor in a dotted folder, so they are notes as far as
+every operation is concerned. Measured:
+
+    find_notes("my corrections")      -> corrections.md    RESOLVES. One note, so the delete
+                                                           verb acts on exactly one note.
+    find_notes("my reflections note") -> reflections.md    same
+
+So **"delete my corrections" opens the gate on the file that carries every standing rule LB has
+ever given.** Confirming it moves the ledger to `.trash/`, `tools/self_context.py` then finds
+nothing to inject, and from the next turn onward every rule is silently withdrawn. Nothing goes
+red — he would have to notice the behaviour change on his own. That is the same class of
+failure `write_note`'s `replace` flag is withheld from a model to prevent, arriving through the
+door the notebook opened afterwards.
+
+## 2. The crash log is being fed to agents as if it were LB's knowledge
+
+`read_from_vault` is a substring scan over filename and body, and `reflections.md` is 10,343
+characters of tracebacks and 503s. Measured against the live vault:
+
+    search("schedule")  -> reflections.md only            10,343 chars   43% of the budget
+    search("error")     -> reflections.md only            10,343 chars   43%
+    search("note")      -> POSC201, scratch, reflections  12,948 chars   54%
+
+`MAX_RESULT_CHARS` is 24,000, and it returns **whole files**, alphabetically, unranked. So an
+agent that searches the vault for "schedule" gets a failure log and no notes, spends nearly
+half its budget on it, and answers from it. At nine notes this is already the majority case for
+common words.
+
+## 3. The fix for 1 and 2 is two lines, and it uses a mechanism already here
+
+`notes()` skips any path with a dotted part — that is what makes `.trash/` safe. The control
+files simply belong on the other side of that line:
+
+    tools/corrections.py:106   LEDGER = VAULT_DIR / "corrections.md"
+    tools/reflections.py:78    LEDGER = VAULT_DIR / "reflections.md"
+                            -> VAULT_DIR / ".system" / "corrections.md"   (mkdir the parent)
+
+`tools/self_context.py` reads through those two constants and needs no change. The instant they
+move they leave `notes()`, `list_notes()`, `find_notes()` and `read_from_vault()` together,
+with no edit to `knowledge_vault.py` at all. "What notes do I have" then says seven, and they
+are all his.
+
+## 4. Two of the seven are test residue from 2026-08-21
+
+`vault/etc/pwned.md` is the containment proof from `tools/verify_notes.py:550` — the traversal
+`folder="../../etc"`, `filename="../../../pwned.md"` landing at `vault/etc/pwned.md` instead of
+outside the repo. **The guard worked.** The harness now isolates itself properly
+(`verify_notes.py:62` sets `ODDBALL_VAULT_DIR` to a `mkdtemp` before importing), so this file
+predates the isolation and nothing has cleaned it up in nine days. `notes/scratch.md` ("note")
+is the same vintage. Deleting both removes the `etc/` folder entirely, and the taxonomy stops
+having a drawer nobody can explain.
+
+## 5. The resolver is fine on everything LB has actually said — and that is not reassuring
+
+Twenty phrases, scored on which note comes back. REAL means transcribed from `data/oddball.log`
+and the capture filenames in `captures/`, Whisper's own errors kept:
+
+    REAL       n=6    now 6/6      alnum 6/6     title 6/6
+    SYNTHETIC  n=14   now 6/14     alnum 9/14    title 11/14
+    ALL        n=20   now 12/20    alnum 15/20   title 17/20
+
+**Every failure in that table is synthetic.** And the REAL set is thinner than n=6 makes it
+look: three of the six correctly resolve to nothing, so there are exactly **three real positive
+lookups and they all point at one note**. This is the wake-threshold trap arriving in a second
+place — a fixture set with no marginal cases certifies whatever is already shipped, and a
+fixture set Claude wrote fails in whatever way Claude imagined. Neither is evidence.
+
+So the two candidates below are ranked by cost, not by the numbers above, and the numbers are
+recorded so they can be checked against real misses later.
+
+- **alnum** — one regex: a letter/digit boundary is a word boundary, applied to the query and
+  to the filename. `EEGR105.md` and the spoken "EEGR 105" then reduce to the same two words.
+  Today they do not: `_plain("EEGR 105")` is `"eegr 105"`, `_plain("EEGR105")` is `"eegr105"`,
+  no tier joins them, and **a course note cannot be reached by its own course code out loud.**
+  Predicted, not observed — both course notes are one day old and there is no log evidence of
+  him reaching for them yet. Cheap enough to do before the term makes it expensive.
+- **title** — let a note also be named by its own first `# H1` and by an `aliases:` frontmatter
+  list. Free on the notes that already exist: `syllabus_to_vault.py` writes
+  `# POSC 201 — American National Government`, so the words "American National Government" are
+  already on disk and no query can currently use them. This is the one that turns "my american
+  government class" and "my intro to electrical engineering class" into hits. Bigger change;
+  wait for a real miss.
+
+## 6. Altering a note means appending to it, and that is the whole verb set
+
+`new`, `append`, `read`, `list`, `delete`, `new folder`. There is no **rename**, no **move**,
+and no **correct** — "actually, make that a 7.4V rail" can only append a contradicting entry
+under a rule. `read_note` handles the contradiction by recency, reading back the *latest* entry
+when a note is too long to say whole, which is a reasonable answer to a problem that should not
+need one.
+
+**Entries carry no date.** `write_note` and `append_note` write a rule and then the content,
+nothing else, so `robot_arm.md` is "MG996R servos, 6V rail" and "Second entry: added an
+encoder" with no way to tell when either was true. Over a term that makes "latest" the only
+question the vault can answer about time.
+
+Dating each entry is cheap but has one gotcha worth writing down before it is discovered:
+`_say` strips Markdown noise with `_SPEECH_NOISE` and would read a date heading out loud, so a
+date has to arrive in a form speech skips. An HTML comment plus one regex in `_say`:
+
+    _HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)    # applied before _SPEECH_NOISE
+
+keeps the vault greppable, keeps it readable in any editor, and keeps him from hearing "less
+than exclamation dash dash".
+
+## 7. Do NOT add folders
+
+The instinct on "make it more organized" is a deeper tree, and it is wrong twice here. The
+vault is nine files, seven once the residue goes — hierarchy would be organizing for its own
+sake. And `_resolve` flattens `folder` to a **single** safe segment, so `courses/EEGR105/` is
+not creatable through the tool even if it were wanted; a nested note would still be *found* by
+the `rglob` walk but could not be *written* by name. Retrieval is the problem, location is not.
+
+## Still open
+
+- [ ] **Move `corrections.md` and `reflections.md` under `vault/.system/`.** Two lines. Stops
+      "delete my corrections" destroying every standing rule, and stops 10 KB of crash log
+      entering agent prompts as knowledge. Highest value per character in this list.
+- [ ] **Delete `vault/etc/pwned.md` and `vault/notes/scratch.md`** — 2026-08-21 test residue.
+      `etc/` goes with them.
+- [ ] **`alnum` in `_plain`** — one regex, before the term makes course codes matter.
+- [ ] **Date each appended entry**, with the `_say` HTML-comment strip in the same change.
+- [ ] **Rank search results and return snippets, not whole files.** `read_from_vault` spends
+      43-54% of its budget on one file today. This is the one that actually breaks with size,
+      and moving the control files out buys the time to do it properly.
+- [ ] **Record real phrases for the course notes and the robot arm note**, put them in
+      `PHRASES` marked REAL, and re-run. The durable fix is the phrase set, not the resolver —
+      the same conclusion `config/oddball.toml` reached about the wake threshold, and the
+      reason `title` is not being built today.
+
+# Four-agent bug audit — 37 findings, and the harnesses were green for all of them (2026-08-30)
+
+Four agents read the repo in parallel: audio, engine/server/quota, orchestrator/agents, and
+tools/vault-safety. Everything below marked **VERIFIED** was re-executed by hand afterwards,
+because an agent's confidence is not evidence.
+
+**The pattern worth naming before the list.** Every harness is green — `verify_convert`
+1599/1599, `verify_define` 7068/7068, `verify_notes` 142/142, `verify_os_guard` 119 — and none
+of them catches the findings below. Not one is a badly built harness. They are all **corpus
+gaps**: `verify_convert` never feeds an uppercase string, `verify_define` never checks that an
+answer mentions its own term, `verify_os_guard` has no piped command in its corpus,
+`verify_upload`'s 413 probe sends no body, `verify_speech` drives the one method production
+does not call. This is the fixture-set lesson from `config/oddball.toml` arriving in eight
+places at once: **a green harness certifies its corpus, not the code.**
+
+## SEVERITY 1 — acts on the machine, or loses data
+
+### 1a. "What does it do?" at the permission prompt executes the command. VERIFIED
+
+`orchestrator/classify_yes.py:37` puts bare `"do"`, `"please"` and `"course"` in `_YES` as
+whole-word matches. Executed:
+
+    is_yes('what does it do')                -> True
+    is_yes('wait what does that command do') -> True
+    is_yes('do i have to')                   -> True
+    is_yes('of course not')                  -> True
+    is_yes('please explain first')           -> True
+
+`engine/core.py:1219` feeds this to `_run_pending`, which dispatches to
+`agents/os_agent.resume_os_action` (runs the proposed PowerShell) and `_trash_approved`
+(deletes a vault note). Asking what a command does is read as approving it. `"do it"`,
+`"please do"`, `"yes please"` and `"of course"` already cover the real yeses, so the three bare
+words can simply go.
+
+### 1b. The PowerShell blocklist misses the recursive delete a model actually writes. VERIFIED
+
+`tools/os_controller.py:344` requires `-recurse` to appear after `remove-item` **with no pipe
+between them** (`[^|]*`). Executed against the real `refuse()`:
+
+    ALLOWED  Get-ChildItem -Path C:\Users\user\OneDrive -Recurse -File | Remove-Item -Force
+    ALLOWED  Get-ChildItem $HOME -Recurse -File | Remove-Item
+    ALLOWED  Remove-Item -r -Force C:\Users\user
+    ALLOWED  Remove-Item -Rec -Force C:\Users\user\OneDrive\Desktop
+    REFUSED  Remove-Item -Recurse -Force C:\Users\user          <- the only shape caught
+    ALLOWED  Select-String -Path .env -Pattern KEY
+    ALLOWED  Clear-Content vault\notes\scratch.md
+
+Three independent causes. **The pipe is a bypass, not a guard** — `Get-ChildItem -Recurse |
+Remove-Item` is the single most idiomatic PowerShell recursive delete and the exact shape an
+LLM emits, with the recursion on the left of the pipe and the deletion on the right, so no
+pattern can see both. **Parameter abbreviation** — `-r` and `-Rec` bind unambiguously to
+`-Recurse` (`Remove-Item` has no other `r*` parameter), and the table matches the literal
+string only. **Token escaping** — `normalise()` at `:507` lowercases and collapses whitespace
+but does not strip PowerShell's backtick, so `Remove-Ite`+backtick+`m` passes.
+
+The Desktop is under OneDrive, so a recursive delete there propagates to the cloud copy.
+
+`tools/verify_os_guard.py` is **not** a re-implementation — `:70` imports the real `normalise`
+and `refuse`, `:286` calls the real `shell_argv`. It is green because its corpus contains no
+piped form, no abbreviated parameter and no escaped token. The corpus is the finding.
+
+Fix: match both halves anywhere in the command rather than requiring adjacency —
+`(?=.*\brecurse\b)(?=.*\b(remove-item|ri|rm|del|erase)\b)` — accept `-rec?u?r?s?e?\b`, strip
+backticks in `normalise()`, and add `[io.directory]::delete`, `clear-content`, `set-content`
+on a profile path, and `select-string`/`sls` to the tables.
+
+### 1c. One unreadable read wipes the entire standing-rules ledger
+
+`tools/corrections.py:412` collapses "cannot read" and "is empty" into `""`; `:437` then
+rebuilds from `_BANNER` and truncate-writes. Identical shape at `tools/reflections.py:212`.
+
+Two triggers, both live on this box. **7 of 9 vault notes are OneDrive `ReparsePoint`
+placeholders** — a read of a dehydrated file with OneDrive paused raises `OSError`. And LB
+editing `corrections.md` in Notepad and saving as ANSI with a `µ` in it raises
+`UnicodeDecodeError`. Either way the next correction he gives replaces the file with the banner
+plus that one rule, no trash copy, and `for_prompt()` keeps injecting the now-one-line block
+into all seven agents as "STANDING CORRECTIONS … These OVERRIDE your own judgement".
+
+Fix: `_read()` returns `None` on failure; `record()`/`note()` refuse to write rather than
+rebuild. Write via temp file + `os.replace`.
+
+### 1d. An uploaded PDF truncates a hand-edited course note and reports "Wrote"
+
+`tools/syllabus_to_vault.py:261` derives `existing` from the **PDF's** stem while `:302` writes
+to the **model's** course code, so the "Rewrote" check never fires for the file actually being
+destroyed. `write_note(..., replace=True)` opens `"w"` — truncate, non-atomic, no trash. The
+automatic path reaches it with no gate: `_file_academic` -> `_INDEXER.request({"syllabus"})` ->
+`_convert_syllabi` -> `convert()` on a background thread.
+
+Upload `EEGR105_Spring_2027.pdf`, and `vault/courses/EEGR105.md` — with LB's own exam notes in
+it — is replaced, while the sentence says `Wrote vault/courses/EEGR105.md`. `write_note`'s
+docstring claims `replace` is "**Not reachable from a model**". It is, via a model-chosen name.
+
+### 1e. One badly-encoded note breaks EVERY vault search. VERIFIED
+
+`tools/knowledge_vault.py:278` catches `OSError`. `UnicodeDecodeError` is a subclass of
+**ValueError**, not OSError (executed: `issubclass(UnicodeDecodeError, OSError)` is `False`).
+So it escapes to `:304` and `read_from_vault` returns `"Failed to search Vault: 'utf-8' codec
+can't decode byte 0xb5…"` for **every query, for every agent, permanently**, until the note is
+fixed by hand. `corrections.py:415` and `reflections.py:216` both catch the pair correctly; the
+module that owns the vault does not.
+
+The `except OSError: continue` half is the quieter bug: a dehydrated OneDrive note that fails
+to hydrate is skipped silently and search reports "No Vault memories found" — a false negative
+about a note that exists.
+
+### 1f. Concurrent uploads of the same filename overwrite each other
+
+`engine/server.py:238` `unique_path` then `:273` write is check-then-write with no atomicity
+under `ThreadingHTTPServer`. Eight concurrent `save_upload("datasheet.pdf")` produced **2 files
+from 8 calls**; six returned success for bytes that were then replaced. `unique_path`'s own
+docstring names this outcome as the thing it exists to prevent. Same shape in
+`tools/file_manager.py:713`, where `_extract_zip` opens `"wb"` directly instead of going
+through `_unique()` like every other move in the module — so a zip member overwrites an
+existing schematic in a reused project folder, and `:873` then deletes the zip.
+
+### 1g. A truncated `sd_card_memory.json` bricks the rig
+
+`tools/memory_manager.py:41` truncate-writes; `:36` has no `try`. Ctrl-C mid-write (the
+documented way to stop the rig) leaves invalid JSON, and `add_message` calls `load_history`
+first — so **every subsequent turn raises**, from `core.py:426`, `:473`, `:1274`, until the file
+is deleted by hand. `tools/academic_calendar.py:78` guards exactly this case; this file does not.
+
+## SEVERITY 2 — wrong answers delivered confidently on the free path
+
+### 2a. Every mega answer is out by 10^9. VERIFIED
+
+`orchestrator/convert.py:449` lowercases before parsing and `constants.py:162` has `"m": 1e-3`
+with no mega entry, so `M` resolves as milli. Executed:
+
+    'convert 5 MW to kW' -> "5 milliwatts is 5 times 10 to the minus 6 kilowatts."   want 5000 kW
+    'convert 5 MV to V'  -> "5 millivolts is 0.005 volts."                     want 5,000,000 V
+    'convert 2 MA to A'  -> "2 milliamps is 0.002 amps."                       want 2,000,000 A
+
+`convert` is in `FREE_INTENTS` and returns `handled=True`, so it never escalates. The comment
+two lines above the table says "a spurious one costs a wrong answer by a factor of ten"; this
+is eight orders worse. `verify_convert` is 1599/1599 because **no fixture is uppercase**.
+
+### 2b. Three wrong definitions, all reachable, all spoken as fact
+
+- `ee_terms.py:566` `apparent_power` — ships a drafting artifact: *"Apparent power is not
+  defined in the source passage."* Piper reads a note-to-the-author aloud.
+- `ee_terms.py:543` `majority_carrier` — returns the definition of **charge carrier**, erasing
+  the exact distinction the term exists for. Exam material in its own subject.
+- `ee_terms.py:258` `zener_diode` — "lets current flow backwards from anode to cathode".
+  Anode->cathode IS the forward direction; Zener conduction is cathode to anode. Both
+  self-contradictory and wrong about which way to fit the part.
+
+`verify_define` is 7068/7068 because it checks structure — reachability, speakability, no
+shadowing, the 40-word limit — and **never that an answer mentions the term it was asked
+about**.
+
+### 2c. Spoken note playback strips the minus sign off negative numbers. VERIFIED
+
+`knowledge_vault.py:474` — `[-*+]?` strips Markdown bullets but is anchored at every line start
+under `re.MULTILINE`, and `[#>\s]*` has already eaten the newline. Executed:
+
+    "# Op amp rail\n-40 C minimum storage temperature.\nOffset is -3 mV."
+      -> "Op amp rail 40 C minimum storage temperature. Offset is -3 mV."
+    "Bias:\n-5 V rail\n+12 V rail"
+      -> "Bias: 5 V rail 12 V rail"
+
+Mid-line signs survive, so **the same note is right in one sentence and wrong in the next**,
+and the card shows the correct value while the speech does not. For an EE copilot that is a
+wrong number delivered confidently. Fix: require whitespace after the bullet —
+`^[#>\s]*(?:[-*+](?=\s))?\s*`.
+
+### 2d. The hardware agent's few-shot teaches a 2.6x under-width power trace
+
+`agents/hardware_agent.py:42` — "5A, 20C rise, 2oz **internal** -> 35.12 mils". Recomputing the
+bound tool's own IPC-2221 formula (`tools/trace_calculator.py:26`): internal is **92.99 mils**;
+35.74 is the *external* answer, typo'd and mislabelled. Baked into the prompt of the one agent
+whose stated job is "Do not guess or estimate", and what the model pattern-matches to whenever
+the tool call is skipped.
+
+### 2e. Every index rebuild duplicates the corpus — 3.6x measured today
+
+`tools/vector_db.py:465` — `Chroma.from_documents` **adds** to a named collection; there is no
+`delete_collection`, no reset, no id scheme, so every chunk is re-inserted with a fresh UUID.
+`:475` says "Safe to re-run; that is how you update it." Measured read-only against the live
+store: **230 embedding rows, 64 distinct texts**, one Raspberry Pi trademark line present 10
+times, one page yielding 30 rows. `get_retriever(k=4)` therefore returns the same paragraph
+four times, rendered as `[1][2][3][4]` — which reads to the model as corroboration.
+
+### 2f. `stop` and `timer` match bare keywords
+
+`orchestrator/instant.py:522`, `:557` — every other promoted intent takes the `_is_bare`
+end-anchor; these two match anywhere. "stop band attenuation of a Butterworth filter" ->
+"Okay." "set the timer resistor on a 555" -> "I can't set timers yet." `FREE_INTENTS` excludes
+both so `_free_turn` is safe, but `_utility` (`core.py:903`) accepts any `reply.handled`.
+
+## SEVERITY 3 — cost, hangs, and the log lying about what happened
+
+### 3a. OpenRouter's daily exhaustion is invisible to the quota latch. VERIFIED
+
+`engine/quota.py:86` discriminates on Gemini-only spellings (`"PerDay"`,
+`"generate_content_free_tier_requests"`). The real body says **`free-models-per-day`**.
+Executed against the verbatim log body:
+
+    is_daily_exhaustion(real openrouter body) -> False
+    is_daily_exhaustion(gemini body)          -> True
+
+`.env` sets `ODDBALL_PERSONA_MODEL` to an OpenRouter model, so PERSONA **and GENERAL** run
+through it. Three consequences, all already in the artifacts: `_failure_line` tells LB to retry
+"in a few seconds" for a limit that resets at UTC midnight (the log shows four turns in 42s);
+`_reflect_on_failure` returns early only for daily exhaustion, so **`free-models-per-day`
+appears 8 times in the log and 8 times in `vault/reflections.md`** — exactly what that method's
+docstring says must never happen; and `models.py:320` promises a Gemini fallback for a key that
+is "absent, expired **or rate-limited**" while only the absent case is handled.
+
+This is also the direct cause of `reflections.md` being 10 KB, which is the vault finding in
+the 2026-08-30 entry above. One bug, two symptoms, two files.
+
+### 3b. The agent leg has no timeout at all. VERIFIED
+
+`engine/models.py:333` — the **local** branch passes
+`timeout=ODDBALL_LOCAL_TIMEOUT_S` with a comment stating the hazard exactly: *"so a wedged
+server is a slow turn and not a hung one."* The OpenRouter branch at `:342` and the Gemini
+branch at `:367` pass **no timeout**. langchain forwards `timeout=None` explicitly, so openai
+never substitutes its 600s default and httpx gets no deadline of any kind.
+
+The reasoning was applied to the provider on loopback and omitted from the two that cross the
+internet. A half-open TCP connection blocks `Engine.ask()` forever **on the thread that drains
+the microphone** — silent and deaf until killed, with no log line. This repo has already
+measured one request taking 285,985 ms and returning HTTP 200; `_route_within_deadline` bounds
+only the router leg.
+
+### 3c. A latched router takes the whole assistant offline
+
+`engine/core.py:506` raises when `ROUTER_MODEL` is latched, so "tell me a joke about
+capacitors" dies with a Gemini quota message while OpenRouter's separate 50/day sits untouched.
+The correct behaviour — fall through to `AgentRoute.GENERAL` — is written 15 lines below for
+the timeout case. Under `ODDBALL_LOCAL_BASE_URL` a Gemini bucket running dry silences a local
+model that cannot run out. Also: `quota.exhausted()` is read in this one place only;
+`AGENT_MODEL` and `PERSONA_MODEL` latches are written and never read.
+
+### 3d. `route_s` includes playback on the spoken path but not the typed one
+
+`engine/turn.py:349` stops the clock after `_deliver` — which contains full real-time playback
+and any permission gate. `answer_typed` (`:382`) stops before it. So the same question logs
+`engine 6000ms` spoken and `engine 900ms` typed, under one label, and `answer_s`'s docstring
+says it "deliberately excludes playback". **Worth fixing before chasing the "25 seconds
+unexplained" item still open above** — that item was diagnosed from these numbers.
+
+`Timings.brain_s` and `Timings.tier` are declared at `:82`/`:86` and assigned nowhere.
+
+### 3e. Every early return in `do_POST` desynchronises the connection
+
+`engine/server.py:326` sets HTTP/1.1 keep-alive; four branches return before reading the body,
+leaving it in the socket to be parsed as the next request. Demonstrated live: a 413 JSON reply
+and an HTML 400 page arrive concatenated, so the HUD's `.json()` fails with a nonsense reason
+instead of the sentence the server wrote. `verify_upload.py:337` cannot see it — the probe
+sends `Connection: close` **and no body**, the one shape where the desync cannot occur.
+
+## SEVERITY 4 — features that are documented and not wired up
+
+- **`audio/autotune.py` is called by nothing.** grep finds two live references, both to
+  constants, both in `verify_wake.py`. The threshold is frozen at 0.53 from load to shutdown
+  while the module header and `oddball.toml:120` both read as though it governs live behaviour.
+  The 12-of-33 calls that fell short on 2026-08-29 will keep falling short forever.
+- **`Engine.leave_quiz()` is called by nothing** (`core.py:1295`). It documents itself as "the
+  wake word's escape hatch… the way out that does not depend on being heard correctly", for a
+  mode whose only other exit is a transcript. The escape from the trap does not exist.
+- **`speakable()` is bypassed in production.** `say.py:370` applies it in `synth()`; `speak()`
+  at `:392` and `to_wav()` at `:469` call `self._synth(text)` raw, and the live path is
+  `turn.py:234` -> `speak()`. `verify_speech.py:166` avoids the vacuous check and then drives
+  `.synth()` — the one method production never calls.
+- **He greets an empty room ~4x after every answered turn.** `run_voice.py:597` re-queues while
+  the conversation window is open; `Turn.run()` cannot tell a wake-word turn from a
+  continuation, so the SILENT branch at `turn.py:305` greets every time. ~5.9s a cycle against
+  `conversation_s = 25.0`.
+
+## Also found, lower
+
+`recent` prebuffer never drained (`run_voice.py:153`) so pre-gate audio can be transcribed as a
+permission answer — the 2026-08-29 fix missed this one buffer, and `verify_deafness` pins
+`capturing` so it cannot see the transition; `detector.reset()` races the mic thread
+(`run_voice.py:614`, measured: reset 46 ms against an 80 ms frame period — swap two lines);
+`split()` can say "I've put it on the screen" with zero cards; trash collision at
+second-resolution silently destroys the earlier trashed copy (`knowledge_vault.py:648`);
+`_find_in_inbox` reverse-substring match can file a document the model did not name
+(`file_manager.py:574`); `regroup_projects --apply` merges distinct ESP32 projects and flattens
+their subdirectories irreversibly (`file_manager.py:316`); `system_state.for_prompt()` omits
+memory, load and uptime on Windows with no "unknown" line, contradicting its own docstring;
+`speakable._NUMBER` reads `0-10 V` as `-10`; `"add a note to my X note that Y"` creates a new
+note instead of appending and stores the command as the body (`note_intent.py:265` table
+order); the oversize upload message reads "that file is 67 MB and the limit is 67 MB";
+`MicGate.blocked_frames` never resets; `answer_typed` appends extras twice; two formula
+triggers unreachable because `normalise` turns `9.8` into `98`; `classify_yes.normalise`
+contradicts its docstring so `don't` and `dont` differ.
+
+## Still open
+
+- [x] **`is_yes` bare words** — done in Stage 17, and it was not one line: the apostrophe
+      bug underneath it was the severe half. See D54.
+- [x] **`os_controller` blocklist** — piped form, abbreviated `-r`/`-Rec`, backtick escape,
+      all three done in Stage 17 with the fixtures. See D54.
+- [ ] **`convert` mega/milli** — detect the uppercase symbol before lowercasing. Add ONE
+      uppercase fixture to `verify_convert` and watch 1599/1599 go red.
+- [x] **Cloud timeout** on the OpenRouter and Gemini branches, matching the local one.
+      Done in Stage 18 — `CLOUD_TIMEOUT_S`, and it was worth 16 minutes. See D55.
+- [ ] **OpenRouter daily marker** in `quota.is_daily_exhaustion`, and latch the model the
+      failing call used rather than parsing it from a body that never names it.
+- [ ] **`_read()` returning None** in corrections.py and reflections.py; temp-file + os.replace
+      for both ledgers, `sd_card_memory.json`, and the calendar.
+- [ ] **`except (OSError, UnicodeDecodeError)`** in `knowledge_vault` at `:278` and `:526`.
+- [ ] **`_say` bullet regex** — require whitespace after the bullet so `-40 C` keeps its sign.
+- [ ] **The three wrong `ee_terms` rows**, plus a `verify_define` check that an answer mentions
+      its own term and contains no "source passage".
+- [ ] **`vector_db` rebuild** — delete the collection first, or use deterministic ids. 230 rows
+      for 64 chunks today.
+- [ ] **Decide `autotune`**: wire `observe()` into `turn_finished`, or say in the docstring
+      that it is an offline replay tool. It currently reads as a live feature and is not one.
+- [ ] **Corpus gaps, as one deliberate pass.** Uppercase in `verify_convert`; a piped command
+      in `verify_os_guard`; a body on `verify_upload`'s 413 probe; `.speak()` in
+      `verify_speech`; `len(cards) > 0` in `verify_split`; the `capturing` transition in
+      `verify_deafness`; `"add a note to my X note"` in `verify_notes`. Every one of these is
+      green today and every one certifies a broken path.
+
+---
+
+# Stage 16 — The quiz stops being three hardcoded EE questions and stops phoning a bot to mark them
+
+**2026-09-02.** LB: *"check over the quiz function its not working well — I want to upload PDFs
+of questions and answers or practice quizzes from calculus to philosophy and all other classes
+I will take. Make sure the question and answer knowledge is INTERNAL so it does not have to use
+an outside AI bot unless I ask for a further explanation of an answer."*
+
+## What is actually wrong, read off the code rather than guessed
+
+1. **The bank is three questions, hardcoded, EE-only.** `quiz_data.json` holds Ohm's law, an
+   LED forward drop and what I2C stands for. `tools/quiz_manager.py` has no way to add a
+   fourth. There is no importer, no subject, nothing that reads a PDF.
+2. **`random.choice` with no memory.** `get_random_question()` can hand back the question just
+   answered. With three questions, a five-question quiz repeats twice.
+3. **Every single answer costs a Gemini call.** `agents/quiz_agent.evaluate_quiz_answer` is a
+   `ChatGoogleGenerativeAI` invoke per answer, on a tier counted in REQUESTS at 20/day/model
+   (D3). A ten-question quiz spends half a day's quota to mark "V = I R" against "V = I * R".
+   This is the headline: the marking is the part that needs no model at all.
+4. **A failed call kills the turn.** No try/except around the invoke — quota exhaustion mid-quiz
+   surfaces as a spoken failure line and the quiz keeps asking.
+5. **No subject.** "Quiz me on calculus" enters the same three EE questions, and `ROUTER_PROMPT`
+   says QUIZ is for "engineering material", which is now wrong about what LB is asking for.
+6. **No score, no skip, no explanation-on-demand, no multiple choice** — and a practice exam
+   PDF is almost always multiple choice.
+
+## The shape of the fix
+
+Internal by default, external only on request. Three new modules and a wiring change.
+
+- [x] **`tools/quiz_bank.py`** — subject-scoped decks under `data/quiz/<subject>.json`. Stable
+      ids (hash of the question), dedup on import, `pick()` that excludes what the session has
+      already asked. Legacy `quiz_data.json` is adopted as a deck, not deleted.
+- [x] **`tools/quiz_import.py`** — PDF -> Q&A items. `pypdf` for the text layer, `pdf_ocr` for
+      the pages that carry none (the scanned practice exam is the normal case). Four layouts:
+      numbered MCQ + a separate answer key, numbered MCQ with `Answer: B` inline, `Q:`/`A:`
+      pairs, and `Question:`/`Answer:` pairs. Captures `Explanation:`/`Solution:` when the PDF
+      carries one, because that is an explanation that costs no API call.
+- [x] **`tools/quiz_grade.py`** — the internal grader. **No network, ever.** MCQ by letter AND
+      by option text (he is voice-first and will say "two x", not "B"); numeric with tolerance
+      and units; symbolic via sympy so `2x` == `2*x` == `x+x` for calculus; prose by content-word
+      coverage plus difflib ratio for philosophy. Returns correct/partial/incorrect with the
+      reason, and never raises.
+- [x] **`engine/core.py`** — a `QuizSession` (subject, asked ids, score). Grade locally. `skip`
+      and `i don't know` reveal without marking. `explain that` serves the PDF's own explanation
+      if it has one, and ONLY reaches `quiz_agent` when it has none or LB asks for more.
+- [x] **`tools/file_manager.py`** — a fourth category, `quiz`. A practice exam uploaded through
+      the paperclip is parsed into the bank on the background thread.
+- [x] **`router.py`** — QUIZ is every subject he takes, not "engineering material".
+- [x] **`tools/verify_quiz.py`** — the harness, with `--probe`.
+
+## Review — Stage 16
+
+**Done, and verified.** `tools/verify_quiz.py` is 79/79 green and its `--probe` bites (4 red in
+section 5). `verify_engine` went 132/132 with the quiz section rewritten to test the new claim
+rather than the old stub. Every other harness in `tools/` re-run: all green except
+`verify_wake` at 44/60, which was **already 44/60 on a clean tree** — checked by stashing this
+work and re-running it. That is the known wake-fixture-set gap, untouched by any of this.
+
+### The headline
+
+Marking no longer calls anything. `tools/quiz_grade.py` does it locally in a median of
+**0.63 ms** and **zero requests**, where the old path was one Gemini call per answer against a
+20-a-day tier. `media/data/2026-09-02-quiz-marking.csv` and `media/charts/quiz-marking.svg`.
+
+The proof is not a claim in a docstring: `verify_quiz.py` section 5 monkeypatches
+`socket.socket` to raise and marks four answers through it. `--probe` puts the old
+call-per-answer behaviour back and shows those four going red.
+
+### What the harness caught that reading the code did not
+
+Four bugs, each of which would have looked like the quiz being stupid rather than broken:
+
+1. **A hyphen was reaching sympy.** `Inter-Integrated Circuit` parsed as
+   `inter - integrated*circuit` and marked a correct answer WRONG. Every hyphenated term.
+2. **`answer` is a word that appears inside questions.** The unanchored inline-answer regex
+   read "A question with no answer anywhere?" and stored "anywhere?" as its answer — and
+   counted it as a successful parse rather than a dropped one.
+3. **A page break is not a line break.** Pages joined with a bare `\f` meant `^` never matched
+   after it, so a question at the top of page 2 was invisible. Caught on a two-page fixture.
+4. **`2x` classified as a number**, so a bare "2" marked correct against an answer of "2x".
+
+And two more from the first end-to-end run, which is why running it mattered:
+
+5. **The verdict was said twice** — "Correct. Correct — B, act only on maxims…". Spoken aloud,
+   a stutter. `Grade.why` is now the whole sentence and the caller prepends nothing.
+6. **It re-asked a question in silence.** `quiz_bank.pick` wraps when the deck is exhausted,
+   which is right for a drill and wrong to do without saying so — it reads as exactly the bug
+   the old `random.choice` had. It now announces "that is every question I have on Philosophy —
+   going round again", and the `item is None` branch it made unreachable was re-documented as
+   the empty-bank case it now actually is.
+
+### What didn't work
+
+**Coverage grading has no semantics, and no threshold fixes that.** "It is how much a material
+opposes current" against "Resistance is the opposition to current flow" hits 0.25 coverage and
+comes back **partial** with the official answer shown. I tried lowering `PROSE_PASS` and stopped:
+every threshold low enough to pass that paraphrase also passes answers that are wrong. A grader
+that flatters is one he cannot revise against. `explain that` is the escape hatch and it is the
+one he asked for.
+
+**Building the fixture PDFs was the third attempt.** `reportlab` and `fpdf` are not installed
+and adding a dependency to a *test* is the wrong trade, so `verify_quiz.write_text_pdf` writes
+the PDF syntax by hand — about sixty lines, and `pypdf` reads it exactly as it reads a
+professor's export. The first version produced a one-page file, which is how bug 3 above stayed
+hidden for an hour.
+
+### Left deliberately
+
+- **`quiz_data.json` is adopted, not migrated.** It is read where it lies as the `electronics`
+  deck and never written to. LB typed those three questions; a tool that silently relocates a
+  file the user wrote is one he stops trusting with the next one.
+- **`Engine.quiz_item` survives as a property** onto `QuizSession.item`. `verify_engine` sets
+  it directly and `README` named it — breaking both in the same change that rewrites the code
+  is how a rewrite ships untested.
+- **No spaced repetition.** `pick()` excludes what the session has asked and is otherwise
+  random. Written down in the module docstring so a fifth field on the item schema is a
+  decision someone makes, not something that accretes.
+- **The demo content was deleted.** Two practice papers were written to `data/quiz_pdfs/` and
+  imported to prove the paperclip path end to end, then removed — the questions in them were
+  invented by me, and LB revising from fabricated philosophy answers would be worse than no
+  quiz at all. The bank is back to his three real electronics questions.
+
+### Still open, from this stage
+
+- [ ] **A "quiz me on what I got wrong" mode.** The session tracks `last_grade` per answer but
+      throws it away at exit. Persisting the misses per subject is the obvious next thing and
+      is deliberately not in this change.
+- [x] **`_grade_mcq`'s fallback now names the letter as well as the option text** — it said
+      "Not quite. The answer is: Socrates", which is true and missing the one thing he needs to
+      mark his own paper against the sheet in front of him. Now "the answer is C, Socrates".
+
+---
+
+# Stage 17 — The permission gate said yes to "Don't run it"
+
+**2026-09-02.** Taken off the board as "`is_yes` bare words — one line, and it is in front of
+shell execution". It is not one line and it is not the bare words. Measured before touching
+anything, on the real function:
+
+    is_yes("Don't run it")            = True    <-- APPROVES EXECUTION
+    is_yes("don't do that")           = True    <-- APPROVES EXECUTION
+    is_yes("Of course not")           = True    <-- APPROVES EXECUTION
+    is_yes("What does that do?")      = True    <-- APPROVES EXECUTION
+    is_yes("Do I need to do that?")   = True    <-- APPROVES EXECUTION
+    is_yes("please read that back")   = True    <-- APPROVES EXECUTION
+
+And the blocklist behind it, which is supposed to be the backstop:
+
+    BLOCKED   Remove-Item C:\Users\user -Recurse -Force
+    ALLOWED!  Remove-Item C:\Users\user -Rec -Force
+    ALLOWED!  Remove-Item C:\Users\user -r -Force
+    ALLOWED!  Get-ChildItem C:\Users\user -Recurse | Remove-Item -Force
+    ALLOWED!  gci C:\Users\user -Recurse | ri -Force
+
+**These compound.** D4's design is: the model composes, a human approves, the blocklist
+backstops. Say "Don't run it" to a proposed `Remove-Item C:\Users\user -Rec -Force` and both
+halves fail in the same breath.
+
+## Three defects in `is_yes`, and the first one is the whole story
+
+1. **`normalise` does the opposite of what it says.** Its docstring: *"Apostrophes are dropped
+   rather than kept so `don't` and `dont` are the same word."* The regex replaces every
+   non-alphanumeric with a **space**, so `don't` becomes `don t` — two words, neither of which
+   is `dont`. Every apostrophised refusal in `_NO` (`dont`, and by extension what LB actually
+   says) has therefore never matched. `is_yes("dont do that")` is False and
+   `is_yes("don't do that")` is True; the difference is one character LB cannot hear himself
+   type. This is on the board under "Also found, lower" as a docstring mismatch. It is not a
+   docstring mismatch — it is the gate opening on a refusal.
+2. **Bare words in `_YES`.** `"do"`, `"course"`, `"please"`. Every clarifying question at the
+   gate contains one, and *"of course not"* contains two.
+3. **A question is treated as an answer.** *"What does that do?"* is not consent in any
+   language, and there is nothing in the function that knows it.
+
+## The rule this stage establishes
+
+**`_NO` may be generous; `_YES` must be strict.** A false "no" costs one repeated question. A
+false "yes" runs a shell command LB refused. The asymmetry is already in the module docstring —
+*anything short of a clear yes is a no* — and the word lists did not honour it.
+
+- [x] **`normalise` drops apostrophes**, ASCII `'` and curly `’` both, before punctuation
+      becomes whitespace. Whisper emits the curly one — `engine/core.py` already normalises it
+      for the same reason.
+- [x] **`_YES` loses `"do"`, `"course"`, `"please"`.** The compound forms stay: `"do it"`,
+      `"please do"`, `"of course"`.
+- [x] **`_NO` gains the refusal family** that `_YES`'s compounds would otherwise swallow —
+      `"of course not"`, `"course not"`, `"rather not"`, `"better not"`, `"not now"`,
+      `"hold on"`, `"wait"`.
+- [x] **A question is never consent.** A `?` anywhere, or an interrogative first word, returns
+      None before either list is consulted.
+- [x] **`os_controller.normalise` strips backticks**, closing PowerShell's own escape
+      character as a bypass: `Remove-It` + backtick + `em` runs the cmdlet and matches nothing.
+- [x] **Abbreviated `-Recurse`.** PowerShell resolves any unambiguous prefix, so `-r` deletes
+      recursively and `\s-recurse\b` never sees it.
+- [x] **Recursion on the LEFT of the pipe.** `Get-ChildItem C:\ -Recurse | Remove-Item` is the
+      natural way to write it and matches nothing: `[^|]*` cannot cross the pipe it is on the
+      wrong side of.
+- [x] **`tools/verify_consent.py`** — a spoken-refusal corpus, with `--probe`. `verify_engine`
+      tests that the gate exists; nothing tests what it says yes to.
+- [x] **`verify_os_guard` corpus** — the abbreviated, piped and backticked forms, plus the
+      near-misses that must stay allowed (a recursive `Get-ChildItem` piped into
+      `Select-Object` is not a delete).
+
+## Review — Stage 17
+
+**Done, and verified.** `tools/verify_consent.py` is 84/84 green and its `--probe` takes **20
+checks red**, twelve of which are real spoken refusals that used to approve shell execution.
+`verify_os_guard` went 119 -> 130 with the new fixtures. Everything else re-run and green:
+`verify_engine` 132/132, `verify_typed` 104/104, `verify_gate_state` 25/25, `verify_credible`
+71/71, `verify_quiz` 85/85, `verify_router` 216/216, `verify_upload` 187/187, `verify_agents`
+77/77, `verify_chat` 49/49, `verify_notes` 142/142, `verify_speech` 52/52.
+
+### The one that mattered was not on the board as a bug
+
+`is_yes("Don't run it")` returned **True**. It is the most natural thing a person says to
+refuse a proposed command, and it approved it.
+
+The cause was already written down — under *"Also found, lower"*, as "`classify_yes.normalise`
+contradicts its docstring so `don't` and `dont` differ". Filed as untidiness. It was the gate
+opening on a refusal, and the reason that was missed is that **the defect and its consequence
+are one function apart**: you have to notice that `_YES` still contains "run it" to see where
+"Don't run it" lands once the apostrophe has been turned into a space.
+
+Deleting the three bare words — the thing the board actually asked for — would NOT have fixed
+it. "Don't run it" would still have approved, because `run it` is a legitimate yes phrase and
+the "don't" had already been destroyed before either list was consulted.
+
+### Every fixture was checked for bite
+
+Seven new blocklist fixtures, each run against a reconstruction of the pre-change patterns.
+Six bit immediately; the seventh, `ri -rec -force C:\`, was **dead** — a bare drive root is
+already refused by the "drive root or profile as the target" rule, so it passed before the
+abbreviation was understood and certified nothing about it. Replaced with an ordinary directory
+path, which isolates the abbreviation. 7/7 now go red against the old code.
+
+This is L29 and the `verify_ocr` probe failure again, third time: a green check on an
+unreachable path. It is now cheap enough to check that there is no excuse for not doing it —
+reconstruct the old predicate in a scratch file and run the new corpus at it.
+
+### What didn't work
+
+**`_INTERROGATIVE` broke "why not".** The first version returned None for anything starting
+with an interrogative word, and "why not" is agreement — the harness caught it in the same run
+that proved the refusals fixed. Fixed by checking for an EXACT whole-utterance match against
+either list before the question rule, so a complete phrase is always read as an answer. Only
+exact matches qualify, so nothing longer can use that door.
+
+**I considered and rejected putting `do`, `is`, `can` in `_INTERROGATIVE`.** It would catch
+"Does that delete anything?" without a question mark — and it would also refuse "do it", which
+is the commonest approval there is. The `?` check carries that case for any real question, and
+a gate that cannot be passed gets switched off.
+
+### Left deliberately
+
+- **A question still declines rather than being answered.** At a voice gate `None` makes
+  `engine/turn.py` re-ask, which is the good outcome; on the typed path it closes with "no
+  problem, I'll leave it". Answering "what does that do?" and then re-offering the gate is the
+  right behaviour and is a bigger change than this one.
+- **The blocklist is still a blocklist.** `& ('Remove' + '-Item')` defeats it and always will.
+  Said out loud in `os_controller`'s docstring rather than papered over — the approval gate is
+  the half that matters, which is why both were done together.
+
+### Still open, from this stage
+
+- [ ] **Answer the question and re-offer the gate**, instead of declining. "What does that do?"
+      should get an explanation of the pending command and then the same yes/no prompt.
+- [ ] **`credible.py` and the gate.** `is_yes` now returns None for a question, and
+      `orchestrator/credible.py` exists because "Yes. Yes." spread over eighteen seconds of room
+      tone once approved a command. Worth checking whether a question should also reset the
+      credibility window rather than merely retry.
+
+---
+
+# Stage 18 — Three things the log said, that nobody had asked it
+
+**2026-09-03.** LB: *"check the latest interactions and the things mr odd ball struggled with
+and lets see how we can improve"*. Read `data/oddball.log` — 23,606 lines, 2026-08-26 to today.
+Zero errors, three warnings in eight days. **Everything below is a behaviour problem, not a
+crash**, which is why none of it had surfaced as a bug report.
+
+## 1. He lost LB's coursework, and said nothing
+
+2026-09-02 17:10, dictating an English thesis into the vault:
+
+    17:10:37 WARNING utterance hit the 15s cap — keeping what we have
+    17:10:38 heard 'My thesis is driven by the inherent profit maximization principles of
+             capitalism, treating essential medicines as market commodities rather than
+             public goods, incentivizes'
+    17:10:38 turn: route 0ms -> note | note appended     <- extras: "hit max_s, note appended"
+
+Three failures in sequence, and the second is the bad one:
+
+1. The cap fired mid-clause at "incentivizes".
+2. **The truncated fragment was appended silently.** `engine/turn.py:319` records `hit max_s`
+   in the turn extras and does nothing else with it. LB was told "Added to your note."
+3. His continuation at 17:13 — *"Things such as predatory pricing, regulatory capture, and a
+   systematic prioritization of ongoing treatments over permanent cures"* — was no longer note
+   content. It routed to GENERAL, was answered as chit-chat by the persona model, and was
+   **thrown away**.
+
+`vault/notes/english research question.md` still ends mid-word at "incentivizes". At 15:28 he
+had already said out loud: *"I'm losing the rest of it."*
+
+`config/oddball.toml` admits the shape of this: *"15, up from 10, after a live turn hit the cap
+mid-question"*. Raising it again is not the fix — the cap exists so a television cannot record
+forever, and there IS television in this log.
+
+- [x] **A dictation cap, separate from the question cap.** While `note_draft.awaiting ==
+      "content"` LB is dictating, not asking, and 15s is the wrong number for it. The exposure
+      is one turn, bounded by the draft.
+- [x] **Never truncate silently.** `Engine.ask` learns an optional `truncated` flag; a note
+      written from a capped capture SAYS it was cut off.
+- [x] **Hold the draft open when the cap fired**, so the sentence he is still speaking lands in
+      the note instead of in the router. Both existing escapes (`is_cancel`, `is_sleep`) still
+      close it.
+
+## 2. Neither cloud branch has a timeout — 16 minutes of frozen turns
+
+`engine/models.py:340` bounds the LOCAL branch and says why: *"a wedged server is a slow turn
+and not a hung one."* The OpenRouter and Gemini branches have no timeout at all.
+
+    147.8s   agent leg      <- HTTP 200 returned in ~1s; the rest is the body streaming
+    134.6s
+     92.7s
+
+Microphone shut, face frozen, for up to two and a half minutes. This is the board's "25 seconds
+unexplained" item, six times worse than when it was written.
+
+- [x] **`ODDBALL_CLOUD_TIMEOUT_S`**, defaulting to 20s to match `ROUTER_DEADLINE_S`, on both
+      cloud branches and every builder that reaches one.
+
+## 3. The 16 minutes were spent on room tone
+
+Every one of the slowest persona turns is a fragment, not a question:
+
+    147.8s <- 'Yeah, yeah, yeah, yeah.'      49.8s <- 'Okay.'     ('Okay.' alone, 6 times)
+    134.6s <- 'Mr. Albo.'                    47.9s <- 'ball.'
+     57.7s <- 'Whoa.'                              <- 'Thank you for watching.'
+
+**30 turns, 970 seconds, 16.2 minutes**, each costing one Gemini router call plus one
+OpenRouter call. The log holds 162 Gemini and 54 OpenRouter requests in total.
+
+The board says *"Do NOT widen the canned persona tier without log evidence."* This is that
+evidence — and it argues for something narrower than a persona tier. These are not persona
+questions; they are acknowledgements that need no answer and must never reach the router.
+
+- [x] **An `ack` intent in `orchestrator/instant.py`**, end-anchored via `_is_bare` so "okay
+      what's the trace width" is untouched, added to `Engine.FREE_INTENTS`. D3's own first
+      remedy: *"widen UTILITY — every question it absorbs is a free question."*
+- [x] **It must not steal a gate answer.** `_free_turn` already sits below the pending gate,
+      the note draft and the quiz lock in `ask()`; a harness check pins that, because "okay" is
+      a yes and this is the one intent that could break the permission gate.
+
+- [x] **`tools/verify_dictation.py`** — the cap, the warning, the held draft, with `--probe`.
+- [x] Corpus additions to `verify_router.py` for the ack intent, and the measurement +
+      chart for the latency recovered.
+
+## Review — Stage 18
+
+**Done, and verified.** `tools/verify_dictation.py` is 30/30 and its `--probe` takes **13
+checks red**. `verify_router` went 216 -> 267 with the acknowledgement corpus. Everything else
+re-run green: `verify_engine` 132/132, `verify_notes` 142/142, `verify_consent` 84/84,
+`verify_quiz` 85/85, `verify_typed` 104/104, `verify_deafness` 21/21, `verify_os_guard`
+130/130, `verify_stt` 36/36, `verify_gate_state` 25/25, `verify_speech` 52/52,
+`verify_upload` 187/187.
+
+### The whole stage came out of reading the log, not the code
+
+Zero errors and three warnings in eight days. Every one of these is a **behaviour** problem, and
+none of them would ever have appeared as a bug report — the note truncation was announced as a
+success, and the 147-second turns look identical to a slow network from the inside.
+
+The single most valuable line in the log was one nobody had connected to anything:
+
+    17:10:37 WARNING utterance hit the 15s cap — keeping what we have
+
+The warning was correct, it was logged, and it went nowhere. `engine/turn.py` even recorded
+`hit max_s` in the turn extras. **The process knew and the user did not.**
+
+### The replay, before and after
+
+The 2026-09-02 sequence, run again through the fixed engine:
+
+    ask(FRONT, truncated=True)  -> "I ran out of recording time there - keep going..."
+                                   draft HELD, nothing written
+    ask(REST)                   -> "Added to your note."
+
+    vault: "...public goods, incentivizes things such as predatory pricing, regulatory
+            capture, and a systematic prioritization of ongoing treatments over permanent
+            cures."
+
+One block, one sentence, one separator. Previously: a fragment ending on "incentivizes", and
+the remainder answered as chit-chat.
+
+### What didn't work
+
+**Writing the fragment immediately, then appending the rest.** My first design committed the
+front half straight away on the principle of never losing what was heard, and re-opened the
+draft. It works, and the vault ends up with `append_note`'s `\n\n---\n\n` **through the middle
+of his sentence** — a repair worse than the damage. Holding the content for one more utterance
+is what the "what should I call it?" turn has always done with dictated content, so it is the
+established window rather than a new risk.
+
+**Reading `self._rec.max_s` unconditionally killed the microphone thread.** `verify_deafness`
+builds `Turn` with a stub recorder that has no such attribute, and `_capture` raised
+AttributeError out of the audio loop. Caught by running the harness, which is the entire reason
+the stub exists. The cap is now touched only when it is actually being raised, and guarded.
+
+**The probe hung for two minutes on a live API call.** With the draft wrongly closed, the
+continuation routes to the router — faithfully reproducing the bug, and taking the harness
+online to do it. The probe now pins the router to PERSONA, which is where it actually went.
+
+**One corpus expectation of mine was simply wrong.** `"sure thanks"` is an acknowledgement and
+a thank-you at once; `ack` says "Mm-hm." and `thanks` says "Any time." Both are free and both
+are right. It moved to an `ACK_EITHER` list asserting the property that matters — that it costs
+no API call — rather than pinning a preference as though it were a fact.
+
+### Left deliberately
+
+- **`'ball.'` is not an acknowledgement**, though it cost 47.9s and 19.7s. It is his own wake
+  word being re-heard, and the fix belongs in the recorder. Putting a real noun into a table
+  whose job is to STOP a turn is D38 for the seventh time.
+- **A question at a permission gate still declines** rather than being answered — carried over
+  from Stage 17 and still the right size of change to do separately.
+- **`tools/probe_persona_tools.py` is still unbounded.** It is a manual diagnostic where
+  waiting is the point.
+
+### Still open, from this stage
+
+- [x] **The wake-word echo.** Done in Stage 19 — and it is a delayed TRIGGER rather than a
+      blanking window, because muting would eat the first word of a one-breath question. D56.
+- [ ] **Re-measure after a week of use.** `media/scripts/measure_wasted_turns.py` re-runs
+      against the live log; the 32% is the number to watch, and the `ack` intent should take
+      most of it to zero.
+
+---
+
+# Stage 19 — The microphone opens into the last syllable of his own wake word
+
+**2026-09-03.** LB: *"build the audio blanking window in the recorder immediately following the
+TTS output so he doesn't hear himself or the immediate echo."*
+
+## The first thing measuring found was that half the brief was already built
+
+`audio/gate.py` has muted capture during TTS since 2026-08-11 — Phase 0, D11 — with a 0.35s
+tail and a detector reset on reopen. **A blanking window after TTS would have been a second
+gate behind an existing one.** The echoes are not Piper; they are LB's own voice.
+
+## What they actually are
+
+Of the 55 captures opened by a wake word, **29 held 0.32s or less of voiced audio** — one or
+two 80ms frames, then the full hangover. 2.48s is the shortest capture the recorder can
+produce (`PREROLL_S` 0.3 + blip + `hangover_s` 2.0), and almost all of them are exactly that.
+
+openWakeWord fires before the phrase is finished, so the recorder opens into "...Ball" and
+calls it a question. `ball.` `Bobo.` `elbow.` `Mr. Albo.`
+
+    blip rate after a WAKE        53%
+    blip rate in a CONVERSATION   31%     ratio 1.72x — same room, same mic
+
+- [x] **`UtteranceRecorder.ignore_start_s`** — voice this early may not BEGIN an utterance.
+      The frame is still buffered and still counted; only the trigger waits, and `PREROLL_S`
+      recovers it. Not a mute: muting would eat the first word of "Hey Mr Odd Ball, what time
+      is it?" said in one breath.
+- [x] **Refuse a window >= `PREROLL_S`** rather than clamping. Past the pre-roll it silently
+      becomes a mute, and the failure is a missing word with no error to see.
+- [x] **`wake_tail_s = 0.25`**, applied to the FIRST capture of a turn only — the greeting
+      retry and the permission-gate capture both follow HIS voice, which `MicGate` owns.
+- [x] **Log `waited`** in the capture line. The missing instrument.
+- [x] **`tools/verify_wake_tail.py`**, with `--probe`.
+
+## Review — Stage 19
+
+**Done, and verified.** `verify_wake_tail` 20/20, probe bites 3. **Every** harness in `tools/`
+re-run this time — 27 of them, all green — except `verify_wake` at 44/60, confirmed identical
+on a stashed clean tree.
+
+### The instrument was missing, and that is the headline
+
+`Capture.waited_s` — how long after the capture opened the first voice arrived — has been
+computed inside `_finish` since the class was written and **logged nowhere**. It is the one
+number that separates the two explanations for a blip:
+
+    waited ~0.00s   the recorder opened into the wake phrase's tail
+    waited ~0.80s   something in the room made a noise a while later
+
+Without it, `capture spoke: 2.48s audio, 0.16s voiced` is compatible with both. And the saved
+audio cannot settle it either — `_finish` trims from `first_voiced_i - PREROLL`, so the offset
+inside the listening window is destroyed before `captures/` ever sees it. **Eight days of logs,
+197 saved recordings, and the question was unanswerable from any of it.**
+
+It is logged now, and reported from a NEW field (`_first_voice_at`) rather than from the
+trigger — otherwise switching the fix on would have erased the evidence for whether it was
+needed.
+
+### What didn't work
+
+**Replaying the saved captures could not validate the fix, and I built the replay before
+realising that.** The files start at `first_voiced - PREROLL`, so in a replay the voice always
+begins ~0.3s in — already past a 0.25s window. Six of seven echoes "still got through", which
+looked like a failed fix and was actually a harness measuring something the data cannot show.
+It survives as section 2, where it proves the thing it CAN prove: that a real question is
+byte-identical with the window on.
+
+**I nearly built the wrong thing.** The brief named TTS echo; the fix for that shipped in
+August. Ten minutes of reading `audio/gate.py` before writing any code is what caught it.
+
+### The process miss, recorded
+
+`verify_credible.py` was **broken by Stage 18 and I did not catch it**, because it was not in
+that stage's sweep — its stub `Engine.ask(self, text)` did not accept the `truncated` kwarg.
+It surfaced here only because this stage touched `_capture` as well. Two stubs are now
+`**_`-tolerant, and the lesson is in L46: a partial sweep is how a green suite hides a break.
+
+### Still open
+
+- [ ] **Confirm the timing from the next session's log.** `waited` is now recorded. If the
+      blips show `waited ~0.00s`, the hypothesis holds and 0.25 is right; if they cluster
+      later, the window is inert and the mechanism is something else — most likely the room,
+      which would point at `wait_s = 1.5` rather than at the wake.
+- [ ] **Re-run `measure_wasted_turns.py`** after a week. 32% is the number to watch.

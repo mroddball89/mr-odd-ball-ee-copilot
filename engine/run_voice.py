@@ -555,6 +555,11 @@ async def main(argv: list[str] | None = None) -> int:
             stall_phrase=cfg.get("brain", {}).get("stall_phrase", ""),
             capturing=capturing,
             drain=drain_frames,
+            # Absent from an older config file means 0.0, which leaves the cap alone — so a
+            # deploy that has not picked up the new key behaves exactly as it did before
+            # rather than failing to start.
+            dictation_max_s=float(listen_cfg.get("dictation_max_s", 0.0)),
+            wake_tail_s=float(listen_cfg.get("wake_tail_s", 0.0)),
         )
 
         def turn_finished(result=None) -> None:

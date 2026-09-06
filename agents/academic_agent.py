@@ -61,7 +61,7 @@ import logging
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
-from engine.models import AGENT_MODEL, LLM_MAX_RETRIES
+from engine.models import AGENT_MODEL, CLOUD_TIMEOUT_S, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from engine.response import Response
 from engine.split import SPOKEN_INSTRUCTION, split
@@ -205,7 +205,8 @@ def _answer(query: str) -> str:
     """
     from tools.memory_manager import format_memory_for_llm                # noqa: PLC0415
 
-    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1, max_retries=LLM_MAX_RETRIES)
+    llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.1, max_retries=LLM_MAX_RETRIES,
+                                 timeout=CLOUD_TIMEOUT_S)
     prompt = ChatPromptTemplate.from_template(ACADEMIC_PROMPT_TEMPLATE).format(
         calendar_context=format_calendar_for_llm(),
         chat_history=format_memory_for_llm(),

@@ -271,10 +271,16 @@ def convert(path: Path, force: bool = False, dry_run: bool = False) -> tuple[boo
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI    # noqa: PLC0415
 
-        from engine.models import AGENT_MODEL, LLM_MAX_RETRIES       # noqa: PLC0415
+        from engine.models import (AGENT_MODEL, CLOUD_TIMEOUT_S,     # noqa: PLC0415
+                                   LLM_MAX_RETRIES)
 
+        # Bounded like every other cloud call (2026-09-03). This one is NOT on the turn path —
+        # it runs on `file_manager`'s background indexer — so a hang here does not freeze the
+        # microphone. It would do something quieter and worse: leave `index_status` reporting
+        # "still rebuilding" for the rest of the session, with no way to tell that from a
+        # syllabus that is genuinely slow to read.
         llm = ChatGoogleGenerativeAI(model=AGENT_MODEL, temperature=0.0,
-                                     max_retries=LLM_MAX_RETRIES)
+                                     max_retries=LLM_MAX_RETRIES, timeout=CLOUD_TIMEOUT_S)
         facts = llm.with_structured_output(SyllabusFacts).invoke(
             EXTRACTION_PROMPT.format(truncation_note=truncation_note, document=document))
     except Exception as exc:                                          # noqa: BLE001

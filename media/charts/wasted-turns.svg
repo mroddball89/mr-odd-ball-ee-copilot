@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="500" viewBox="0 0 940 500" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<rect width="940" height="500" fill="#fcfcfb"/>
+<text x="24" y="34" font-size="17" font-weight="600" fill="#0b0b0b">Nearly a third of his thinking time answered nobody</text>
+<text x="24" y="55" font-size="12" fill="#52514e">127 turns from data/oddball.log, 2026-08-26 to 2026-09-03. A &#8220;non-request&#8221; is an acknowledgement, a fragment, or room tone that got past the credibility gate.</text>
+<text x="24" y="73" font-size="12" fill="#52514e">The keyword classifier is strict, so this UNDERCOUNTS &#8212; &#8216;Mr. Albo.&#8217; at 134.6s is room tone and is not in this total.</text>
+<text x="24" y="116" font-size="13.5" font-weight="600" fill="#0b0b0b">Total agent seconds</text>
+<text x="470" y="116" font-size="13.5" font-weight="600" fill="#0b0b0b">The most expensive non-requests</text>
+<rect x="60" y="150.0" width="120" height="169.5" fill="#2a78d6"/>
+<text x="196" y="230.7" font-size="12.5" font-weight="600" fill="#0b0b0b">a real request</text>
+<text x="196" y="247.7" font-size="11.5" fill="#52514e">17.2 min over 91 turns</text>
+<rect x="60" y="319.5" width="120" height="80.5" fill="#b8563e"/>
+<text x="196" y="355.7" font-size="12.5" font-weight="600" fill="#0b0b0b">not a request</text>
+<text x="196" y="372.7" font-size="11.5" fill="#52514e">8.2 min over 36 turns</text>
+<text x="60" y="426.0" font-size="22" font-weight="600" fill="#b8563e">32%</text>
+<text x="112" y="426.0" font-size="12" fill="#52514e">of his thinking went on utterances</text>
+<text x="112" y="442.0" font-size="12" fill="#52514e">that were never requests</text>
+<rect x="470" y="150.0" width="250.0" height="31.7" fill="#b8563e" rx="2"/>
+<text x="728.0" y="168.8" font-size="11.5" font-weight="600" fill="#0b0b0b">147.8s</text>
+<text x="474" y="183.8" font-size="11" fill="#fcfcfb">&#8220;Yeah, yeah, yeah, yeah.&#8221;</text>
+<rect x="470" y="191.7" width="97.7" height="31.7" fill="#b8563e" rx="2"/>
+<text x="575.7" y="210.5" font-size="11.5" font-weight="600" fill="#0b0b0b">57.7s</text>
+<text x="474" y="225.5" font-size="11" fill="#52514e">&#8220;Whoa.&#8221;</text>
+<rect x="470" y="233.3" width="95.3" height="31.7" fill="#b8563e" rx="2"/>
+<text x="573.3" y="252.2" font-size="11.5" font-weight="600" fill="#0b0b0b">56.3s</text>
+<text x="474" y="267.2" font-size="11" fill="#52514e">&#8220;Okay.&#8221;</text>
+<rect x="470" y="275.0" width="84.3" height="31.7" fill="#b8563e" rx="2"/>
+<text x="562.3" y="293.8" font-size="11.5" font-weight="600" fill="#0b0b0b">49.8s</text>
+<text x="474" y="308.8" font-size="11" fill="#52514e">&#8220;Okay.&#8221;</text>
+<rect x="470" y="316.7" width="81.1" height="31.7" fill="#b8563e" rx="2"/>
+<text x="559.1" y="335.5" font-size="11.5" font-weight="600" fill="#0b0b0b">47.9s</text>
+<text x="474" y="350.5" font-size="11" fill="#52514e">&#8220;ball.&#8221;</text>
+<rect x="470" y="358.3" width="68.4" height="31.7" fill="#b8563e" rx="2"/>
+<text x="546.4" y="377.2" font-size="11.5" font-weight="600" fill="#0b0b0b">40.4s</text>
+<text x="474" y="392.2" font-size="11" fill="#52514e">&#8220;Okay.&#8221;</text>
+<line x1="503.8" y1="138" x2="503.8" y2="396.0" stroke="#2a78d6" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="509.8" y="412.0" font-size="10.5" fill="#2a78d6">CLOUD_TIMEOUT_S = 20s, the new ceiling</text>
+<text x="24" y="468" font-size="11" fill="#52514e">Fixed two ways: the `ack` intent answers these locally for no API call, and CLOUD_TIMEOUT_S bounds whatever still reaches a model.</text>
+<text x="24" y="486" font-size="11" fill="#52514e">Data: media/data/2026-09-03-wasted-turns.csv &#8212; regenerate with python media/scripts/measure_wasted_turns.py then python media/scripts/plot_wasted_turns.py</text>
+</svg>

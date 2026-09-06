@@ -66,7 +66,7 @@ __all__ = ["ROUTER_MODEL", "AGENT_MODEL", "PERSONA_MODEL", "VISION_MODEL",
            "PERSONA_FALLBACK_MODEL", "OPENROUTER_BASE_URL", "OPENROUTER_API_KEY",
            "LOCAL_BASE_URL", "LOCAL_API_KEY",
            "persona_provider", "build_persona_llm",
-           "FREE_TIER_DAILY_LIMIT", "LLM_MAX_RETRIES"]
+           "FREE_TIER_DAILY_LIMIT", "LLM_MAX_RETRIES", "CLOUD_TIMEOUT_S"]
 
 # Measured, not documented — from the 429 body on 2026-08-19. Defined above the key
 # guard because the guard quotes it.
@@ -195,6 +195,35 @@ warnings.filterwarnings("ignore", message=r".*uses fixed sampling defaults.*",
 # rather than three minutes of being deaf. Override with ODDBALL_LLM_MAX_RETRIES if a flaky
 # link ever makes that the wrong call.
 LLM_MAX_RETRIES = int(os.environ.get("ODDBALL_LLM_MAX_RETRIES", "0"))
+
+# How long a CLOUD call may take before the turn gives up on it.
+#
+# ## Measured, 2026-09-03, off `data/oddball.log`
+#
+# The local branch below has had `timeout=30` since it was written, with a comment saying
+# exactly why: *"a wedged server is a slow turn and not a hung one."* **Neither cloud branch
+# had one at all**, and the reasoning applies to them at least as strongly — a free-tier model
+# on a bad day is a wedged server that happens to be somebody else's.
+#
+# What that cost, in agent-leg seconds:
+#
+#     147.8s   answering 'Yeah, yeah, yeah, yeah.'
+#     134.6s   answering 'Mr. Albo.'
+#      92.7s   answering a note request
+#
+# Thirty persona turns over three seconds came to **970 seconds — 16.2 minutes** — with the
+# microphone shut and the face frozen in the `thinking` pose the whole time. The HTTP 200 comes
+# back in about a second in every one of those; the rest is the response body arriving, which
+# no retry setting and no quota check can see.
+#
+# 20s to match `ROUTER_DEADLINE_S` in `engine/core.py`, which was chosen the same way and for
+# the same reason: the calls that WORK land in 0.77-0.88s, so this is more than twenty times
+# the normal cost and cannot be hit by an ordinary slow day.
+#
+# **What this costs, stated plainly:** a genuinely slow answer is now a failed turn rather than
+# a late one. That is the right trade at 40 words a turn — the same trade `LLM_MAX_RETRIES = 0`
+# above already makes, for the same reason, and it is why these two constants sit together.
+CLOUD_TIMEOUT_S = float(os.environ.get("ODDBALL_CLOUD_TIMEOUT_S", "20"))
 
 ROUTER_MODEL = os.environ.get("ODDBALL_ROUTER_MODEL", "gemini-3.5-flash-lite")
 AGENT_MODEL = os.environ.get("ODDBALL_AGENT_MODEL", "gemini-3.5-flash")
@@ -353,7 +382,11 @@ def build_persona_llm(temperature: float = 0.8):
                           default_headers={
                               "HTTP-Referer": "https://github.com/mroddball89/mr-odd-ball-ee-copilot",
                               "X-Title": "Mr Odd Ball EE Copilot",
-                          })
+                          },
+                          # The measured one. A `:free` model answered 'Yeah, yeah, yeah,
+                          # yeah.' in 147.8s on 2026-09-02, HTTP 200 in the first second and
+                          # the body dribbling in for the rest. See CLOUD_TIMEOUT_S.
+                          timeout=CLOUD_TIMEOUT_S)
 
     from langchain_google_genai import ChatGoogleGenerativeAI          # noqa: PLC0415
 
@@ -365,7 +398,7 @@ def build_persona_llm(temperature: float = 0.8):
                  "quota instead of sharing the router's", PERSONA_FALLBACK_MODEL)
     model = PERSONA_MODEL if "/" not in PERSONA_MODEL else PERSONA_FALLBACK_MODEL
     return ChatGoogleGenerativeAI(model=model, temperature=temperature,
-                                  max_retries=LLM_MAX_RETRIES)
+                                  max_retries=LLM_MAX_RETRIES, timeout=CLOUD_TIMEOUT_S)
 
 # Reading a screenshot — `agents/screen_agent.py`. Defaults to the SAME NAME as AGENT_MODEL,
 # which means it shares that model's daily bucket, and that is worth stating rather than hiding:

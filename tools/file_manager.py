@@ -125,6 +125,12 @@ DATA_DIR = REPO_ROOT / "data"
 ACADEMIC_DIR = DATA_DIR / "academic"
 PROJECTS_DIR = DATA_DIR / "projects"
 
+# Where an uploaded practice paper lands. The PDF is KEPT after its questions are parsed out —
+# `tools/quiz_bank.py` stores the question text, not the paper, and LB will want to look at the
+# original when he disagrees with an answer. Every question carries its source filename and page
+# so that lookup is a ten-second job.
+QUIZ_PDF_DIR = DATA_DIR / "quiz_pdfs"
+
 # Where a datasheet goes when the model does not name a folder. `data/` already holds
 # `arduino/`, `espressif/`, `raspberry_pi/` and `sensors/`, and the prompt below lists them so
 # the model can pick one — this is the fallback for a part that fits none of them.
@@ -180,6 +186,15 @@ _CATEGORIES = {_slug(word): key for word, key in {
     "schematic": "schematic", "project_file": "schematic", "project": "schematic",
     "projectfile": "schematic", "pcb": "schematic", "board": "schematic",
     "kicad": "schematic", "gerber": "schematic",
+    # The fourth destination, added 2026-09-02. A practice exam is not a syllabus and not a
+    # datasheet, and before this it had to be filed as one of them — which meant a calculus
+    # paper landing in `data/academic/` unread, or worse, in the pool the FIRMWARE agent
+    # retrieves from. The spellings are wide for the reason the others are: the model will say
+    # "practice exam" where the prompt said "quiz".
+    "quiz": "quiz", "quizzes": "quiz", "practice": "quiz", "practicequiz": "quiz",
+    "practiceexam": "quiz", "practicetest": "quiz", "exam": "quiz", "test": "quiz",
+    "questions": "quiz", "questionbank": "quiz", "qanda": "quiz", "flashcards": "quiz",
+    "studyguide": "quiz", "reviewquestions": "quiz", "problemset": "quiz",
 }.items()}
 
 
@@ -438,6 +453,10 @@ class _Indexer:
                     good, note = self._convert_syllabi(sources)
                     ok &= good
                     notes.append(note)
+                if "quiz" in jobs:
+                    good, note = self._import_quizzes(sources)
+                    ok &= good
+                    notes.append(note)
         except BaseException as exc:                                   # noqa: BLE001
             # BaseException, not Exception: this thread is the only place these run, and a
             # MemoryError from embedding a 400-page datasheet on a Pi must still clear
@@ -514,6 +533,46 @@ class _Indexer:
         except Exception as exc:                                      # noqa: BLE001
             LOG.exception("syllabus conversion failed")
             return False, f"The syllabus conversion failed: {type(exc).__name__}: {exc}"
+
+    def _import_quizzes(self, sources: set[str]) -> tuple[bool, str]:
+        """Parse newly filed practice papers into the question bank. **No API calls at all.**
+
+        On the background thread for one reason only, and it is not the network: a scanned
+        paper goes through `tools/pdf_ocr.py`, which is 2-6 seconds a page with the OCR model
+        to load first. That is the same freeze the vector rebuild was moved off the turn path
+        to avoid, and this is reached from inside an agent turn in exactly the same way.
+
+        Unlike `_convert_syllabi` next door, this costs nothing per document — the parser is
+        regex over extracted text — so the only budget being spent is wall-clock.
+        """
+        try:
+            from tools.quiz_import import import_pdf                  # noqa: PLC0415
+
+            t0 = time.monotonic()
+            done, empty = [], []
+            for name in sorted(sources):
+                report = import_pdf(QUIZ_PDF_DIR / Path(name).name)
+                LOG.info("  quiz: %s", report.sentence())
+                (done if len(report) else empty).append(report)
+
+            took = f" in {time.monotonic() - t0:.0f}s"
+            total = sum(len(r) for r in done)
+            if not done:
+                # A paper that yields nothing is reported as a FAILURE, not a quiet skip. The
+                # likely cause is a layout this parser does not read, and "nothing happened" is
+                # indistinguishable from "it worked" unless somebody says which — the same
+                # reasoning as the image-only syllabus case above.
+                return False, ("No questions could be read out of "
+                               + ", ".join(r.source for r in empty) + ". "
+                               + " ".join(r.sentence() for r in empty[:2]))
+            head = f"Read {total} question(s) into the bank{took}."
+            if empty:
+                head += (" Nothing came out of "
+                         + ", ".join(r.source for r in empty) + ".")
+            return True, head
+        except Exception as exc:                                      # noqa: BLE001
+            LOG.exception("the quiz import failed")
+            return False, f"The quiz import failed: {type(exc).__name__}: {exc}"
 
     def status(self) -> _IndexState:
         with self._lock:
@@ -596,6 +655,16 @@ def guess_category(path: Path) -> str:
     if any(word in flat for word in ("syllabus", "syllabi", "coursesyllabus", "coursepolicy",
                                      "courseoutline", "gradingpolicy")):
         return "academic"
+    # ABOVE the course-code rule, and that ordering is load-bearing. "MATH251_practice_final"
+    # matches both, and it is a practice paper that happens to name a course — not a course
+    # document. Filed as `academic` it would be stored unread; filed as `quiz` its questions
+    # are parsed out, which is the whole reason he uploaded it.
+    if any(word in flat for word in ("quiz", "practice", "practiceexam", "practicetest",
+                                     "exam", "midterm", "finalexam", "reviewquestions",
+                                     "reviewsheet", "revision", "questionbank", "flashcard",
+                                     "studyguide", "problemset", "worksheet", "testbank",
+                                     "sampleexam", "pastpaper", "pastexam", "mockexam")):
+        return "quiz"
     if re.search(r"(?<![a-z])(ece|eee|phys|math|cs|ee)\d{2,4}(?![a-z])", flat):
         return "academic"
     if any(word in flat for word in ("datasheet", "reference manual", "referencemanual",
@@ -764,6 +833,13 @@ def process_inbox_file(filename: str, category: str, project: str = "",
         'schematic' — a KiCad file (.kicad_sch, .kicad_pcb, .kicad_pro), a gerber or project
                       zip, or a PDF of a board. Goes to data/projects/, where the hardware and
                       firmware agents can read it.
+        'quiz'      — a practice quiz, practice exam, past paper, review-question sheet,
+                      problem set, flashcard list or study guide: anything that is QUESTIONS
+                      with their ANSWERS. Its questions are parsed out and added to the
+                      question bank, so LB can then say "quiz me on calculus". Works for ANY
+                      subject he takes, not just engineering — calculus, philosophy, history,
+                      chemistry, whatever. Prefer this over 'academic' whenever a file contains
+                      questions to be answered rather than course policy to be read.
     `project`: for 'schematic' only — the project folder to put it in, e.g. 'amp_board'.
                Name the BOARD or the build, never the file: two exports of one board belong in
                one folder. Call `list_project_files` first and REUSE an existing folder name
@@ -772,7 +848,9 @@ def process_inbox_file(filename: str, category: str, project: str = "",
                name is.
     `folder`: for 'datasheet' only — which folder under data/ to use. The ones that already
               exist are 'arduino', 'espressif', 'raspberry_pi' and 'sensors'. Leave empty for
-              'datasheets'.
+              'datasheets'. For 'quiz' this is the SUBJECT instead, e.g. 'Calculus II' or
+              'Philosophy' — leave it empty unless LB names one, because the subject is worked
+              out from the paper itself and that is right more often than a guess.
 
     If you are not sure which category a file is, ASK LB rather than guessing. Filing a
     document in the wrong place gives him a wrong answer days later.
@@ -784,7 +862,7 @@ def process_inbox_file(filename: str, category: str, project: str = "",
     key = _CATEGORIES.get(_slug(category), "")
     if not key:
         return (f"I do not have a category called {category!r}. It has to be 'academic', "
-                f"'datasheet' or 'schematic'. {source.name} is still in the inbox.")
+                f"'datasheet', 'schematic' or 'quiz'. {source.name} is still in the inbox.")
 
     suffix = source.suffix.lower()
     try:
@@ -792,6 +870,8 @@ def process_inbox_file(filename: str, category: str, project: str = "",
             return _file_academic(source, suffix)
         if key == "datasheet":
             return _file_datasheet(source, suffix, folder)
+        if key == "quiz":
+            return _file_quiz(source, suffix, folder)
         return _file_schematic(source, suffix, project)
     except OSError as exc:
         LOG.exception("could not file %s", source)
@@ -829,6 +909,38 @@ def _file_academic(source: Path, suffix: str) -> str:
             f"grading breakdown, the late policy and the office hours into my notes. That is "
             f"running in the background and is not finished yet — use index_status to check. "
             f"Its DUE DATES are not read from it: ask me to sync Canvas for those.")
+
+
+def _file_quiz(source: Path, suffix: str, subject: str) -> str:
+    """File a practice paper and read its questions into the bank.
+
+    The one destination that is neither stored-and-unread (`academic`) nor embedded
+    (`datasheet`). Its questions are EXTRACTED — parsed into `data/quiz/<subject>.json` by
+    `tools/quiz_import.py` — and the parse is regex over the PDF's own text, so unlike every
+    other background job here it costs nothing but wall clock. No model, no quota, no key.
+
+    `folder` is reused as the SUBJECT, so the model can say which class a paper is for. Empty
+    is the normal case and the right one: `quiz_import.guess_subject` reads the filename and
+    the first pages, and it is right more often than a subject the model invents from a
+    filename it half-heard.
+    """
+    target = _move(source, QUIZ_PDF_DIR)
+    where = _where(QUIZ_PDF_DIR)
+
+    if suffix not in (".pdf", ".txt", ".md"):
+        # Kept rather than refused, and told plainly. A .docx of questions is a real thing to
+        # upload and there is nowhere better for it — but claiming to have read it would be the
+        # exact failure `_file_academic` is written against.
+        return (f"Filed {target.name} to {where}/. I read questions out of PDFs, .txt and .md "
+                f"files, so a {suffix} file sits there for LB to open rather than becoming "
+                f"questions I can ask him. Export it as a PDF and upload it again if he wants "
+                f"it in the bank.")
+
+    _INDEXER.request({"quiz"}, sources={target.name})
+    return (f"Filed {target.name} to {where}/ and I am reading the questions out of it now — "
+            f"that is running in the background and is not finished yet. Use index_status to "
+            f"check, and then ask to be quizzed on it. Nothing is sent anywhere to do this: "
+            f"the questions and answers are parsed on this machine and stored on disk.")
 
 
 def _file_datasheet(source: Path, suffix: str, folder: str) -> str:
@@ -986,8 +1098,14 @@ LB can upload a file straight into the chat with the paperclip button. It lands 
 stays there until you file it, so an upload he never hears about is an upload that does nothing.
 - When he says he has uploaded, attached or added a file, call `process_inbox_file` with its
   name and a category: 'academic' for a syllabus, 'datasheet' for a component document,
-  'schematic' for a KiCad file, a gerber zip or a board PDF.
+  'schematic' for a KiCad file, a gerber zip or a board PDF, 'quiz' for a practice quiz,
+  practice exam, past paper, problem set or review-question sheet.
 - Use `list_inbox` first if you do not have the exact filename.
+- **A file full of QUESTIONS is a 'quiz', whatever subject it is for.** A calculus practice
+  final, a philosophy review sheet, a chemistry problem set — all 'quiz'. Its questions get
+  parsed out and he can then say "quiz me on calculus". 'academic' is for course POLICY (a
+  syllabus, a grading breakdown) and is stored unread; do not send questions there, because
+  nothing will ever read them. The distinction is questions-to-answer versus rules-to-follow.
 - Choose the category from the filename when it is obvious. When it is NOT obvious, ask him
   which it is in one short question and file it on his next answer — a syllabus filed as a
   datasheet is a wrong answer about his coursework three weeks later.

@@ -1235,3 +1235,292 @@ the fixture PDF had one page and the "already has text" document pointed at page
 did not exist. `ocr_pdf` filtered it as out of range, so the protected thing was **unreachable
 rather than protected**. Same shape as L29's `or` that widened a check until it stopped biting.
 The probe is the only reason it was caught. Run it.
+
+---
+
+## L33 - Ask which job actually needs the model, not how to make the model cheaper
+
+**2026-09-02, the quiz.** It sent every marked answer to Gemini - one request, off a tier
+counted in requests at 20 a day, to decide whether "V = I R" matches "V = I * R". Ten questions
+was half of LB's daily budget, and a second quiz took the router, the persona agent and the
+firmware agent down with it until midnight.
+
+The instinct was to make the call cheaper: a smaller model, a shorter prompt, batching. All
+three would have worked and all three are the wrong question. **Marking a known answer against
+a spoken one is string comparison, arithmetic and a little algebra.** There was no job for a
+language model in it at all.
+
+Before optimising a call, ask what it is deciding. If the answer is already on disk, the call is
+not expensive - it is unnecessary. 10 requests to 0, and 820 ms to 0.63 ms, fell out of asking
+the second question instead of the first.
+
+## L34 - A character class is a claim about the world, and hyphens are punctuation
+
+Same day, four bugs, all one shape: a regex admitting something whose meaning it had guessed.
+
+- The gate deciding whether a string was algebra was "contains one of `+-*/^=` or a digit".
+  **`Inter-Integrated Circuit` contains a hyphen**, so it went to sympy, parsed as
+  `inter - integrated*circuit`, and a correct answer was marked wrong. Every hyphenated
+  technical term in the bank.
+- `infer_kind` treated "digits followed by any letter" as a number, so **`2x` was numeric** and
+  a bare "2" marked correct against an answer of `2x`. `2V` is two volts; `2x` is algebra; the
+  difference is whether the letter is a unit, and the regex had never been asked.
+- The inline-answer marker was unanchored, so the question "A question with no answer
+  anywhere?" **matched on its own word "answer"** and stored "anywhere?" as the answer - and
+  counted as a successful parse rather than a dropped one.
+- Pages were joined with a bare `\f`, and **`^` in MULTILINE mode does not follow a form feed**.
+  A question at the top of page 2 was invisible.
+
+Every one of these is a character class that was written for the case in front of me and then
+met a case I had not pictured. None was found by re-reading the code; all four came from a
+fixture with a real hyphen, a real `2x`, a real second page. **Write the regex, then write the
+input that embarrasses it.**
+
+## L35 - Run it once, out loud, before you call it done
+
+The harness was 76/76 green. Then I ran an actual session end to end and found two things no
+check was looking for:
+
+- **"Correct. Correct - B, act only on maxims..."** The caller prefixed a verdict word onto a
+  `why` that already opened with one. Every mark stuttered. Invisible in an assertion on
+  `verdict == "correct"`; obvious in one line of transcript.
+- **It re-asked a question in silence.** `pick` wraps when the deck is exhausted - correct for a
+  drill, and indistinguishable from the `random.choice` repeat bug this whole stage existed to
+  fix, because nothing said "going round again".
+
+Both are speech defects, and the harness was checking state. A green suite means the properties
+you thought of hold. It says nothing about the ones you did not - and for a thing that talks,
+the transcript is where those live. **Read the output as a user would hear it.**
+
+## L36 - Do not lower the threshold until the wrong answer passes
+
+The prose grader marks "it is how much a material opposes current" as **partial** against
+"Resistance is the opposition to current flow". That is a decent answer and it wanted to be
+correct. Lowering `PROSE_PASS` fixed it - and every value low enough to pass that paraphrase
+also passed answers that were plainly wrong, because the grader is matching content words and
+has no semantics to distinguish the two.
+
+So it stayed partial, the official answer is shown alongside, and the limitation is written into
+the module docstring and D53 rather than tuned away. **A grader that flatters is a grader he
+cannot revise against**, and the honest verdict was available the whole time: "part of it, and
+here is the answer."
+
+---
+
+## L37 - A docstring that disagrees with its code is a bug report nobody has read yet
+
+`classify_yes.normalise` said *"Apostrophes are dropped rather than kept so `don't` and `dont`
+are the same word."* The code replaced them with a **space**. That mismatch was already on the
+board, filed under "Also found, lower" as a tidiness issue.
+
+It was not tidiness. `don't` became `don t`, so `_NO`'s `dont` never matched, so
+`is_yes("Don't run it")` fell through to `_YES`, matched `run it`, and **returned True** - in
+front of PowerShell execution. One character, three weeks, and the most natural refusal a
+person can make.
+
+The reason it was misfiled: **the defect and its consequence were one function apart.** Seeing
+the mismatch requires reading `normalise`. Seeing that it opens a permission gate requires also
+noticing that `_YES` contains "run it". Nobody made the second hop, because the first one
+looked like a comment problem.
+
+When code and its own docstring disagree, do not file it as a comment fix. Ask what the
+docstring was PROMISING and who is relying on that promise. Someone wrote it down because it
+mattered.
+
+## L38 - Fixing the thing on the board would not have fixed the bug
+
+The board said: *"`is_yes` bare words - delete `do`, `please`, `course` from `_YES`. One line,
+and it is in front of shell execution."* Accurate, real, and **not the severe half**.
+
+Deleting those three words leaves `is_yes("Don't run it")` returning True, because `run it` is a
+legitimate yes phrase and the apostrophe bug had already destroyed the "don't" before any list
+was consulted. The one-line fix would have shipped, the item would have been ticked, and the
+gate would still have approved refusals.
+
+What found it was **measuring the function before editing it** - running the actual thing
+against the actual sentences a person says, instead of trusting the note from the last person
+who looked. Three minutes. The note was written by me, from a code read, and it was wrong about
+which defect mattered.
+
+A task-board entry is a hypothesis about a bug, not a specification of it. Reproduce it first.
+
+## L39 - Check that a new fixture would have failed before
+
+Seven fixtures were added to the destructive-command corpus. Six caught the bug they were
+written for. The seventh, `ri -rec -force C:\`, was **already passing** - a bare drive root is
+refused by a different rule entirely, so it certified nothing about the abbreviated `-rec` it
+was written to test. Replacing the drive root with an ordinary directory made it bite.
+
+Third occurrence of this exact shape: L29's widened `or`, `verify_ocr`'s unreachable page index,
+and now this. A green check on a path the check cannot actually reach is worse than no check,
+because it is counted.
+
+The remedy is now cheap and there is no excuse for skipping it: **reconstruct the old predicate
+in a scratch file and run the new corpus at it.** Anything that does not go red is measuring
+something else.
+
+## L40 - Fix both halves of a safety pair, or neither is fixed
+
+D4's design has three legs: the model composes, a human approves, a blocklist backstops. Two of
+them were broken at once, and the two failures met on the same sentence - saying *"Don't run
+it"* to `Remove-Item C:\Users\user -Rec -Force` approved a command the blocklist then let
+through, because `-Rec` is a prefix PowerShell accepts and the pattern demanded `-recurse`.
+
+Either hole alone is survivable: a bad approval still meets the blocklist, and a blocklist gap
+still needs an approval. It is the **conjunction** that deletes a home directory, and neither
+harness could see it because each tested its own half.
+
+So `verify_consent.py` section 4 runs both halves against one sentence. When a system's safety
+is a chain, at least one test has to assert on the chain rather than on the links.
+
+---
+
+## L41 - Read the log before asking what is wrong, and read it for SILENCE as well as errors
+
+LB asked what Mr Odd Ball had been struggling with. `data/oddball.log`: 23,606 lines, eight
+days, **zero errors, three warnings**. By the usual measure, nothing was wrong.
+
+Three real problems were in there, and the reason none had been reported is that **none of them
+fails**. A note truncated mid-sentence is announced as "Added to your note." A 147-second turn
+looks like a slow network. Room tone answered by a persona model looks like a conversation.
+
+So the useful queries were not "what errored" but:
+
+    which routes are slowest, and what were they answering
+    what did he actually SAY, and how often
+    what did the turn extras record that nobody acted on
+
+The last one found the headline. `hit max_s` had been written into every capped turn since the
+cap existed and read by nothing.
+
+## L42 - A warning logged and not surfaced is a bug with a paper trail
+
+    17:10:37 WARNING utterance hit the 15s cap - keeping what we have
+
+Correct, timestamped, and useless. The process knew the recording had been cut off; the person
+speaking into it did not, and was told his note had saved cleanly. He then spent three minutes
+trying to repair a sentence he did not know was broken, and the repair was routed to a chit-chat
+model and thrown away.
+
+**When a component detects something the user needs to know, logging it is not handling it.**
+The test is not "did we notice" but "who was told". `Engine.ask` grew a `truncated` flag for
+exactly this: one fact, known only to the audio layer, carried to the one place that could
+speak it.
+
+## L43 - Set the limit on the ACTIVITY, not on the process
+
+The recording cap was one number for two different jobs. 15 seconds is generous for "what's the
+trace width for five amps" and it cut a dictated paragraph in half. The cap had already been
+raised once, 10 -> 15, for the same reason, and it failed again at the new number because the
+number was never the problem.
+
+The instinct is to raise it. The comment on the constant says why not: it exists *so a
+television cannot record forever*, and there was a Fusion 360 tutorial in the same log being
+transcribed as commands.
+
+What resolved it was noticing the two jobs are distinguishable from state the process already
+holds. **A television cannot open a note draft.** So the cap is 15s to ask and 90s to dictate,
+and it only ever rises for one turn that LB himself opened one utterance earlier.
+
+Before tuning a limit that serves two purposes, check whether the two purposes can be told
+apart. If they can, the limit was never one number.
+
+## L44 - Cost the cheap thing before optimising the expensive one
+
+Thirty turns spent 8.2 minutes - 32% of all the assistant's thinking time in eight days - and
+sixty API calls answering: "Okay." "Whoa." "ball." "Yeah, yeah, yeah, yeah."
+
+Not one was a question. The most expensive single turn in the entire log, 147.8 seconds, was
+answering "Yeah, yeah, yeah, yeah."
+
+Two independent things had to be true for that: the utterance reached a paid model at all, and
+nothing bounded how long it could take. **Both fixes were small and neither would have been
+enough alone.** A timeout still spends the calls; a filter still leaves the real questions
+exposed to an unbounded wait.
+
+The lesson is the order of the question. Before making a slow path faster, ask how much of the
+traffic on it should have been there.
+
+## L45 - Never lose what was heard, unless the repair is worse than the loss
+
+My first design for the truncated note wrote the fragment immediately - "never lose what was
+heard" - and re-opened the draft for the rest. It preserved every word and produced this in the
+vault:
+
+    ...as market commodities rather than public goods, incentivizes
+    ---
+    things such as predatory pricing, regulatory capture...
+
+`append_note` puts a horizontal rule between blocks. The principle was right and its application
+put a page break through the middle of a sentence.
+
+Holding the content for one more utterance instead is not a new risk: the "what should I call
+it?" turn has always carried dictated content in memory across a turn. **Check whether the
+careful thing you are about to do is already being done elsewhere** - the established window was
+sitting one branch away, and matching it was both safer and less code.
+
+---
+
+## L46 - Check the brief against the code before building to it
+
+LB asked for "a blanking window in the recorder immediately following the TTS output so he
+doesn't hear himself". Correct instinct, wrong mechanism: `audio/gate.py` has muted capture
+during TTS since 2026-08-11, with a tail and a detector reset. That half of the brief was
+already built, and building to it would have produced a second gate behind a working one.
+
+The echoes were his OWN voice - the tail of the wake phrase, arriving after openWakeWord had
+already fired and opened the recorder.
+
+Ten minutes reading the module that supposedly had the gap is what found this. **A brief is a
+description of a symptom plus a guess at the cause.** Take the symptom seriously and check the
+guess, especially when the person writing it is right about everything else.
+
+## L47 - If a number would settle the question, check whether anything ever wrote it down
+
+Two explanations fit `capture spoke: 2.48s audio, 0.16s voiced` equally well: the recorder
+opened into the wake word's tail, or something in the room made a noise a second later. They
+need completely different fixes.
+
+`Capture.waited_s` distinguishes them perfectly. It had been **computed and never logged**
+since the class was written. And the fallback - reading the saved audio - was closed too:
+`_finish` trims from `first_voiced_i - PREROLL`, so the offset inside the listening window is
+destroyed before the file is written.
+
+Eight days of logs, 197 saved recordings, and the question was unanswerable from all of it.
+
+The fix was one line in a log statement. Before running an experiment, before building a
+replay harness, **ask what single number would end the argument, and check whether anything is
+recording it.** Often the answer is that the code already knows and never says.
+
+And when you then add the instrument, make sure your own fix cannot erase it: `waited` now
+reports a separate `_first_voice_at`, because reporting the delayed trigger would have hidden
+exactly the evidence that says whether the delay was needed.
+
+## L48 - Delay the decision, do not delete the data
+
+The obvious implementation of "ignore the first 250ms" is to drop those frames. It is wrong,
+and the module's own existing comment says why: the first consonant of a sentence lands in the
+frame before the VAD is convinced, which is why `PREROLL_S` exists at all. Dropping audio
+would eat the first word of "Hey Mr Odd Ball, what time is it?" said in one breath.
+
+`ignore_start_s` suppresses only the *trigger*. Frames are still buffered and still counted, so
+when real speech starts, the pre-roll hands back everything that was skipped - the capture is
+**byte-identical** to one taken with no window at all. A wake tail, followed by silence rather
+than speech, simply never triggers.
+
+That property is what let this ship before the confirming measurement: it can fail by being
+useless, never by eating a word. **A guard that degrades to a no-op is worth far more than one
+that degrades to data loss**, and it is often available for the cost of moving a condition.
+
+## L49 - A partial sweep is how a green suite hides a break
+
+`verify_credible.py` was broken by Stage 18 and stayed broken through it, because I ran fifteen
+harnesses and not that one. Its stub `Engine.ask(self, text)` did not accept the `truncated`
+keyword the stage had added. Nothing else touched it, so nothing else noticed.
+
+It surfaced a day later only because the next stage happened to touch `_capture` too.
+
+Both stubs are now `**_`-tolerant, which is right - a harness about what `credible.assess` does
+with numbers should not break when the signature above it grows. But the real lesson is the
+sweep: **when a change alters a signature that harnesses stub, run all of them, not the ones
+that seem related.** The related ones are exactly the ones that already stub it correctly.

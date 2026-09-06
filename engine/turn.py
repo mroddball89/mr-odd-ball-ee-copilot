@@ -136,8 +136,15 @@ class Turn:
                  thinking_state: str = "thinking", save_dir: "Path | None" = None,
                  stall_phrase: str = "",
                  capturing: "threading.Event | None" = None,
-                 drain=None) -> None:
+                 drain=None, dictation_max_s: float = 0.0,
+                 wake_tail_s: float = 0.0) -> None:
         self._rec = recorder
+        # 0.0 means "leave the cap alone", which is what every harness that does not pass it
+        # gets. See `_capture` and `dictation_max_s` in config/oddball.toml.
+        self._dictation_max_s = float(dictation_max_s or 0.0)
+        # Applied to the FIRST capture of a turn only — the one that follows the wake word and
+        # therefore opens into its tail. See `wake_tail_s` in config/oddball.toml.
+        self._wake_tail_s = float(wake_tail_s or 0.0)
         self._stt = transcriber
         self._engine = engine
         self._speaker = speaker
@@ -188,8 +195,13 @@ class Turn:
         except Exception:
             LOG.exception("could not save the capture")
 
-    def _capture(self):
+    def _capture(self, suppress_start_s: float = 0.0):
         """Pump frames into the recorder until it decides the utterance is over.
+
+        Args:
+            suppress_start_s: voice this early may not BEGIN an utterance. Non-zero only for
+                the capture that follows a wake word, where the wake phrase's own tail arrives
+                first. Nothing is muted — see `UtteranceRecorder.ignore_start_s`.
 
         **Announces that it is listening, and throws away whatever arrived while it was not.**
         Both halves matter and the second is the one that was a bug: `frames_q` holds 16
@@ -200,8 +212,40 @@ class Turn:
         It transcribed to "Yes. Yes." and a command ran.
 
         `orchestrator/credible.py` refuses that capture now. This stops it existing.
+
+        **The cap follows the activity**, added 2026-09-03. With a note draft open and waiting
+        on content, LB is dictating a paragraph rather than asking a question, and the 15s cap
+        that suits the second cut the first in half mid-clause — see `dictation_max_s` in
+        `config/oddball.toml` for the recording it ruined. Raised for exactly the turns where
+        the Engine is holding an open draft, and put back in `finally` so an exception cannot
+        leave the microphone running long for the rest of the session.
         """
         self._rec.reset()
+
+        # Touched ONLY when the cap is actually being raised, and guarded, because `Turn` is
+        # built with a real `UtteranceRecorder` in the rig and with stubs in three harnesses.
+        # `verify_deafness`'s stub has no `max_s`, and reading it unconditionally took the
+        # microphone thread down with an AttributeError — caught by running the harness, which
+        # is the entire reason the stub exists. A recorder that cannot be capped simply does
+        # not get the longer cap; nothing else about the turn changes.
+        was_max_s = None
+        if self._dictation_max_s and self._is_dictating():
+            try:
+                was_max_s = self._rec.max_s
+                self._rec.max_s = self._dictation_max_s
+                LOG.info("dictation: recording up to %.0fs for this turn", self._rec.max_s)
+            except AttributeError:
+                was_max_s = None
+
+        # Same guarded shape, and for the same reason: a stub recorder in a harness has no
+        # such attribute, and the microphone thread must not die because of it.
+        was_ignore_s = None
+        if suppress_start_s:
+            try:
+                was_ignore_s = self._rec.ignore_start_s
+                self._rec.ignore_start_s = suppress_start_s
+            except (AttributeError, ValueError):
+                was_ignore_s = None
         if self._drain is not None:
             self._drain()
         if self._capturing is not None:
@@ -220,6 +264,31 @@ class Turn:
             # left set is the original bug with extra steps.
             if self._capturing is not None:
                 self._capturing.clear()
+            # And the cap, for the same reason. A raised cap left raised is a microphone that
+            # records a television for ninety seconds on every turn for the rest of the day.
+            if was_max_s is not None:
+                self._rec.max_s = was_max_s
+            # And the suppression window, which left in place would deafen him to the first
+            # quarter-second of every answer at every permission gate.
+            if was_ignore_s is not None:
+                self._rec.ignore_start_s = was_ignore_s
+
+    def _is_dictating(self) -> bool:
+        """True when the Engine is holding a note draft that is waiting on CONTENT.
+
+        Not merely "a draft is open": a draft awaiting a NAME is answered with two or three
+        words, and giving that ninety seconds would only mean waiting longer for the hangover
+        on a turn that never needed it.
+
+        Duck-typed and wrapped, because `Turn` is constructed with a real Engine in the rig and
+        with stubs in three different harnesses. A stub without `note_draft` must not crash the
+        microphone — it just does not get the longer cap.
+        """
+        try:
+            draft = getattr(self._engine, "note_draft", None)
+            return draft is not None and getattr(draft, "awaiting", "") == "content"
+        except Exception:                                             # noqa: BLE001
+            return False
 
     def _say(self, text: str, timings: Timings) -> None:
         """Speak, with the mic gated and his mouth driven by the audio."""
@@ -297,7 +366,11 @@ class Turn:
         began = time.monotonic()
 
         self._bridge.set_state("listening")
-        capture = self._capture()
+        # **The only capture that gets the suppression window.** This one opens immediately
+        # after the wake detector fired, so the tail of "...Odd Ball" is still arriving; the
+        # greeting retry below and the permission-gate capture are both preceded by HIS voice,
+        # not LB's, and `MicGate` already covers those.
+        capture = self._capture(suppress_start_s=self._wake_tail_s)
         if capture is None:
             return t
 
@@ -347,19 +420,25 @@ class Turn:
             return t
 
         t0 = time.monotonic()
-        self._answer(heard.text, t)
+        self._answer(heard.text, t, truncated=capture.outcome is Outcome.TOO_LONG)
         t.route_s = time.monotonic() - t0
         LOG.info("%s", t.line())
         return t
 
-    def _answer(self, heard: str, t: Timings) -> None:
+    def _answer(self, heard: str, t: Timings, truncated: bool = False) -> None:
         """Hand the transcript to the Engine, show the cards, say the speech.
 
         The whole of the old Tier 0 / classify / brains branch collapses into `Engine.ask()`.
         That is the merge: one dispatcher, and this file goes back to being about audio.
+
+        `truncated` is the one piece of AUDIO knowledge the Engine cannot work out for itself:
+        that this transcript is the front of a sentence and the rest was never recorded. It was
+        known here all along — `run()` has written `hit max_s` into the turn extras since the
+        cap existed — and went no further, so a note written from a capped recording was
+        announced as "Added to your note." with no hint that it stopped mid-word.
         """
         self._show_line("you", heard)
-        response = self._engine.ask(heard)
+        response = self._engine.ask(heard, truncated=truncated)
         self._deliver(response, t, typed=False)
 
     def answer_typed(self, text: str) -> Timings:

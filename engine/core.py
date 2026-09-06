@@ -83,6 +83,123 @@ _QUIZ_EXIT_WORDS = ("exit", "quit", "enough", "stop", "escape")
 
 QUIZ_CHIP = "QUIZ MODE — say 'exit quiz' to stop"
 
+# Ways of asking to be told MORE about the answer just given. **This is the only door in the
+# quiz that a network call is behind**, and it is deliberately narrow: LB asked for the marking
+# to be internal and the model to be reached only when he asks for a further explanation, so
+# anything that is not clearly such a request is treated as an answer to the next question.
+#
+# Matched as phrases, not single words, for exactly the opposite reason `_QUIZ_EXITS` accepts
+# bare words. The exit is loose because being trapped in a mode is worse than dropping one
+# answer. This is tight because a false positive spends a request off a 20-a-day tier and skips
+# a question he was midway through answering.
+_QUIZ_EXPLAIN = (
+    "explain that", "explain it", "explain this", "explain why", "explain the answer",
+    "explain further", "explain more", "more detail", "in more detail", "tell me more",
+    "why is that", "why is it", "why that", "how come", "how did you get",
+    "how do you get", "how does that work", "walk me through", "show me the working",
+    "show your working", "i dont understand", "i do not understand", "i dont get it",
+    "i do not get it", "go deeper", "elaborate", "expand on that", "what do you mean",
+)
+
+# "Next question", "skip this one", "pass". Distinct from not knowing the answer: this asks to
+# MOVE ON without being marked, where "I don't know" is an answer and is marked as one.
+_QUIZ_SKIP = ("skip", "skip this", "skip it", "skip this one", "next question", "next one",
+              "move on", "another one", "another question", "come back to that",
+              "come back to this")
+
+# "How am I doing?" mid-quiz, answered off the session's own tally. No model, no route.
+_QUIZ_SCORE = ("how am i doing", "whats my score", "what is my score", "how many have i got",
+               "how many did i get", "score so far", "how am i getting on", "my score")
+
+
+@dataclass
+class QuizSession:
+    """One run of the quiz. What `mode == "quiz"` is holding while it is on.
+
+    Replaces the single `quiz_item` attribute, which could hold the current question and
+    nothing else — so nothing could stop the same question being asked twice in a row, nothing
+    could tell LB how he had done, and "explain that" had no way to know what "that" was.
+
+    Args:
+        subject:  the deck he asked for, or "" for the whole bank. Fixed for the session:
+                  "quiz me on calculus" means calculus until he leaves and asks for something
+                  else.
+        item:     the question on the table now.
+        asked:    ids already put to him, so `quiz_bank.pick` does not repeat itself.
+        answered: how many he has actually answered — skips do not count.
+        score:    running total. A partial credit is worth half, and `Grade.scored` says so.
+        last_item:  the question just marked, and
+        last_grade: how it was marked. Both held so that "explain that", said AFTER the next
+                    question has been asked, explains the one he means rather than the one on
+                    the table. Getting this wrong would explain a question he has not yet had a
+                    chance to answer, which is the quiz spoiling itself.
+    """
+
+    subject: str = ""
+    item: object | None = None
+    asked: set = field(default_factory=set)
+    answered: int = 0
+    score: float = 0.0
+    last_item: object | None = None
+    last_grade: object | None = None
+    last_answer: str = ""
+
+    def tally(self) -> str:
+        """The score, as a sentence. "" before anything has been answered."""
+        if not self.answered:
+            return ""
+        rounded = f"{self.score:.1f}".rstrip("0").rstrip(".")
+        return f"{rounded} out of {self.answered}"
+
+
+def _matches(text: str, phrases: tuple) -> bool:
+    """True when `text` is one of `phrases`, or clearly starts or ends with one.
+
+    Not a bare `in`: "explain that" appearing inside a long answer to a philosophy question is
+    LB answering, not LB asking to be taught. Containment is allowed only for a short utterance,
+    where there is nothing else it could be.
+    """
+    flat = re.sub(r"[^a-z0-9' ]+", " ", (text or "").lower())
+    flat = re.sub(r"\s+", " ", flat).strip()
+    if not flat:
+        return False
+    if any(flat == p for p in phrases):
+        return True
+    if len(flat.split()) <= 8:
+        return any(flat.startswith(p) or flat.endswith(p) or f" {p} " in f" {flat} "
+                   for p in phrases)
+    return False
+
+
+# "quiz me on calculus", "test me on chapter 3 of philosophy", "ask me some circuits questions".
+# The subject is whatever follows, cleaned of the words that are part of the request rather than
+# part of the subject.
+_QUIZ_SUBJECT = re.compile(
+    r"\b(?:on|about|from|in|over|with|regarding)\s+(?P<subject>.+?)\s*$", re.I)
+
+_SUBJECT_NOISE = re.compile(
+    r"\b(?:please|stuff|things|material|questions?|topics?|chapter\s*\d*|unit\s*\d*|"
+    r"section\s*\d*|my|the|some|of|a|an|for|class|course|homework|notes?|today|now)\b", re.I)
+
+
+def quiz_subject_of(text: str) -> str:
+    """The subject LB named, or "" when he named none.
+
+    "Quiz me on calculus" -> "calculus". "Test me" -> "". "Quiz me on some of my philosophy
+    material" -> "philosophy", because the words that are part of the ASKING are stripped and
+    only the subject is left.
+
+    Returning "" is a perfectly good answer and means the whole bank — `quiz_bank.resolve_subject`
+    is what turns whatever comes out of here into a deck that exists, and it also returns "" when
+    it cannot tell, so an unrecognised subject widens to everything rather than failing.
+    """
+    match = _QUIZ_SUBJECT.search((text or "").strip())
+    if not match:
+        return ""
+    subject = _SUBJECT_NOISE.sub(" ", match.group("subject"))
+    subject = re.sub(r"[^A-Za-z0-9 ]+", " ", subject)
+    return re.sub(r"\s+", " ", subject).strip()
+
 
 def _is_quiz_exit(text: str) -> bool:
     """True if `text` asks to leave quiz mode.
@@ -183,6 +300,11 @@ class NoteDraft:
     folder: str = ""
     name: str = ""
     path: "Path | None" = None
+    # Set when the recording that produced `content` hit the cap, so `content` is the front of
+    # a sentence. The next utterance CONTINUES it rather than replacing it — without this, LB
+    # finishing his own sentence would overwrite the half he had already dictated, which is a
+    # worse outcome than the truncation it is trying to repair.
+    truncated: bool = False
 
 
 class Engine:
@@ -196,19 +318,42 @@ class Engine:
 
     def __init__(self, confirm_gates: bool = True) -> None:
         self.mode = "normal"
-        self.quiz_item: dict | None = None
+        self.quiz: QuizSession | None = None
         self.pending: Pending | None = None
         self.note_draft: NoteDraft | None = None
         self._confirm_gates = confirm_gates
         self.last: Turnlog = Turnlog()
 
+    # `quiz_item` was the whole of the quiz's state before `QuizSession` existed, and it is
+    # named in `tools/verify_engine.py` and in `README.md`. Kept as a view onto the session
+    # rather than deleted: a harness that sets `eng.quiz_item` to put a question on the table
+    # is doing a reasonable thing, and breaking it would mean editing the test that protects
+    # this code in the same change that rewrites it — which is how a rewrite goes out untested.
+    @property
+    def quiz_item(self):
+        """The question on the table, or None. A view onto `self.quiz`."""
+        return self.quiz.item if self.quiz else None
+
+    @quiz_item.setter
+    def quiz_item(self, value) -> None:
+        if self.quiz is None:
+            self.quiz = QuizSession()
+        self.quiz.item = value
+
     # --- the one entry point -----------------------------------------------------------
 
-    def ask(self, text: str) -> Response:
+    def ask(self, text: str, truncated: bool = False) -> Response:
         """Answer one question. Never raises; a failure comes back as a spoken sentence.
 
         Args:
-            text: what LB said or typed. Already transcribed.
+            text:      what LB said or typed. Already transcribed.
+            truncated: the recording hit `max_s`, so this transcript is the FRONT of a sentence
+                       and the rest was never captured. Only the spoken path can know this;
+                       `answer_typed` never sets it, because typing has no cap.
+
+        Keyword-defaulted rather than required, so the three harnesses and the chat panel that
+        call `ask(text)` are untouched — and so that a caller which does not know about audio
+        cannot accidentally claim a transcript is complete when it has no way to tell.
         """
         t = Turnlog(mode=self.mode)
         self.last = t
@@ -260,7 +405,7 @@ class Engine:
             # both of those read an ordinary utterance, and while a draft is open there is no
             # such thing: "that was wrong" is a perfectly good thing to write in a note.
             if self.note_draft is not None:
-                return self._resolve_note(text, t)
+                return self._resolve_note(text, t, truncated=truncated)
 
             if self.mode == "quiz":
                 return self._quiz_turn(text, t)
@@ -627,8 +772,16 @@ class Engine:
 
     SOCIAL_INTENTS = frozenset({"hello", "thanks", "identity"})
 
+    # Promoted 2026-09-03 off `data/oddball.log`, for the same reason the social three were
+    # promoted on 2026-08-23: `instant.py` already had the right answer and the router was
+    # being paid to find out. The difference is scale — a greeting cost one wasted call, and
+    # an acknowledgement cost **16.2 minutes across thirty turns** because the persona model it
+    # reached had no timeout on it. See `_ACK_PHRASES`.
+    ACK_INTENT = "ack"
+
     FREE_INTENTS = frozenset({
-        "time", "date", "convert", "constant", "define", "calc"}) | SOCIAL_INTENTS
+        "time", "date", "convert", "constant", "define", "calc",
+        ACK_INTENT}) | SOCIAL_INTENTS
 
     def _free_turn(self, text: str, t: Turnlog) -> Response | None:
         """Answer without spending a Gemini call, or return None to let the router decide.
@@ -844,7 +997,10 @@ class Engine:
     def _dispatch(self, route: AgentRoute, text: str, t: Turnlog) -> Response:
         """Hand the question to the one agent that should answer it."""
         if route is AgentRoute.QUIZ:
-            return self._enter_quiz(t)
+            # `text` is passed now, where it was not before: "quiz me on calculus" names the
+            # deck, and the route alone throws that away. The subject is the difference between
+            # a quiz he asked for and a quiz he has to sit through.
+            return self._enter_quiz(text, t)
 
         if route is AgentRoute.UTILITY:
             return self._utility(text, t)
@@ -1000,13 +1156,19 @@ class Engine:
         return self._write_draft(NoteDraft(op="new", content=request.content,
                                            folder=request.folder, name=request.name), t)
 
-    def _resolve_note(self, text: str, t: Turnlog) -> Response:
+    def _resolve_note(self, text: str, t: Turnlog, truncated: bool = False) -> Response:
         """Read the answer to an open note question.
 
         **Read and cleared unconditionally, at the top.** The draft cannot survive its own turn
         under any branch below, which is the property `ask()`'s own comment says the permission
         gate got wrong the first time: a held question that stays held eats the next thing LB
         says about anything at all.
+
+        `truncated` is the single exception to that, added 2026-09-03, and it re-opens the draft
+        deliberately — see `_write_draft`. The rule it bends is "a draft must not survive its
+        own turn"; the reason it is safe to bend HERE is that LB is told, in the same breath,
+        that it is still open and that he should carry on. The bug the rule exists against is a
+        draft he does not know about.
         """
         from orchestrator.instant import is_sleep
         from orchestrator.note_intent import is_cancel
@@ -1025,11 +1187,41 @@ class Engine:
                              raw="Note abandoned by the user.")
 
         if draft.awaiting == "content":
-            draft.content = answer                 # verbatim. Never normalised, never trimmed.
+            # Verbatim. Never normalised, never trimmed — except that a continuation JOINS what
+            # came before it, because the previous recording stopped mid-sentence and replacing
+            # it would throw away the half he already said.
+            draft.content = f"{draft.content} {answer}".strip() if draft.truncated else answer
+
+            # ## Cut off mid-sentence: hold, do not commit
+            #
+            # Handled HERE rather than in `_write_draft`, and for both operations at once, so
+            # that `_write_draft` keeps meaning what its name says — commit a FINISHED draft.
+            #
+            # Nothing is written yet. That is deliberate and it is not a risk being taken
+            # lightly: `append_note` puts a `\n\n---\n\n` rule between blocks, so writing the
+            # front half now would put a horizontal rule through the middle of his sentence and
+            # the repair would be worse than the damage. Holding it in memory for one more
+            # utterance is exactly what the "what should I call it?" turn below has always done
+            # with dictated content, so this is the established window, not a new one.
+            if truncated:
+                self.note_draft = NoteDraft(op=draft.op, awaiting="content",
+                                            content=draft.content, folder=draft.folder,
+                                            name=draft.name, path=draft.path, truncated=True)
+                t.extras.append("note: TRUNCATED, still taking content")
+                return self._say(
+                    "I ran out of recording time there — keep going. I've got what you said so "
+                    "far and I'll add the rest to it.",
+                    raw=f"TRUNCATED at the recording cap. Held so far: {draft.content}",
+                    cards=[Card(CardKind.ERROR, "Cut off — still listening",
+                                f"{draft.content}\n\n*The recording hit its limit here. Carry "
+                                f"on and this gets saved as one piece; say 'never mind' to "
+                                f"drop it.*")])
+
             if draft.op == "append":
                 return self._write_draft(draft, t)
             if draft.name:
                 return self._write_draft(draft, t)
+
             self.note_draft = NoteDraft(op=draft.op, awaiting="name",
                                         content=draft.content, folder=draft.folder)
             t.extras.append("note: awaiting name")
@@ -1040,7 +1232,12 @@ class Engine:
         return self._write_draft(draft, t)
 
     def _write_draft(self, draft: NoteDraft, t: Turnlog) -> Response:
-        """Commit a finished draft — a new note, or an addition to one already found."""
+        """Commit a FINISHED draft — a new note, or an addition to one already found.
+
+        A draft cut off by the recording cap never reaches here; `_resolve_note` holds it open
+        instead, so that what lands in the vault is one whole sentence rather than the front of
+        one. See the truncation branch there for the recording that made that necessary.
+        """
         from tools.knowledge_vault import VAULT_DIR, append_note, write_note
 
         if draft.op == "append" and draft.path is not None:
@@ -1241,56 +1438,249 @@ class Engine:
             return resume_screen_look(pending)
         from agents.web_agent import resume_web_search
         return resume_web_search(pending)
-
     # --- quiz --------------------------------------------------------------------------
+    #
+    # ## The rule this whole section is built around
+    #
+    # LB, 2026-09-02: *"Make sure the question and answer knowledge is internal so it does not
+    # have to use an outside AI bot unless I ask for a further explanation of an answer."*
+    #
+    # Before that, `_quiz_turn` called `agents/quiz_agent.evaluate_quiz_answer` — a Gemini
+    # invoke — on **every single answer**. Ten questions was ten requests against a tier
+    # counted in requests at 20 per model name per day (D3), spent deciding whether "V = I R"
+    # matches "V = I * R". Revising for twenty minutes took the router, the persona agent and
+    # the firmware agent down with it for the rest of the day.
+    #
+    # So: `tools/quiz_grade.grade` marks, locally, for nothing. `_explain_quiz` is the only
+    # path out to a model, it runs only on an explicit request, and even then it serves the
+    # deck's own stored explanation first and calls the model only when there is none.
 
-    def _enter_quiz(self, t: Turnlog) -> Response:
-        from tools.quiz_manager import get_random_question
+    def _enter_quiz(self, text: str, t: Turnlog) -> Response:
+        """Start a quiz. The subject, if he named one, comes out of what he said."""
+        from tools.quiz_bank import deck_sizes, pick, resolve_subject
+        from tools.quiz_manager import bank_summary
+
+        asked_for = quiz_subject_of(text)
+        subject = resolve_subject(asked_for)
+
+        # He named a subject and there is no deck for it. Answered rather than silently widened
+        # to the whole bank: being asked about circuits after asking for philosophy is the kind
+        # of wrong that looks like the machine ignoring him, and the fix — upload the paper —
+        # is one he can act on immediately.
+        if asked_for and not subject:
+            t.extras.append(f"quiz: no deck for {asked_for!r}")
+            return Response(
+                speech=f"I have no questions on {asked_for}. {bank_summary()}",
+                cards=[Card(CardKind.MARKDOWN, "Question bank", _bank_card())],
+                route=AgentRoute.QUIZ.value,
+                raw=f"No deck for {asked_for!r}.\n\n{bank_summary()}")
+
+        item = pick(subject)
+        if item is None:
+            t.extras.append("quiz: empty bank")
+            return Response(speech=bank_summary(),
+                            cards=[Card(CardKind.MARKDOWN, "Question bank", _bank_card())],
+                            route=AgentRoute.QUIZ.value, raw=bank_summary())
+
+        sizes = deck_sizes()
+        pool = sizes.get(subject, 0) if subject else sum(sizes.values())
 
         self.mode = "quiz"
-        self.quiz_item = get_random_question()
-        t.extras.append("entered quiz")
-        question = self.quiz_item["question"]
+        self.quiz = QuizSession(subject=subject, item=item, asked={item.id})
+        t.extras.append(f"entered quiz ({subject or 'all subjects'}, {pool} available)")
+
+        scope = f"{subject} — {pool} question(s)" if subject else f"{pool} question(s)"
+        opening = f"Quiz time, {subject}." if subject else "Quiz time."
         return Response(
-            speech=f"Quiz time. Say 'exit quiz' whenever you want to stop. First question: {question}",
-            cards=[Card(CardKind.MARKDOWN, QUIZ_CHIP, f"**Q:** {question}")],
+            speech=f"{opening} Say 'exit quiz' whenever you want to stop, or 'explain that' "
+                   f"after an answer. First question: {_speakable_question(item)}",
+            cards=[Card(CardKind.MARKDOWN, QUIZ_CHIP, _question_card(item, scope))],
             route=AgentRoute.QUIZ.value,
-            raw=f"Entering Quiz Mode.\n\nFirst Question: {question}")
+            raw=f"Entering quiz mode ({scope}).\n\n{_question_card(item, scope)}")
 
     def _quiz_turn(self, text: str, t: Turnlog) -> Response:
-        from agents.quiz_agent import evaluate_quiz_answer
-        from tools.memory_manager import add_message
-        from tools.quiz_manager import get_random_question
+        """One utterance while the quiz lock is on. Marked HERE, on this machine.
 
+        The order of the checks is the behaviour, and each one sits above the marking for a
+        reason: leaving, being taught, asking the score and skipping are all things LB says
+        that are *not* answers, and marking them as answers would be the machine not listening.
+        """
         t.route = "quiz"
+        if self.quiz is None:                          # defensive: mode on, session gone
+            self.quiz = QuizSession()
 
         if _is_quiz_exit(text):
-            self.mode = "normal"
-            self.quiz_item = None
-            t.extras.append("left quiz")
-            return Response(speech="Alright, quiz over. Back to normal.", route="quiz",
-                            raw="Exiting Quiz Mode.")
+            return self._leave_quiz_reply(t)
+
+        # Above skipping and marking, because "explain that" is a request about the answer
+        # ALREADY given, and reading it as a new answer would mark him wrong for asking a
+        # question. This is the one branch that can reach a model.
+        if _matches(text, _QUIZ_EXPLAIN):
+            return self._explain_quiz(t)
+
+        if _matches(text, _QUIZ_SCORE):
+            t.extras.append("quiz: score")
+            tally = self.quiz.tally() or "nothing yet — you have not answered one"
+            return Response(speech=f"You are on {tally}.", route="quiz",
+                            raw=f"Score: {tally}.")
+
+        if _matches(text, _QUIZ_SKIP):
+            return self._next_quiz_question(t, prefix="Skipping that one.", skipped=True)
+
+        item = self.quiz.item
+        if item is None:
+            return self._next_quiz_question(t, prefix="Let me put a question to you.")
+
+        # THE MARKING. No network, no key, no quota. `grade` never raises — its own failure
+        # path returns an "I could not mark that" verdict rather than an exception, because an
+        # exception here would drop him out of quiz mode entirely.
+        from tools.memory_manager import add_message
+        from tools.quiz_grade import grade
 
         add_message("user", text)
         t0 = time.monotonic()
-        evaluation = evaluate_quiz_answer(
-            question=self.quiz_item["question"],
-            correct_answer=self.quiz_item["answer"],
-            user_answer=text)
+        result = grade(item, text)
+        t.agent_s = time.monotonic() - t0
+        t.extras.append(f"marked locally: {result.verdict} ({result.method})")
+
+        self.quiz.answered += 1
+        self.quiz.score += result.scored
+        self.quiz.last_item, self.quiz.last_grade = item, result
+        self.quiz.last_answer = text
+
+        # `result.why` is the whole sentence and already states the verdict. Prefixing another
+        # verdict word on top produced "Correct. Correct — B, act only on maxims..." and
+        # "Not quite. Not quite. The answer is..." in the first end-to-end run — said out loud,
+        # a stutter. The verdict still appears visually, as the marking card's title.
+        marking = result.why
+        add_message("assistant", marking)
+
+        return self._next_quiz_question(t, prefix=marking, marked=result, answered=item)
+
+    def _next_quiz_question(self, t: Turnlog, prefix: str = "", skipped: bool = False,
+                            marked=None, answered=None) -> Response:
+        """Put the next question up, carrying whatever was said about the last one."""
+        from tools.quiz_bank import load_all, load_deck, pick
+
+        session = self.quiz
+        if skipped and session.item is not None:
+            # A skipped question is still marked as ASKED, so it does not come straight back
+            # round. He skipped it; asking it again next is the machine arguing with him.
+            session.asked.add(getattr(session.item, "id", ""))
+            t.extras.append("quiz: skipped")
+
+        # Going round again, ANNOUNCED. `quiz_bank.pick` wraps silently once every question has
+        # been asked, which is the right behaviour for a drill and the wrong thing to do without
+        # saying so: the first end-to-end run re-asked question 2 straight after question 3 with
+        # no explanation, and that reads as the bug the old `random.choice` actually had.
+        pool = load_deck(session.subject) if session.subject else load_all()
+        if pool and all(i.id in session.asked for i in pool):
+            # The question just answered stays excluded, so "round again" never begins with the
+            # one still fresh in his ears.
+            session.asked = {getattr(session.item, "id", "")}
+            where = f" on {session.subject}" if session.subject else ""
+            prefix = (f"{prefix} That is every question I have{where} — going round again."
+                      ).strip()
+            t.extras.append("quiz: wrapped")
+
+        item = pick(session.subject, exclude=session.asked)
+        cards: list[Card] = []
+
+        # The marking goes on screen as well as into the air, because speech is heard once at
+        # ~160 words per minute (D32) and an answer he got wrong is exactly the thing worth
+        # reading twice. The rule in `engine/response.py`: never let a fact live only in speech.
+        if marked is not None and answered is not None:
+            cards.append(Card(CardKind.MARKDOWN, _mark_title(marked),
+                              _marking_card(answered, marked)))
+
+        if item is None:
+            # The bank is EMPTY — the wrap above means exhaustion can no longer land here, so
+            # this is the deck having been deleted underneath a running session. Not an error,
+            # and not a reason to drop him out of the mode: he can upload a paper and carry on.
+            session.item = None
+            tally = session.tally()
+            done = f" You finished on {tally}." if tally else ""
+            speech = (f"{prefix} I have run out of questions — there is nothing left in that "
+                      f"subject.{done} Upload a practice quiz and I can keep going.")
+            return Response(speech=speech.strip(), cards=cards, route="quiz",
+                            raw=f"{prefix}\n\nNo questions left.{done}")
+
+        session.item = item
+        session.asked.add(item.id)
+        scope = session.subject or "all subjects"
+        cards.append(Card(CardKind.MARKDOWN, QUIZ_CHIP, _question_card(item, scope)))
+
+        speech = f"{prefix} Next question: {_speakable_question(item)}".strip()
+        return Response(speech=speech, cards=cards, route="quiz",
+                        raw=f"{prefix}\n\n{_question_card(item, scope)}")
+
+    def _explain_quiz(self, t: Turnlog) -> Response:
+        """Explain the last answer. **The only place in the quiz that may call a model.**
+
+        Two stages, and the staging is the whole point. `explain_locally` returns whatever the
+        DECK knows — the worked solution the practice paper shipped with, the option he did not
+        pick, the terms his answer missed. That costs nothing and is often better than a model,
+        because it is the actual answer from the actual paper.
+
+        Only when the deck has nothing more to say is `agents/quiz_agent` reached, and that is
+        precisely the case LB carved out: *unless I ask for a further explanation*.
+        """
+        from tools.quiz_grade import explain_locally
+
+        session = self.quiz
+        # `last_item` before `item`, because by the time he says "explain that" the NEXT
+        # question is already on the table. Explaining that one would hand him the answer to a
+        # question he has not been given a chance to attempt — the quiz spoiling itself.
+        item = session.last_item or session.item
+        if item is None:
+            t.extras.append("quiz: nothing to explain")
+            return Response(speech="I have not asked you anything yet, so there is nothing to "
+                                   "explain. Give me an answer first.",
+                            route="quiz", raw="Nothing to explain yet.")
+
+        question = getattr(item, "question", "")
+        answer = getattr(item, "answer", "")
+
+        local = explain_locally(item, session.last_grade)
+        if local:
+            t.extras.append("quiz: explained from the deck, no API call")
+            return Response(
+                speech=local,
+                cards=[Card(CardKind.MARKDOWN, "Explanation", local)],
+                route="quiz", raw=local)
+
+        # The deck has the answer and nothing behind it. This is the one call.
+        from agents.quiz_agent import explain_quiz_answer
+
+        t.extras.append("quiz: explained by the agent (1 API call)")
+        t0 = time.monotonic()
+        explanation = explain_quiz_answer(question=question, correct_answer=answer,
+                                          user_answer=session.last_answer)
         t.agent_s = time.monotonic() - t0
 
-        graded = split(evaluation, route="quiz",
-                       fallback="I've put the marking on the screen.")
+        spoken = split(explanation, route="quiz",
+                       fallback="I've put the explanation on the screen.")
+        return Response(speech=spoken.speech, cards=list(spoken.cards), route="quiz",
+                        raw=explanation)
 
-        self.quiz_item = get_random_question()
-        nxt = self.quiz_item["question"]
+    def _leave_quiz_reply(self, t: Turnlog) -> Response:
+        """Exit, with the score.
 
-        add_message("assistant", f"{evaluation}\n\nNext: {nxt}")
-        return Response(
-            speech=f"{graded.speech} Next question: {nxt}",
-            cards=list(graded.cards) + [Card(CardKind.MARKDOWN, QUIZ_CHIP, f"**Q:** {nxt}")],
-            route="quiz",
-            raw=f"{evaluation}\n\nNext Question: {nxt}")
+        A quiz that does not tell you how you did is a quiz you cannot use to decide what to
+        revise next, which is the only reason to sit one.
+        """
+        tally = self.quiz.tally() if self.quiz else ""
+        subject = self.quiz.subject if self.quiz else ""
+        self.mode = "normal"
+        self.quiz = None
+        t.extras.append("left quiz")
+
+        if not tally:
+            return Response(speech="Alright, quiz over. Back to normal.", route="quiz",
+                            raw="Exiting quiz mode.")
+        where = f" on {subject}" if subject else ""
+        line = f"Quiz over. You got {tally}{where}."
+        return Response(speech=f"{line} Back to normal.", route="quiz", raw=line)
 
     def leave_quiz(self) -> None:
         """Break the lock from outside — the wake word's escape hatch.
@@ -1300,4 +1690,72 @@ class Engine:
         on being heard correctly.
         """
         self.mode = "normal"
-        self.quiz_item = None
+        self.quiz = None
+
+
+# ---------------------------------------------------------------------------------------
+# Saying a question out loud, and putting it on screen
+#
+# Two forms of every question, for the reason `engine/response.py` gives: speech is heard once
+# at ~160 words per minute and a card is read at leisure. A multiple-choice question is the
+# sharpest case of it in the repo — four options is a lot to hold from one hearing, and the
+# letters mean nothing without their text, so both halves carry all four.
+# ---------------------------------------------------------------------------------------
+
+def _speakable_question(item) -> str:
+    """The question as it should be READ ALOUD, options included."""
+    text = getattr(item, "question", "") or ""
+    choices = getattr(item, "choices", {}) or {}
+    if not choices:
+        return text
+    spoken = ". ".join(f"{letter}, {body}" for letter, body in sorted(choices.items()))
+    return f"{text} Your options are: {spoken}."
+
+
+def _question_card(item, scope: str = "") -> str:
+    """The question as Markdown, for the chat panel."""
+    lines = [f"**Q:** {getattr(item, 'question', '')}"]
+    choices = getattr(item, "choices", {}) or {}
+    if choices:
+        lines.append("")
+        lines += [f"- **{letter})** {body}" for letter, body in sorted(choices.items())]
+
+    # Where it came from, because a question LB thinks is wrong is one he will want to check
+    # against the paper — and "page 4 of the review packet" is what makes that a ten-second job
+    # rather than a hunt.
+    source = getattr(item, "source", "")
+    if source:
+        page = getattr(item, "page", 0)
+        lines += ["", f"*{source}{f', page {page}' if page else ''}*"]
+    elif scope:
+        lines += ["", f"*{scope}*"]
+    return "\n".join(lines)
+
+
+def _mark_title(result) -> str:
+    """The card heading for a marked answer, so the verdict is visible without reading it."""
+    return {"correct": "Correct", "partial": "Partly right",
+            "incorrect": "Not quite"}.get(getattr(result, "verdict", ""), "Marked")
+
+
+def _marking_card(item, result) -> str:
+    """What was asked, what the answer was, and how it was marked — as Markdown."""
+    lines = [f"**Q:** {getattr(item, 'question', '')}", "",
+             f"**Answer:** {getattr(item, 'answer', '')}", "",
+             getattr(result, "why", "")]
+    if getattr(result, "verdict", "") != "correct":
+        lines += ["", "*Say 'explain that' for the working.*"]
+    return "\n".join(lines)
+
+
+def _bank_card() -> str:
+    """The question bank as a Markdown table. Shown when a subject does not exist."""
+    from tools.quiz_bank import deck_sizes
+
+    sizes = deck_sizes()
+    if not sizes:
+        return ("The question bank is empty.\n\nUpload a practice quiz or a question-and-answer "
+                "PDF with the paperclip and tell me to file it as a **quiz**.")
+    lines = ["| Subject | Questions |", "| --- | --- |"]
+    lines += [f"| {name} | {count} |" for name, count in sizes.items()]
+    return "\n".join(lines)

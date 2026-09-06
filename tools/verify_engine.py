@@ -255,11 +255,32 @@ for text in STAYS:
 
 route_to(AgentRoute.QUIZ)
 eng = Engine()
-_quiz = types.ModuleType("tools.quiz_manager")
-_quiz.get_random_question = lambda: {"question": "What is Ohm's Law?", "answer": "V = I * R"}
-sys.modules["tools.quiz_manager"] = _quiz
+
+# The BANK is stubbed and the GRADER is not, and that asymmetry is the point of this section
+# after the 2026-09-02 rewrite. `tools/quiz_grade.py` is local, offline and free, so a harness
+# that stubbed it would be certifying a mock instead of the marking LB actually gets. The bank
+# is stubbed only so the checks below do not depend on what is on his disk today.
+from tools.quiz_bank import QuizItem                                 # noqa: E402
+
+_QUESTION = QuizItem(question="What is Ohm's Law?", answer="V = I * R", subject="Electronics")
+_bank = types.ModuleType("tools.quiz_bank")
+_bank.QuizItem = QuizItem
+_bank.pick = lambda subject="", exclude=None: _QUESTION
+_bank.resolve_subject = lambda spoken: ""
+_bank.deck_sizes = lambda: {"Electronics": 1}
+sys.modules["tools.quiz_bank"] = _bank
+
+_manager = types.ModuleType("tools.quiz_manager")
+_manager.get_random_question = lambda: _QUESTION.to_dict()
+_manager.bank_summary = lambda: "I have 1 question."
+sys.modules["tools.quiz_manager"] = _manager
+
+# The agent may now be reached ONLY by an explicit "explain that", so any call to it during
+# ordinary marking is a regression — counted rather than merely stubbed.
+_explained = []
 _grader = types.ModuleType("agents.quiz_agent")
-_grader.evaluate_quiz_answer = lambda **kw: "Correct! Voltage equals current times resistance."
+_grader.explain_quiz_answer = lambda **kw: (_explained.append(kw), "Because V over I is R.")[1]
+_grader.evaluate_quiz_answer = _grader.explain_quiz_answer
 sys.modules["agents.quiz_agent"] = _grader
 
 r = eng.ask("quiz me")
@@ -274,8 +295,23 @@ r = eng.ask("voltage equals current times resistance")
 check(routed == [], "while locked, an answer is NOT sent to the router", f"routed={routed}")
 check(eng.mode == "quiz", "and the lock holds")
 
+# The headline of the rewrite. Marking used to be one Gemini call PER ANSWER against a
+# 20-a-day tier; it is now `tools/quiz_grade.grade`, on this machine, for nothing.
+check(_explained == [], "marking an answer calls NO model — it is graded locally",
+      f"the agent was called {len(_explained)} time(s)")
+check(eng.quiz is not None and eng.quiz.answered == 1,
+      "...and the answer was actually marked, not skipped")
+check(eng.quiz.score == 1.0, "...correctly: 'voltage equals current times resistance' is V=IR",
+      f"score {eng.quiz.score}")
+
+r = eng.ask("explain that")
+check(len(_explained) <= 1, "'explain that' is the ONLY thing that may reach the model")
+check("R" in r.raw or "V" in r.raw, "...and it explains the answer just marked", r.raw[:60])
+
 r = eng.ask("exit quiz")
 check(eng.mode == "normal", "the exit phrase releases the lock")
+check("1 out of 1" in r.speech or "1 out of 1" in r.raw,
+      "...and leaving reports the score, which is the only reason to sit a quiz", r.speech)
 
 eng.mode = "quiz"
 eng.leave_quiz()

@@ -1,0 +1,11 @@
+stamp,case,grader,median_ms,requests,source
+2026-09-02T08:09:19,first answer of the session (cold sympy import),local,357.47,0,measured
+2026-09-02T08:09:19,mcq-letter,local,0.005,0,measured
+2026-09-02T08:09:19,mcq-spoken,local,0.89,0,measured
+2026-09-02T08:09:19,numeric,local,8.422,0,measured
+2026-09-02T08:09:19,numeric-range,local,0.272,0,measured
+2026-09-02T08:09:19,symbolic,local,1.187,0,measured
+2026-09-02T08:09:19,symbolic-rearranged,local,15.508,0,measured
+2026-09-02T08:09:19,short-fuzzy,local,0.248,0,measured
+2026-09-02T08:09:19,prose,local,0.375,0,measured
+2026-09-02T08:09:19,any answer,remote (the old path),820.0,1,cited: 2026-08-29-turn-latency.csv

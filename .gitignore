@@ -42,6 +42,20 @@ data/projects/**
 !data/projects/
 !data/projects/.gitkeep
 
+# Question decks built from LB's practice papers by tools/quiz_import.py, and the papers
+# themselves. His coursework, and not ours to redistribute — a professor's review packet is
+# somebody's copyright, and the questions parsed out of it are the same material in another
+# shape. Same call as quiz_data.json two rules up. The folders stay tracked via .gitkeep so a
+# fresh clone shows where an uploaded quiz lands, rather than tools/file_manager.py creating a
+# directory nobody expected. (data/**/*.pdf below already covers the PDFs; the explicit rule
+# here is so the reason is written down next to the deck rule it belongs with.)
+data/quiz/**
+!data/quiz/
+!data/quiz/.gitkeep
+data/quiz_pdfs/**
+!data/quiz_pdfs/
+!data/quiz_pdfs/.gitkeep
+
 # Frames grabbed by tools/screen_capture.py when LB asks what is on his screen. His desktop,
 # which may have anything on it — this is the one ignore rule in the file that is about privacy
 # rather than about size or rebuildability. Kept on disk (see KEEP_FRAMES) so he can open the

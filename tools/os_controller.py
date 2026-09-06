@@ -334,6 +334,23 @@ class Outcome:
 # Both shells are covered, because `shell=True` on Windows runs `cmd.exe` and the model will
 # write PowerShell regardless — so `del /s /q` and `remove-item -recurse -force` are the same
 # refusal reached two ways, and leaving either out means the other one is a bypass.
+# `-Recurse`, as PowerShell will actually accept it. **A cmdlet parameter may be abbreviated to
+# any unambiguous prefix**, and `-Recurse` is the only parameter of `Remove-Item` beginning with
+# `r` — so `-r` deletes a tree just as surely as `-Recurse` does, and `\s-recurse\b` never saw
+# it. Measured 2026-09-02: `Remove-Item C:\Users\user -Rec -Force` and the `-r` form both
+# passed a blocklist that caught the spelled-out version.
+#
+# Written as a descending alternation rather than `-rec?u?r?s?e?` so it is readable and cannot
+# accidentally match a different flag: every branch here is a genuine prefix of "recurse".
+_RECURSE = r"-r(?:ecurse|ecurs|ecur|ecu|ec|e)?\b"
+
+# The delete verbs, cmdlet and alias. Collected once because three patterns need the same set
+# and a list that drifts between them is a hole in whichever copy was not updated.
+_DELETE = r"(?:remove-item|ri|rm|rmdir|del|erase)"
+
+# Recursive enumeration, which is the LEFT half of the piped form below.
+_ENUMERATE = r"(?:get-childitem|gci|ls|dir|get-item|gi)"
+
 FORBIDDEN: list[tuple[re.Pattern, str]] = [
     # --- destroying the filesystem -------------------------------------------------------
     # cmd. `/s` is the recursive one; `/q` merely suppresses the "are you sure". `/s` alone is
@@ -341,9 +358,25 @@ FORBIDDEN: list[tuple[re.Pattern, str]] = [
     (re.compile(r"\bdel\b(\s+/\w+)*\s+/s\b|\bdel\b\s+/s\b"), "a recursive delete"),
     (re.compile(r"\b(rd|rmdir)\b(\s+/\w+)*\s+/s\b"), "a recursive directory removal"),
     # PowerShell. -recurse is the whole risk; -force only adds hidden and read-only files.
-    (re.compile(r"\bremove-item\b[^|]*\s-recurse\b"), "a recursive delete"),
-    (re.compile(r"\b(ri|rm|rmdir|del|erase)\b[^|]*\s-recurse\b"),
+    (re.compile(rf"\bremove-item\b[^|]*\s{_RECURSE}"), "a recursive delete"),
+    (re.compile(rf"\b(ri|rm|rmdir|del|erase)\b[^|]*\s{_RECURSE}"),
      "a recursive delete through a PowerShell alias"),
+
+    # The same delete, written the way a person actually writes it: the recursion on the LEFT
+    # of the pipe and the deletion on the right.
+    #
+    #     Get-ChildItem C:\Users\user -Recurse | Remove-Item -Force
+    #
+    # Every pattern above uses `[^|]*` to keep a match inside one pipeline segment, which is
+    # correct for them and is exactly why none of them can see this: the `-Recurse` belongs to
+    # the enumeration, not to the delete. Measured 2026-09-02 — it was allowed, and so was the
+    # fully aliased `gci C:\ -Recurse | ri -Force`.
+    #
+    # `.*` rather than `[^|]*` here, deliberately and only here, because crossing the pipe IS
+    # the thing being detected — and it must cross MORE than one, since a `Where-Object` in the
+    # middle is the normal way to write this.
+    (re.compile(rf"\b{_ENUMERATE}\b[^|]*\s{_RECURSE}.*\|.*\b{_DELETE}\b"),
+     "a recursive delete written as a pipeline"),
     # A drive root or the profile as the TARGET, with or without a recursion flag.
     (re.compile(r"\b(del|rd|rmdir|remove-item|ri)\b[^|]*\s"
                 r"([a-z]:\\?\s*$|%userprofile%|\$env:userprofile|\$home)"),
@@ -503,8 +536,25 @@ def normalise(command: str) -> str:
 
     Every pattern in `_WINDOWS` is therefore written lower-case; an uppercase letter in one is
     a pattern that can never match.
+
+    ## Backticks are removed, and that is a bypass being closed
+
+    The backtick is **PowerShell's own escape character**, and it is a no-op in front of an
+    ordinary letter. So `Remove-It` + backtick + `em` is `Remove-Item` to the shell and is not
+    `remove-item` to a regex — every filesystem pattern below walked straight past it. Stripping
+    them here rather than in each pattern is the same call as folding case: a normalisation the
+    whole table gets for free, in the one place that cannot be forgotten.
+
+    Nothing legitimate is harmed by it. This function's output is only ever *matched against*;
+    `run_command` executes the original string, so a real escape like `` `n `` still does what
+    it did.
+
+    **This does not make the blocklist complete and nothing can.** `& ('Remove' + '-Item')`
+    reaches the same cmdlet through string concatenation, which no pattern list can see. See
+    the module docstring: this is the weaker half of the pair, and the approval gate in front
+    of it is the half that matters.
     """
-    return re.sub(r"\s+", " ", (command or "").strip()).lower()
+    return re.sub(r"\s+", " ", (command or "").replace("`", "").strip()).lower()
 
 
 def active_table_name() -> str:

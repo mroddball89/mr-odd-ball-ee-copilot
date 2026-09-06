@@ -43,7 +43,7 @@ When nothing free matches, `router.py` uses Pydantic structured output
 | `HARDWARE` | `agents/hardware_agent.py` | PCB trace width via IPC-2221 (`tools/trace_calculator.py`); reads your own KiCad schematics and boards (`tools/kicad_parser.py`) |
 | `MATH` | `agents/math_agent.py` | writes and runs Python in a REPL sandbox |
 | `OS` | `agents/os_agent.py` | runs PowerShell commands on this PC, and opens desktop applications (`tools/app_launcher.py`) — **asks first**, for both |
-| `QUIZ` | `agents/quiz_agent.py` | tutor mode; grades conceptually, not word-for-word |
+| `QUIZ` | `tools/quiz_grade.py` | tests you on your own uploaded papers, on ANY subject. **Marked locally — no API call.** `agents/quiz_agent.py` is reached only when you ask for a further explanation |
 | `WEB` | `agents/web_agent.py` | DuckDuckGo search — **asks first** |
 | `ACADEMIC` | `agents/academic_agent.py` | coursework deadlines from your **live Canvas feed** (`tools/canvas_sync.py`), and course policies from your syllabus notes in the vault. Canvas owns the dates; the notes own everything else |
 | `SCREEN` | `agents/screen_agent.py` | takes a screenshot and says what is on it — *"what am I looking at"*, *"what does that error say"* — **asks first** (`tools/screen_capture.py`) |
@@ -58,7 +58,7 @@ Most note-taking never reaches this table at all — see **Taking notes** below.
 `OS`, `WEB` and `SCREEN` are the only routes that can touch the system, the network, or your
 display, and none of them acts without approval. The exact command, query or argv is shown on a
 card **before** the question is asked, and nothing runs without a clear yes — silence, a mumble
-and a refusal all decline. `tools/os_controller.py` also holds a **33-pattern blocklist** and a
+and a refusal all decline. `tools/os_controller.py` also holds a **34-pattern blocklist** and a
 15-second timeout, applied even after approval.
 
 > **The blocklist is platform-specific, and it has been wrong once.** Every pattern was Linux
@@ -68,6 +68,34 @@ and a refusal all decline. `tools/os_controller.py` also holds a **33-pattern bl
 > match and answers "allowed". The measurement is in
 > `media/data/2026-08-26-windows-blocklist-gap.csv` and the lesson is **L23**. The module now
 > refuses to import off Windows for exactly this reason.
+
+> **And the gate in front of it said yes to "Don't run it".** Until 2026-09-02, six ordinary
+> refusals approved shell execution — measured, not theorised:
+>
+> ```
+> is_yes("Don't run it")        = True    <-- APPROVES EXECUTION
+> is_yes("Of course not")       = True
+> is_yes("What does that do?")  = True
+> ```
+>
+> Three causes, and the first was doing the work. `normalise` claimed in its own docstring to
+> drop apostrophes and actually replaced them with a space, so `don't` became `don t`, the
+> refusal list never matched it, and `"run it"` in the *yes* list picked it up. On top of that,
+> bare `"do"`, `"course"` and `"please"` were yes words — so every clarifying question was
+> consent — and nothing knew that asking is not agreeing.
+>
+> Meanwhile the blocklist behind it missed `Remove-Item -Rec` (PowerShell accepts any
+> unambiguous prefix), `Get-ChildItem -Recurse | Remove-Item` (the recursion is on the far side
+> of the pipe), and `` Remove-It`em `` (the backtick is PowerShell's own escape character).
+> **Both halves failed on the same sentence.** See **D54**; `tools/verify_consent.py` is the
+> corpus of what a person actually says at a permission prompt, and its `--probe` puts all
+> three defects back and takes 20 checks red.
+
+Anything short of a clear yes declines. `_NO` is deliberately wide — *"of course not"*,
+*"rather not"*, *"hold on"*, *"wait"*, *"not yet"* all refuse — and `_YES` is deliberately
+narrow, because a false no costs one repeated question and a false yes runs a command you
+refused. A **question** is neither: ask *"what does that do?"* at a voice gate and he asks you
+again rather than acting.
 
 Opening an application goes through the same gate, and what is on the card comes from the
 machine's own Start Menu entry rather than from anything a model wrote — so what is approved,
@@ -80,6 +108,30 @@ the scrollback — so the default is to ask. But you are the one who asked to be
 `ODDBALL_SCREEN_CONFIRM=0` makes it instant and `ODDBALL_SCREEN=0` turns the route off entirely.
 Frames are kept in `data/screen/` (gitignored) so you can open the exact image that was sent
 rather than take it on trust.
+
+## Hearing you, and not hearing himself
+
+Three separate things stop him acting on sound that was not a question, and they sit at
+different layers because they catch different failures.
+
+| Layer | What it stops | Where |
+|---|---|---|
+| **Mic gate** | his own voice out of the speaker — mute while speaking, plus a 0.35s tail | `audio/gate.py` |
+| **Wake tail** | the last syllable of *your* wake word, arriving after the detector fired | `audio/listen.py` |
+| **Credibility** | a transcript `base.en` invented out of near-silence | `orchestrator/credible.py` |
+
+**The wake tail is the subtle one.** openWakeWord fires when its rolling window is convinced,
+which is *before* you have finished saying "…Odd Ball" — so the recorder opened into your own
+last syllable and treated it as the start of a question. Measured over eight days: **29 of the
+55 captures that followed a wake held 0.32s or less of voiced audio**, transcribing to `ball.`,
+`Bobo.`, `elbow.`, `Mr. Albo.` One of those cost 134 seconds of a frozen face.
+
+It is fixed by **delaying the trigger, not by muting the microphone.** Frames in the first
+0.25s are still recorded and still counted; they simply may not *begin* an utterance. Because
+the pre-roll is longer than that window, a real one-breath question — "Hey Mr Odd Ball, what
+time is it?" — comes back byte-identical to a capture with no window at all. A wake tail,
+followed by silence rather than speech, never triggers, and the capture correctly returns
+silent: you get "What's up LB?" and a second chance. `wake_tail_s = 0.0` switches it off.
 
 ## Looking at the screen
 
@@ -455,5 +507,64 @@ the dates were extracted once, and the check is a JSON read. See `docs/DECISIONS
 
 ## Quiz mode
 
-Ask to be quizzed and the router is bypassed until you say `exit quiz`; questions come from
-`quiz_data.json`, which is created with three defaults if it does not exist.
+Ask to be quizzed and the router is bypassed until you say `exit quiz`.
+
+**The questions are yours, and the marking never leaves the machine.** Upload a practice quiz,
+a past paper, a review sheet or a problem set with the paperclip, tell him to file it as a
+`quiz`, and `tools/quiz_import.py` reads the questions and answers straight out of the PDF —
+no model, no API call, no quota. They go into a deck per subject under `data/quiz/`, and
+`quiz_data.json` is still read as a deck of its own rather than being migrated or deleted.
+
+Any subject, not just engineering:
+
+```
+you   > I've uploaded phil201_practice_midterm.pdf
+odd   > Filed it to data/quiz_pdfs/ and I am reading the questions out of it now...
+you   > quiz me on philosophy
+odd   > Quiz time, Philosophy. First question: Who argued that the unexamined life is not
+        worth living? Your options are: A, Plato. B, Aristotle. C, Socrates. D, Descartes.
+you   > Socrates
+odd   > Correct - C, Socrates. Next question: ...
+```
+
+### What it understands
+
+| You say | What happens |
+|---|---|
+| the letter, or the option read aloud | both work — `two x` finds option B if B is `2x` |
+| `voltage equals current times resistance` | marked against `V = I * R` via sympy |
+| `R = V / I` for an answer of `V = I * R` | correct — a rearrangement is knowing it better |
+| `1.9 volts` for `Around 1.8V to 2.0V` | correct — a range answer accepts anything inside it |
+| `4.7 ohms` for `4.7k ohms` | **partial** — "the digits are right and the scale is not" |
+| `x squared over two` for `x²/2 + C` | **partial** — "you are out by a constant" |
+| `skip`, `next question` | move on without being marked |
+| `how am I doing` | the running score |
+| `explain that` | the paper's own worked solution, if it had one |
+| `exit quiz` | leaves, and tells you what you scored |
+
+### The one place it may call out
+
+`explain that` — and only when the deck has nothing more to give. If the paper you uploaded
+shipped its worked solutions, `tools/quiz_grade.explain_locally` serves those and the model is
+never reached. If it did not, `agents/quiz_agent.explain_quiz_answer` makes **one** call.
+
+Everything else — picking the question, marking the answer, the score, the wrap when you have
+been round the deck — is local. `tools/verify_quiz.py` proves it by running a whole session
+with `socket.socket` monkeypatched to raise.
+
+Before 2026-09-02 every single answer was one Gemini call, so a ten-question quiz spent half of
+the 20-a-day free tier (D3) and revising for a midterm took the router and the persona agent
+down with it. Marking is now 0.6 ms and zero requests — `media/charts/quiz-marking.svg`.
+
+### Managing the bank
+
+```
+python tools/quiz_bank.py --list                 # subjects and how many questions each
+python tools/quiz_bank.py --show calculus        # read a deck
+python tools/quiz_import.py paper.pdf --dry-run  # parse without writing
+python tools/quiz_grade.py "V = I*R" "v equals i times r"     # mark one answer
+```
+
+A scanned photocopy works: pages with no text layer go through `tools/pdf_ocr.py`, the same
+path the image-only datasheets use. A paper whose layout it cannot read yields nothing **and
+says so** — it will not leave you thinking questions went in when they did not.

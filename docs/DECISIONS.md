@@ -3090,3 +3090,353 @@ to record which agent ran. Reverted: the corpus band dispatches its own turn, ex
 characters of text. `tools/vector_db.py` detected it and refused to write an empty store, which
 is L19 working as designed. Replaced with the official Raspberry Pi Camera Module 3 and Sensor
 Assembly product briefs: 14 usable pages, 34 chunks. FIRMWARE is grounded for the first time.
+
+---
+
+## D53 — The quiz marks on this machine, and the model is a thing LB asks for
+
+**2026-09-02.** LB: *"check over the quiz function its not working well — I want to upload PDFs
+of questions and answers or practice quizzes from calculus to philosophy and all other classes
+I will take. Make sure the question and answer knowledge is INTERNAL so it does not have to use
+an outside AI bot unless I ask for a further explanation of an answer."*
+
+### What the quiz actually was
+
+Three hardcoded electrical-engineering questions in `quiz_data.json`, `random.choice` over
+them, and **one Gemini call per marked answer**.
+
+The call is the interesting part. On a free tier counted in REQUESTS at 20 per model name per
+day (D3), a ten-question quiz spent **half of a day's budget** deciding whether "V = I R"
+matches "V = I * R". Two quizzes before lunch and the router, the persona agent and the
+firmware agent were all silent until midnight. Revising for a midterm broke the rest of the
+assistant, and nothing in the interface said that was the trade being made.
+
+That is not a cost to optimise, it is a job given to the wrong thing. Marking a known answer
+against a spoken one is string comparison, arithmetic and a little algebra.
+
+### Three modules, and the boundary between them
+
+    tools/quiz_bank.py     decks per subject under data/quiz/, ids that are content hashes
+    tools/quiz_import.py   a practice paper in, questions out — regex over the PDF's own text
+    tools/quiz_grade.py    the marking. No network, no key, no quota, ever.
+
+`agents/quiz_agent.py` still exists and may still call Gemini, but it is now reached from
+exactly one place: `Engine._explain_quiz`, after LB has said "explain that", **and only when
+`explain_locally` has already reported that the deck holds nothing further**. A paper that
+shipped its worked solutions costs zero calls to revise from, which is the common case.
+
+### The importer is a parser, and that was the decision
+
+The obvious way to turn a PDF of questions into structured questions is to hand it to a model
+and ask for JSON. Ruled out by the instruction, and correct for three further reasons: a
+40-question paper is more than one request's worth of context; the free tier is counted in
+requests; and the result is a bank LB cannot audit against the paper it came from.
+
+**A practice exam is already structured** — that is what makes it a practice exam. It is
+numbered, its options are lettered, its key is a list of letters. Reading that is regex, and
+regex is free, offline, deterministic and reviewable. Four layouts are handled: numbered with a
+separate answer key, numbered with `Answer:` inline, `Q:`/`A:` pairs, and `Question:`/`Answer:`.
+
+Refusing matters more than parsing. A syllabus and a deck of lecture slides both have numbered
+bullets, and a bank contaminated with "3. Course Objectives" is worse than an empty one. So an
+item is kept only when it has a question AND an answer from a key or a marker — and a paper
+that yields nothing **says so**, rather than leaving him thinking it worked.
+
+### Four bugs the harness found that reasoning did not
+
+1. **A hyphen is not a minus sign.** The gate deciding whether to hand a string to sympy was
+   "does it contain one of `+-*/^=` or a digit". `Inter-Integrated Circuit` passed it, was
+   parsed as `inter - integrated*circuit`, and marked WRONG against a correct answer. Every
+   hyphenated technical term in the bank would have graded that way.
+2. **`answer` is a word that appears in questions.** The inline-answer regex was unanchored, so
+   the question "A question with no answer anywhere?" matched on its own text and stored
+   "anywhere?" as the answer — and counted as a successful parse.
+3. **`\f` is not a line start.** Pages were joined with a bare form feed, so `^` in MULTILINE
+   mode never followed it and a question at the top of a page was invisible. Measured on a
+   two-page fixture: question 3, the only one on page 2, was silently dropped.
+4. **`2x` is not a number.** `infer_kind` classified it as numeric, and the numeric grader then
+   marked a bare "2" correct against an answer of "2x". Fixed by requiring a unit rather than
+   any letter after the digits — `2V` is two volts, `2x` is algebra.
+
+### What is measured
+
+`media/data/2026-09-02-quiz-marking.csv`, `media/charts/quiz-marking.svg`. Local marking is
+**0.005-15.5 ms** depending on the grader, median 0.63 ms, and the first answer of a session
+costs 357 ms for `import sympy` — reported separately, because a one-off import quoted as a
+per-answer cost is a lie about the steady state.
+
+The remote figure is **cited rather than re-measured** (2026-08-29 turn latency, 820 ms), and
+the CSV's `source` column says so per row. Re-timing it would have spent the quota this change
+exists to save.
+
+The latency was never the complaint. **10 requests to 0, against a ceiling of 20 a day**, is
+the number this was about.
+
+### What it will not do
+
+It has no semantics. "It is how much a material opposes current" scores 0.25 coverage against
+"Resistance is the opposition to current flow" and comes back **partial**, with the official
+answer shown. That is the honest verdict for a machine matching content words, and the fix is
+not to lower the threshold until wrong answers pass — a grader that flatters is a grader that
+cannot be revised against. `explain that` is the escape hatch, and it is the one LB asked for.
+
+---
+
+## D54 — "Don't run it" meant yes, and the blocklist behind it was not the backstop it looked like
+
+**2026-09-02.** Taken off the board as a one-line tidy — *"delete `do`, `please`, `course` from
+`_YES`"*. Measured first, on the real function, before touching anything:
+
+    is_yes("Don't run it")           = True    <-- APPROVES SHELL EXECUTION
+    is_yes("don't do that")          = True
+    is_yes("Of course not")          = True
+    is_yes("What does that do?")     = True
+    is_yes("Do I need to do that?")  = True
+    is_yes("please read that back")  = True
+
+It was not one line and it was not the bare words.
+
+### Three defects, and the first is the one nobody had connected
+
+**1. `normalise` did the opposite of what its own docstring said.** The docstring: *"Apostrophes
+are dropped rather than kept so `don't` and `dont` are the same word."* The code:
+`re.sub(r"[^a-z0-9 ]+", " ", ...)` — every non-alphanumeric became a **space**. So `don't`
+became `don t`, which is two words and neither of them is `dont`, and `_NO` never matched an
+apostrophised refusal in the module's entire life. `is_yes("dont do that")` was False;
+`is_yes("don't do that")` was True. The difference is one character LB cannot hear himself say.
+
+This was already on the board — filed under *"Also found, lower"* as "`classify_yes.normalise`
+contradicts its docstring so `don't` and `dont` differ". It was recorded as a **tidiness
+issue**. It was the gate opening on a refusal, and the reason nobody saw that is that the
+consequence lives one function away from the defect: you have to notice that `_YES` still
+contains "run it" to see that "Don't run it" lands on it.
+
+**2. Bare words in `_YES`.** `"do"`, `"course"`, `"please"`. Every clarifying question at a
+gate contains one, and *"of course not"* contains a whole yes phrase.
+
+**3. A question was treated as an answer.** Nothing in the function knew that asking is not
+consenting.
+
+### The rule, written down
+
+**`_NO` may be generous; `_YES` must be strict.** A false no costs one repeated question; a
+false yes runs a command LB refused. The module docstring had said *"anything short of a clear
+yes is a no"* from the beginning and the word lists did not honour it. `_NO` now carries the
+whole refusal family — `"of course not"`, `"rather not"`, `"hold on"`, `"wait"`, `"not yet"` —
+because being wide there costs nothing.
+
+`is_question()` returns None before either list is consulted, with one exception ahead of it: an
+utterance that is **exactly** a listed phrase is an answer, so *"why not"* stays agreement
+despite starting with an interrogative. Only an exact whole-string match qualifies, so nothing
+longer can use it to get past the question rule.
+
+At a voice gate, None makes `engine/turn.py` **ask again** rather than decline silently — so
+"what does that do?" now gets the question repeated, which is a better outcome than either the
+old behaviour (run it) or a silent close.
+
+### The blocklist was not the backstop it appeared to be
+
+D4's design is: the model composes, a human approves, the blocklist backstops. The third leg
+was measured at the same time:
+
+    BLOCKED   Remove-Item C:\Users\user -Recurse -Force
+    ALLOWED!  Remove-Item C:\Users\user -Rec -Force
+    ALLOWED!  Remove-Item C:\Users\user -r -Force
+    ALLOWED!  Get-ChildItem C:\Users\user -Recurse | Remove-Item -Force
+    ALLOWED!  gci C:\Users\user -Recurse | ri -Force
+
+Three causes:
+
+- **A parameter may be abbreviated to any unambiguous prefix.** `-Recurse` is the only
+  `Remove-Item` parameter beginning with `r`, so `-r` deletes a tree and `\s-recurse\b` never
+  sees it. The patterns now use a prefix alternation.
+- **`[^|]*` cannot cross a pipe, and the recursion is on the other side of it.** Every
+  filesystem pattern deliberately stays inside one pipeline segment — correct for them, and
+  exactly why none could see `Get-ChildItem -Recurse | Remove-Item`, which is how a person
+  writes it. A new pattern matches that shape specifically, using `.*` because crossing the
+  pipe *is* the thing being detected, and crossing more than one because a `Where-Object` in
+  the middle is normal.
+- **The backtick is PowerShell's own escape character** and a no-op before an ordinary letter,
+  so `Remove-It` + backtick + `em` is the cmdlet to the shell and is not `remove-item` to a
+  regex. `normalise()` now strips them, alongside the case folding, in the one place that
+  cannot be forgotten.
+
+**This does not make the blocklist complete and nothing can.** `& ('Remove' + '-Item')` reaches
+the same cmdlet by concatenation and no pattern list will ever see it. That is stated in
+`os_controller`'s docstring and it is why the approval gate is the half that matters — which is
+the whole reason both were fixed in one change rather than either alone.
+
+### `tools/verify_consent.py`
+
+`verify_engine` proved a gate opens and closes, and passed throughout. It tested the gate with
+the two phrases its author had in mind. The new harness is a corpus of **what a person actually
+says**: 39 refusals that must never approve, 24 approvals that must still work, and a section
+that runs both halves of D4 against one sentence — *"Don't run it"* against
+`Remove-Item C:\Users\user -Rec -Force`.
+
+`--probe` restores all three `is_yes` defects together (fixing only the word lists still leaves
+"Don't run it" approving, because the normaliser destroys the "don't" before any list is
+consulted) and takes 20 checks red, 12 of them real spoken refusals.
+
+---
+
+## D55 — Three things the log knew, and one of them had lost his coursework
+
+**2026-09-03.** LB asked what Mr Odd Ball had struggled with lately. `data/oddball.log` —
+23,606 lines, eight days, **zero errors and three warnings**. None of what follows had surfaced
+as a bug report, because none of it crashes.
+
+### The cap cut his thesis in half and said "Added to your note."
+
+2026-09-02, 17:10:37, dictating into the vault:
+
+    WARNING utterance hit the 15s cap — keeping what we have
+    heard 'My thesis is driven by the inherent profit maximization principles of capitalism,
+           treating essential medicines as market commodities rather than public goods,
+           incentivizes'
+    turn: route 0ms -> note | note appended        <- extras: "hit max_s, note appended"
+
+Three failures in sequence. The cap fired mid-clause; the fragment was **committed and
+announced as a clean save**; and the remainder, spoken ninety seconds later, was no longer
+recognised as note content — it routed to GENERAL, was answered as chit-chat by the persona
+model, and was discarded. `vault/notes/english research question.md` still ends on the word
+"incentivizes". Earlier that afternoon he had said out loud: *"I'm losing the rest of it."*
+
+The knowledge was already in the process. `engine/turn.py` had written `hit max_s` into the
+turn extras since the cap existed, and passed it to nobody.
+
+**Three changes, and the first is the one that generalises:**
+
+1. **The cap follows the ACTIVITY, not the process.** Asking a question and dictating a
+   paragraph are different things and one number cannot serve both. `dictation_max_s = 90.0`
+   applies only while a note draft is open and awaiting content — a state LB himself opened one
+   utterance earlier. Raising `max_s` globally was rejected for the reason its own comment
+   gives: the cap exists *"so a television cannot record forever"*, and there is television in
+   this log. **A television cannot open a note draft.**
+2. **`Engine.ask(text, truncated=False)`.** The one fact only the audio layer can know, carried
+   to the one place that can act on it.
+3. **A capped draft is HELD, not committed.** Nothing is written until the sentence is
+   finished, so the vault gets one block rather than a fragment, a horizontal rule, and a
+   remainder. This is the single place a note draft outlives its own turn — a rule `ask()`
+   documents at its permission gate — and it is safe only because LB is told in the same breath
+   that it is open. `is_cancel`, `is_sleep` and silence all still close it, and
+   `verify_dictation.py` section 4 exists to keep that true.
+
+### Neither cloud branch had a timeout
+
+`engine/models.py` bounded the LOCAL persona branch from the day it was written, with a comment
+saying exactly why: *"a wedged server is a slow turn and not a hung one."* The OpenRouter and
+Gemini branches had none, and the reasoning applies to them harder — a free-tier model on a bad
+day is a wedged server that belongs to somebody else.
+
+    147.8s   agent leg      HTTP 200 came back in ~1s; the rest is the body arriving
+    134.6s
+     92.7s
+
+`CLOUD_TIMEOUT_S = 20`, matching `ROUTER_DEADLINE_S`, on every cloud call site — the two persona
+branches, the router, all eight agents, and `syllabus_to_vault`. That last one is not on the
+turn path and was bounded anyway: a hang there leaves `index_status` reporting "still
+rebuilding" for the session, which is quieter and worse.
+
+### The time was being spent on room tone
+
+Every one of the slowest persona turns is a fragment:
+
+    147.8s <- 'Yeah, yeah, yeah, yeah.'     49.8s <- 'Okay.'   (bare 'Okay.' appears six times)
+    134.6s <- 'Mr. Albo.'                   47.9s <- 'ball.'
+     57.7s <- 'Whoa.'                             <- 'Thank you for watching.'
+
+**32% of all agent time in the log — 8.2 minutes of 25.4 — went on utterances that were never
+requests**, each costing a Gemini routing call and an OpenRouter call.
+`media/data/2026-09-03-wasted-turns.csv`, charted in `media/charts/wasted-turns.svg`. That
+figure is a floor: the classifier is a strict keyword list, so 'Mr. Albo.' at 134.6s is not in
+it.
+
+`tasks/todo.md` carried the instruction *"do NOT widen the canned persona tier without log
+evidence"*. This is the evidence, and it argues for something **narrower** than a persona tier.
+These are not persona questions. An `ack` intent in `orchestrator/instant.py` answers them with
+"Mm-hm." and stops the turn, end-anchored via `_is_bare` exactly like the social three — so
+"okay" is a shrug and "okay what's the trace width for five amps" is still a HARDWARE question.
+
+It is **last** in the intent table, and that position is load-bearing: `_ACK_PHRASES` contains
+"okay", "right" and "sure", which appear inside dismissals and greetings. Answering "Mm-hm." to
+*"okay, goodnight"* leaves him awake and listening — the same collision the `sleep`-above-`stop`
+ordering was already written to prevent.
+
+### What was left alone, deliberately
+
+`'ball.'` — a mis-hearing of his own wake word, twice, at 47.9s and 19.7s — is **not** matched.
+Putting a real noun in a table whose job is to STOP a turn is the D38 mistake this repo has
+made six times, and the honest fix for a wake-word echo is in the recorder, not here.
+
+---
+
+## D56 — He opens the microphone into the last syllable of his own wake word
+
+**2026-09-03.** Taken off the board as *"the wake-word echo — the fix is a short blanking
+window after a wake, not a keyword list"*, with the mechanism given as an echo of the TTS
+output. **The TTS half is already solved and has been since 2026-08-11.** `audio/gate.py`
+mutes capture while he speaks, adds a 0.35s tail, and resets the detector on reopen — that is
+Phase 0 and D11, and building a second gate behind it would have been building nothing.
+
+The real mechanism is his own voice, not Piper's.
+
+### What the log says
+
+Of the **55 captures opened by a wake word, 29 held 0.32s or less of voiced audio**, and every
+one has the same shape:
+
+    capture spoke: 2.48s audio, 0.08s voiced   -> 'Thank you for watching.'
+    capture spoke: 2.48s audio, 0.16s voiced   -> 'elbow.'  'Bobo.'  'Whoa.'
+    capture spoke: 2.48s audio, 0.24s voiced   -> 'ball.'
+    capture spoke: 2.96s audio, 0.32s voiced   -> 'Mr. Albo.'
+
+2.48s is arithmetic, not coincidence: `PREROLL_S` 0.3 + a blip + `hangover_s` 2.0 is **the
+shortest capture this recorder can produce**. openWakeWord fires when its rolling window is
+convinced, which is before LB has finished saying "...Odd Ball" — so the recorder opens into
+the last syllable of the wake phrase and calls it the start of a question. `ball.`, `Bobo.`,
+`elbow.`, `Mr. Albo.` are that syllable through `base.en`.
+
+### How strong the evidence is, and where it stops
+
+    blip rate after a WAKE          53%
+    blip rate in a CONVERSATION     31%      ratio 1.72x
+
+Same room, same microphone, same noise floor. If these were ambient noise the two rates would
+match; they do not, and that asymmetry is what implicates the wake phrase rather than the room.
+
+**The timing is NOT proven, and this is stated rather than glossed.** Whether the blip lands in
+the first 250ms could not be answered from eight days of logs, for two reasons that compound:
+`Capture.waited_s` was computed and never logged, and `_finish` trims the saved audio from
+`first_voiced_i - PREROLL`, which destroys the offset before `captures/` ever sees it. Replaying
+the real files therefore cannot show the window catching an echo — the information is gone.
+
+`audio/listen.py` now logs `waited`, so the next session settles it. That one line is the most
+valuable part of this change.
+
+### Suppressing the TRIGGER, not the audio
+
+A blanking window would mute the microphone, and LB says "Hey Mr Odd Ball, what time is it?" in
+one breath — muting would eat the first word, which is the exact failure `_step` already keeps a
+frame of lead-in to avoid.
+
+So `ignore_start_s` delays only the decision *"this is where the sentence starts"*. The frame is
+still buffered and still counted. Because `PREROLL_S` (0.3s) is longer than the window (0.25s),
+a real utterance that triggers at the far edge carries back every frame from before it — proven
+in `verify_wake_tail.py` section 2, where the resulting audio is **byte-identical** to a capture
+taken with no window at all, on synthetic patterns and on five real recordings.
+
+A wake tail, being followed by silence rather than speech, never triggers at all and the capture
+comes back SILENT. That is a state the rig already handles well: LB gets "What's up LB?" and a
+second chance, which is what should have happened all along.
+
+**The setter refuses a window at or above `PREROLL_S` rather than clamping it.** Past the
+pre-roll this silently stops being a delayed trigger and becomes a mute, and the failure would
+be a missing first word with no error to see.
+
+### Why this ships before the confirming measurement
+
+Because it cannot fail dangerously. If the hypothesis is right, 29 wasted captures in eight days
+become greetings; if it is wrong, the window is **inert** — it can only fail by being useless,
+never by eating a word, and section 2 is what makes that a demonstrated claim rather than an
+assumption. `wake_tail_s = 0.0` switches it off.

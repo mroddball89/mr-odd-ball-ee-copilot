@@ -223,6 +223,20 @@ def _say_ok(_q: Query, _now: datetime) -> str:
     return "Okay."
 
 
+def _say_ack(_q: Query, _now: datetime) -> str:
+    """The shortest honest reply to something that was not a question.
+
+    One syllable, on purpose. LB said "okay" — he is acknowledging, not asking, and the correct
+    reply is the sound a person makes back, not a sentence. Piper renders this in about 0.3s
+    against the 20-147s these utterances used to cost through the persona.
+
+    Not silence, though silence was considered. A turn that produces no audio at all is
+    indistinguishable from one where he was not heard, and the whole point of `credible.py` is
+    that LB should be able to tell those two apart.
+    """
+    return "Mm-hm."
+
+
 def _say_goodnight(_q: Query, _now: datetime) -> str:
     """Dismissal. The caller watches for `intent == "sleep"` and closes the conversation.
 
@@ -406,6 +420,56 @@ _IDENTITY_PHRASES = (
     "introduce yourself", "tell me about yourself",
 )
 
+# ## The acknowledgements, added 2026-09-03 off the log rather than off a guess
+#
+# These are not questions and they are not dismissals. They are the noise a person makes while
+# thinking, or the receipt they give after being told something — and until now every one of
+# them bought a Gemini routing call and then an OpenRouter persona call.
+#
+# **Measured, `data/oddball.log`, 2026-08-26 to 2026-09-03.** The thirteen slowest persona
+# turns in the whole log are all in this list or are room tone:
+#
+#     147.8s  'Yeah, yeah, yeah, yeah.'     49.8s  'Okay.'    (bare 'Okay.' appears 6 times)
+#     134.6s  'Mr. Albo.'                   47.9s  'ball.'
+#      57.7s  'Whoa.'                       32.3s  'All right.'
+#
+# Thirty persona turns over three seconds came to **970 seconds — 16.2 minutes** of a frozen
+# face and a shut microphone, and roughly sixty API calls, to answer things that wanted no
+# answer. `tasks/todo.md` said "do NOT widen the canned persona tier without log evidence".
+# This is the evidence, and it argues for something narrower than a persona tier: these
+# utterances should not reach the ROUTER, never mind the persona.
+#
+# **End-anchored via `_is_bare`, like the social three**, and that is the whole safety of it.
+# "okay" is an acknowledgement; "okay what's the trace width for five amps" is a HARDWARE
+# question with an acknowledgement stuck on the front, and D38 is a list of six times a bare
+# keyword swallowed a real question. The filler set below is what lets the first through and
+# the second past.
+#
+# **"Thank you for watching." is here on purpose.** It is Whisper's single most famous
+# hallucination on near-silence — it comes out of YouTube in the training data — and it is in
+# this log. `orchestrator/credible.py` catches most of these by voiced ratio; this catches the
+# ones that arrive with enough room tone to look like speech.
+_ACK_PHRASES = (
+    "okay", "ok", "alright", "all right", "right", "sure", "cool", "nice", "great",
+    "gotcha", "got it", "understood", "makes sense", "fair enough",
+    "yeah", "yep", "yup", "uh huh", "mhm", "mmhm", "hmm", "huh",
+    "whoa", "wow", "oh", "ah", "aha", "i see", "oh i see", "interesting",
+    "thank you for watching", "thanks for watching",
+)
+
+# Deliberately TINY, and much smaller than `_SOCIAL_FILLER`. This intent answers with a shrug
+# and stops the turn, so anything it absorbs is a question that never gets asked — the cost of
+# a wrong match here is higher than for a greeting, which merely answers the wrong thing.
+#
+# `mr`, `odd` and `ball` are in it because "okay Mr Odd Ball" is an acknowledgement with his
+# name on it, and because `ball.` on its own — a mis-heard fragment of his own wake word — cost
+# 47.9s twice in this log.
+_ACK_FILLER = frozenset({
+    "mr", "odd", "ball", "oddball", "buddy", "man", "dude", "um", "uh", "well", "so",
+    "then", "just", "i", "guess", "yeah", "ok", "okay", "alright", "cool", "thanks", "thank",
+    "you",
+})
+
 # Function words and social noise ONLY. **No technical noun may ever appear here** — that is
 # the property that keeps "hey whats the trace width" out of the greeting, and the one
 # `verify_router.py` checks by prefixing an EE corpus with "hey" and "thanks" and asserting
@@ -562,6 +626,18 @@ INTENTS: list[tuple[str, Callable[[Query], bool], Callable[[Query, datetime], st
     ("identity", lambda q: _is_bare(q.text, _IDENTITY_PHRASES, _SOCIAL_FILLER), _say_identity),
     ("thanks",   lambda q: _is_bare(q.text, _THANKS_PHRASES, _SOCIAL_FILLER), _say_welcome),
     ("hello",    lambda q: _is_bare(q.text, _HELLO_PHRASES, _SOCIAL_FILLER), _say_hello),
+    # LAST of everything, and that position is the whole design.
+    #
+    # `_ACK_PHRASES` contains "okay", "right", "sure" and "yeah" — words that appear inside a
+    # dismissal ("okay, that's all"), inside a greeting ("hey"), and inside every other intent
+    # above. Put anywhere but the bottom this would shadow them, and `sleep` in particular:
+    # answering "Mm-hm." to "okay, goodnight" leaves him awake and listening, which is exactly
+    # the collision the `sleep`-above-`stop` comment two entries up already documents.
+    #
+    # Being last also makes it cheap to reason about: it only ever sees utterances that every
+    # other table has already declined, which is precisely the population that used to go to
+    # the router.
+    ("ack",      lambda q: _is_bare(q.text, _ACK_PHRASES, _ACK_FILLER), _say_ack),
 ]
 
 # What he says when Tier 0 has nothing. Phase 2 replaces this branch with the local model

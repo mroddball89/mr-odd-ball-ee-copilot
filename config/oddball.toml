@@ -330,6 +330,72 @@ hangover_s = 2.00
 # live turn hit the cap mid-question and was transcribed from a truncated recording.
 max_s = 15.0
 
+# The same cap, for the one turn where LB is DICTATING rather than asking — an open note draft
+# waiting on content. 2026-09-03.
+#
+# ## Why a second number instead of a bigger first one
+#
+# It happened again, and worse. On 2026-09-02 at 17:10:37 he was dictating his English thesis
+# into a vault note and the 15s cap fired mid-clause:
+#
+#     heard 'My thesis is driven by the inherent profit maximization principles of capitalism,
+#            treating essential medicines as market commodities rather than public goods,
+#            incentivizes'
+#
+# `vault/notes/english research question.md` still ends on that word. The remainder — "things
+# such as predatory pricing, regulatory capture, and a systematic prioritization of ongoing
+# treatments over permanent cures" — was spoken 90 seconds later, was no longer recognised as
+# note content, and was answered as chit-chat by the persona model instead of being written
+# down. Earlier the same afternoon he had said, out loud: "I'm losing the rest of it."
+#
+# The obvious fix is to raise `max_s`. It is the wrong fix, and the comment above already says
+# why: the cap is there so a television cannot record forever, and there IS television in that
+# log — a Fusion 360 tutorial was transcribed as a command on 2026-09-03.
+#
+# So the cap follows the ACTIVITY. Asking a question is bounded at 15s; dictating a paragraph
+# is bounded at 90s, and only while a note draft is actually open, which is a single turn that
+# LB himself opened one utterance earlier. A television cannot open a note draft.
+#
+# 90s is about 220 spoken words at Piper's measured 160 wpm — comfortably a long paragraph, and
+# still a hard stop. `hangover_s` ends the utterance long before this in every normal case; the
+# cap only fires if speech is genuinely continuous for a minute and a half.
+dictation_max_s = 90.0
+
+# How long, after a WAKE, voice may not begin an utterance. 2026-09-03.
+#
+# ## The measurement
+#
+# `data/oddball.log`, 2026-08-26 to 2026-09-03: **55% of the 55 captures opened by a wake word
+# held 0.40s or less of voiced audio.** Every one has the same shape —
+#
+#     capture spoke: 2.48s audio, 0.08s voiced   -> 'Thank you for watching.'
+#     capture spoke: 2.48s audio, 0.16s voiced   -> 'elbow.'  'Bobo.'  'Whoa.'
+#     capture spoke: 2.48s audio, 0.24s voiced   -> 'ball.'
+#     capture spoke: 2.96s audio, 0.32s voiced   -> 'Mr. Albo.'
+#
+# — one or two 80 ms frames of voice, then the full hangover. 2.48s is the shortest capture
+# this recorder can produce: `PREROLL_S` 0.3 + a blip + `hangover_s` 2.0.
+#
+# The blip is the tail of the wake phrase. openWakeWord fires when its rolling window is
+# convinced, which is BEFORE LB has finished saying "...Odd Ball" — so the recorder opens into
+# the last syllable of his own wake word and calls it the start of a question. `ball.`,
+# `Bobo.`, `elbow.`, `Mr. Albo.` are all that syllable through `base.en`.
+#
+# ## 0.25, and why it cannot go higher
+#
+# This delays the TRIGGER; it does not mute anything. The frame is still recorded and still
+# counted, so `PREROLL_S = 0.3` recovers every suppressed frame when real speech does start —
+# "Hey Mr Odd Ball, what time is it?" in one breath keeps its first word. That only holds while
+# this stays UNDER the pre-roll, and `UtteranceRecorder.ignore_start_s` raises rather than
+# clamps if it does not: above 0.3 this silently stops being a delayed trigger and becomes a
+# mute, which is the failure it exists to prevent.
+#
+# It applies ONLY to the capture that follows a wake. Inside an open conversation window there
+# is no wake phrase to echo, and a fast "yes" must not be suppressed.
+#
+# Set to 0.0 to switch it off entirely.
+wake_tail_s = 0.25
+
 [stt]
 # ===================================================================================
 # tiny.en -> base.en on 2026-08-28. EVERYTHING BELOW THIS BLOCK IS SUPERSEDED — it is

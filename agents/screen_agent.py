@@ -48,7 +48,7 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from engine.llm_text import extract_text_content
-from engine.models import LLM_MAX_RETRIES, VISION_MODEL
+from engine.models import CLOUD_TIMEOUT_S, LLM_MAX_RETRIES, VISION_MODEL
 from engine.response import Card, CardKind, Pending, Response
 from engine.split import SPOKEN_INSTRUCTION, split
 from tools import screen_capture
@@ -153,7 +153,8 @@ def _ask_vision(question: str, shot: Capture) -> str:
     from tools.memory_manager import format_memory_for_llm
 
     llm = ChatGoogleGenerativeAI(model=VISION_MODEL, temperature=0.2,
-                                 max_retries=LLM_MAX_RETRIES)
+                                 max_retries=LLM_MAX_RETRIES,
+                                 timeout=CLOUD_TIMEOUT_S)
     prompt = SCREEN_PROMPT.format(chat_history=format_memory_for_llm(), question=question)
 
     encoded = base64.b64encode(shot.data).decode("ascii")

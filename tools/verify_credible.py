@@ -363,7 +363,11 @@ def wired() -> None:
             class _L:
                 extras: list[str] = []
             self.last = _L()
-        def ask(self, text):
+        # `**_` for the same reason as the `_capture` stub below: this file asserts that a
+        # capture either REACHES the engine or does not, and it must not break every time
+        # `Engine.ask` learns something new about the audio it was given. `truncated` arrived
+        # on 2026-09-03 and took this harness down with a TypeError.
+        def ask(self, text, **_):
             self.asked.append(text)
             return Response(speech="ok", route="utility", raw="ok")
 
@@ -374,8 +378,13 @@ def wired() -> None:
                  speaker=speaker, bridge=bridge, gate=Gate(), frames=None,
                  greeting=["What's up LB?"], gate_tail_s=0.0, thinking_state="thinking")
         samples = np.zeros(int(audio_s * SAMPLE_RATE_HZ), dtype=np.float32)
-        t._capture = lambda: Capture(outcome=Outcome.SPOKE, audio=samples,
-                                     speech_s=voiced_s, waited_s=0.0)
+        # `**_` so this keeps matching `Turn._capture` as it grows arguments. It gained
+        # `suppress_start_s` on 2026-09-03 and this stub, being a bare `lambda:`, raised
+        # TypeError the moment it did — a harness broken by a signature it does not care
+        # about. What this file tests is what `credible.assess` does with the numbers in a
+        # Capture; how the capture was obtained is none of its business.
+        t._capture = lambda *_a, **_k: Capture(outcome=Outcome.SPOKE, audio=samples,
+                                               speech_s=voiced_s, waited_s=0.0)
         return t, speaker
 
     # The camera used to be the gate's second channel, and this block existed to stub out the
