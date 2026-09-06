@@ -13,6 +13,76 @@ deliberately, so that nothing can quietly degrade into a guard that allows every
 > and animated face were merged in. It is kept so the original is always recoverable.
 > Work happens on the `oddball-integration` branch.
 
+## Status — 2026-09-06
+
+**He runs.** Wake word, capture, transcription, routing across eleven destinations, voice, and
+the floating face all work end to end on Windows 11. Two processes: `main.py --voice` and
+`hud/float.py`, started together by `config/start_oddball.bat`.
+
+**Verification:** 39 harnesses under `tools/verify_*.py`. 38 green. `verify_wake` sits at
+**44/60** and that is not a flake — see below.
+
+**What works well.** The free tier answers most short questions with no API call at all. The
+quiz marks locally on your own uploaded papers. Notes, the vault, Canvas deadlines, KiCad
+parsing, screen reading and the PowerShell gate are all in daily use.
+
+**The wake word is the weak link, and it is not the threshold.** Measured against the fixture
+set at the configured 0.76:
+
+```
+26 positive fixtures     14 pass, 12 fail
+ 9 of those failures     score under 0.03 — he does not hear them AT ALL
+loudest negative         0.1461
+```
+
+No threshold separates those nine from the negatives: you would have to drop below 0.03, which
+is under the loudest thing that should *not* wake him. Lowering to ~0.25 would recover three
+more positives for free — there is a clean empty gap between 0.1461 and 0.3853 — but it cannot
+reach the rest. **The model is bimodal, and the fixture set has no marginal negatives in it at
+all**, which is why every threshold change so far has looked safe against fixtures and then
+misbehaved in the room. The log across its whole life holds 2,047 near misses to 225 wakes;
+some of those near misses are ambient noise rather than real attempts, so treat the fixture
+numbers as the rigorous ones and that ratio as the symptom.
+
+Next step is a proper fixture set — deliberate marginal takes, and for the first time some
+recordings of the actual room — then either a defensible threshold or a retrained model.
+
+**Also open:** false wakes still spend persona API calls on room audio, and the offline scoring
+environment (episode ledger → replay gym → bandit over the knobs that already exist) is designed
+but not built. Both are written up in `tasks/todo.md`.
+
+## Things to know up front
+
+1. **Restart him after you edit code.** He is a long-lived process and this codebase imports
+   lazily on purpose, so a module you change is picked up at first *use* while everything
+   already loaded stays at the version it started with. A rig left up for six days ran August
+   `engine/core.py` against a September `agents/quiz_agent.py` and threw `ImportError` on a
+   constant that existed on disk the whole time. If he behaves in a way the code cannot explain,
+   check the process start time against your last edit before anything else.
+
+2. **Your data is not in git, and this repo is public.** `vault/`, `captures/`,
+   `conversation_memory.json`, `data/inbox`, `chroma_db` and the quiz decks are all gitignored —
+   only `.gitkeep` files are tracked. `.env` has never been committed. Measurement CSVs under
+   `media/data/` are the exception worth watching: they are built from `data/oddball.log` and can
+   carry verbatim transcripts of things said in the room. Check what is in one before pushing it.
+
+3. **Harnesses cannot touch your real data.** `tools/harness_env.py` redirects the conversation
+   log and the vault to a temp directory for any script named `verify_*`, `measure_*` or `test_*`
+   — whether or not that script knows the mechanism exists. Call `isolate()` explicitly when you
+   write a new one; the backstop is there for when you forget.
+
+4. **The 15-day backup reminder is real.** It measures the log file's creation time, not the
+   conversation in it, so it genuinely fires. Copy the file somewhere, then
+   `python tools/memory_manager.py --backed-up` to restart the clock.
+
+5. **The free tiers are counted in REQUESTS, not tokens.** Gemini gives 20 per model name per
+   day. Anything that turns one question into two calls halves your day, which is why the router
+   is bypassed wherever an answer can be computed locally.
+
+6. **Three routes always ask before acting** — `OS` (PowerShell commands, and opening an
+   application), `WEB` (search) and `SCREEN` (screenshots). Nothing runs without a clear yes;
+   silence, a mumble and a refusal all decline. See **The three security gates**.
+
 ## What runs where
 
 | | |
@@ -222,9 +292,24 @@ deliberately not a note verb — it means *recall* as often as it means *record*
 ## Memory
 
 `tools/memory_manager.py` logs the last 40 messages to `conversation_memory.json` on the local
-card and injects them into every agent prompt as `{chat_history}`. It also watches a **15-day
-clock** — once the oldest message in the log passes that age, every answer carries a reminder
-to copy the file to an external drive before the card is the only copy.
+disk and injects them into every agent prompt as `{chat_history}`. It also watches a **15-day
+clock**: once the log FILE has gone that long without being backed up, every answer carries a
+reminder to copy it somewhere else.
+
+> **It measures the file, not the conversation in it — and that is a fix, not a detail.** Until
+> 2026-09-04 the clock compared today against the oldest message in the log. But the log is a
+> rolling window of 40 turns, so on any day you actually use him that message is hours old. The
+> check was asking *"was the 40th-most-recent thing he said more than a fortnight ago"*, and on a
+> system in use the answer is always no. Measured the day it was fixed: the file was 15 days old
+> to the day and the rolling window put it at 1. **It had never fired once.**
+>
+> Creation time, not modification time — the file is rewritten on every single turn, so a clock
+> built on mtime could never fire either. `python tools/memory_manager.py --backed-up` restarts
+> it, and that command exists because a reminder with no off switch is one you learn to ignore.
+>
+> The file was called `sd_card_memory.json` until the same day. That was accurate on the Pi,
+> where the whole repo lived on a removable card and that card was the only copy — which is why
+> the 15-day clock exists at all.
 
 That same function carries three more things in front of the conversation log, and because every
 agent already calls it, every agent gets them. `tools/self_context.py` composes the block.
@@ -256,6 +341,19 @@ python tools/corrections.py --prompt    # exactly what every agent is being told
 That second one is what to reach for when he starts behaving oddly. A rule you forgot you gave is
 the first thing to suspect. To withdraw one, delete its entry from the file.
 
+> **A rule is only as good as the transcription that made it, and there is no read-back yet.**
+> The one standing rule in the ledger read *"Don't make sure you can explain yourself"* for five
+> days — a negation of what was actually said, sitting at the top of every prompt with more
+> authority than anything else in it. Re-transcribing the saved capture at three model sizes
+> settled it: `base.en` heard *"Don't"*, `small.en` heard *"go"*, and word-level confidence put
+> that first word at **p=0.145** against 0.894–0.999 for every word after it. There was no
+> "don't" — it was 220 ms of the wake phrase's own tail, the same thing `wake_tail_s` exists to
+> ignore. Two weaker models agreed with each other because they were wrong for the same reason,
+> which is why their agreement was worth nothing.
+>
+> The captures are kept precisely so this is checkable. Until a confirmation step exists, read
+> `--list` occasionally and delete anything that does not sound like you.
+
 ## Learning from his own mistakes
 
 `vault/reflections.md` is the other half, and deliberately a **separate file**: a correction is an
@@ -268,9 +366,28 @@ slow success being the failure nobody escalates. Before answering, the failures 
 what you just asked are put in front of him, matched on shared words with identifiers like
 `ECE350` weighted double.
 
+**A failure that was caught and handled is recorded too.** This was the hole: `engine/core.py`
+hung the instrument on the exception boundary, in a codebase whose entire style is to catch
+everything and answer anyway — so every well-written `except` was a gap in his memory. The quiz
+explanation failed five times in one session with the same `ImportError`, every one logged with a
+full traceback, and the ledger recorded **none of them**, because the function is documented as
+never raising. The recording now happens inside `_failure_line`, which is the one thing every
+graceful degradation already calls, so anything that degrades is written down — including code
+written later by someone who never read this.
+
+**Repeats are merged, not appended.** An entry that happens again bumps a count and moves to the
+newest position instead of adding a paragraph. Before that, 22 of 37 entries were the same
+slow-turn carrying the same lesson, eight of them for false-wake noise (`'ball.'`, `'Okay.'`,
+`'Mr. Albo.'`), and six of those rode on **every agent prompt** — the caps were being honoured
+perfectly and the block was still worthless. One entry saying `×22` says strictly more, in a
+twenty-second of the space. Entries that stop recurring age out of the prompt after seven days
+but stay in the file; `similar()` ignores that age limit, because *"have I broken this before"*
+has no expiry date.
+
 ```bash
-python tools/reflections.py --list
+python tools/reflections.py --list       # every entry, with occurrence counts
 python tools/reflections.py --similar "open firefox"
+python tools/reflections.py --compact    # merge duplicates already in the file (writes a .bak)
 ```
 
 Both ledgers are plain Markdown under `vault/`, gitignored like the rest of it, created on first
@@ -278,16 +395,20 @@ write, and safe to edit by hand.
 
 ## Knowing what he is
 
-`tools/system_state.py` puts his own CPU temperature, load average, free memory, disk space,
-uptime, which ports are listening (8765 for the face and its WebSocket, 8767 for uploads) and
-which capabilities are actually installed into every prompt. So "how hot are you" is answered
-without a tool call, and an answer given while the CPU is at 81 °C is allowed to mention it.
+`tools/system_state.py` puts his disk space, which ports are listening (8765 for the face and its
+WebSocket, 8767 for uploads), which capabilities are actually installed, and — where the platform
+provides them — CPU temperature, load average, free memory and uptime into every prompt. So "how
+hot are you" is answered without a tool call.
 
-Every reading is a `/proc` or `/sys` read cached for 15 seconds plus two loopback connects — no
-model, no subprocess. **Anything unreadable is stated as unreadable rather than omitted**, because
-an assistant that confidently reports a temperature it never read is worse than one that says it
-cannot see the sensor. The capability list is derived from which modules exist on disk, so
-deleting a tool removes the claim.
+**On Windows most of those sensors are not there, and he says so rather than guessing.** The
+readings come from `/proc` and `/sys`, which is a Linux interface; off the Pi they return nothing
+and the block renders *"CPU temperature: you cannot read it on this machine."* That is the design,
+not a gap — an assistant that confidently reports a temperature it never read is worse than one
+that admits it cannot see the sensor. Disk, ports and capabilities work everywhere.
+
+Every reading is a small file read cached for 15 seconds plus two loopback connects — no model,
+no subprocess, and `psutil` is deliberately not a dependency. The capability list is derived from
+which modules exist on disk, so deleting a tool removes the claim.
 
 ```bash
 python tools/system_state.py            # temperature, load, memory, ports, capabilities
