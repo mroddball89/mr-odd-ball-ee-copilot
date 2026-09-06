@@ -151,7 +151,7 @@ class GateEngine:
             extras: list[str] = []
         self.last = _Last()
 
-    def ask(self, text: str) -> Response:
+    def ask(self, text: str, **_) -> Response:
         self.calls += 1
         if self.calls == 1:
             return Response(
@@ -232,7 +232,7 @@ class PlainEngine:
             extras: list[str] = []
         self.last = _Last()
 
-    def ask(self, text):
+    def ask(self, text, **_):
         self.calls += 1
         return Response(speech="It's 7 oh 7.", route="utility", raw="It's 7 oh 7.")
 
@@ -244,6 +244,38 @@ check(plain.calls == 1, "an ungated turn asks exactly once", f"{plain.calls}")
 check(bridge4.states[0] == "thinking",
       "and still shows the thinking pose while the answer is produced",
       f"states: {bridge4.states}")
+
+from engine.turn import Timings                                     # noqa: E402
+
+# --- the Engine's extras are copied onto the turn ONCE ----------------------------------
+#
+# `_deliver` is the shared tail of both paths and is where the copy belongs. `answer_typed`
+# used to do it as well, so every typed turn logged the Engine's extras twice — nine of them
+# in oddball.log by 2026-09-06, reading `typed, deadline reminder (5), deadline reminder (5)`.
+# Only typed turns, because the spoken path has never had the second copy.
+#
+# Checked on BOTH paths in one section, because the fix is "delete the caller's copy" and the
+# way to get that wrong is to delete the one in `_deliver` that the spoken path relies on.
+
+plain5 = PlainEngine()
+plain5.last.extras = ["deadline reminder (5)", "free:time"]
+typed_timings = build(FakeBridge(), plain5).answer_typed("what time is it")
+
+check(typed_timings.extras.count("deadline reminder (5)") == 1,
+      "a typed turn carries each Engine extra exactly once",
+      f"extras: {typed_timings.extras}")
+check(typed_timings.extras.count("free:time") == 1, "...all of them, not just the first")
+check(typed_timings.extras[0] == "typed",
+      "...and 'typed' still leads the line", f"extras: {typed_timings.extras}")
+
+plain6 = PlainEngine()
+plain6.last.extras = ["deadline reminder (5)"]
+spoken = Timings()
+build(FakeBridge(), plain6)._answer("what time is it", spoken)
+check(spoken.extras.count("deadline reminder (5)") == 1,
+      "a SPOKEN turn still carries them at all",
+      f"extras: {spoken.extras} — deleting the copy in _deliver would empty this")
+check("typed" not in spoken.extras, "...and is not marked as typed")
 
 
 # =========================================================================================

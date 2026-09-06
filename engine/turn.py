@@ -456,8 +456,12 @@ class Turn:
         self._bridge.set_state(self._thinking)
         response = self._engine.ask(text)
         t.intent = response.route
+        # "typed" only. The Engine's own extras are copied across by `_deliver`, which BOTH
+        # paths go through — doing it here as well appended them twice, and the turn line read
+        # `typed, deadline reminder (5), deadline reminder (5)`. Nine turns in the log to
+        # 2026-09-06, every one of them typed, because the spoken path never had the second
+        # copy. Cosmetic in the end: the card itself is added once, inside `Engine.ask`.
         t.extras.append("typed")
-        t.extras.extend(self._engine.last.extras)
         t.route_s = time.monotonic() - began
 
         self._deliver(response, t, typed=True)
@@ -472,6 +476,9 @@ class Turn:
         where the gate's yes/no comes from, and that is the `typed` flag.
         """
         t.intent = response.route
+        # **The one place the Engine's extras are copied onto the turn.** Both the spoken and
+        # the typed path come through here, which is the whole reason `_deliver` exists; a
+        # caller that copies them itself as well gets them twice. See `answer_typed`.
         t.extras.extend(self._engine.last.extras)
 
         # Cards go up BEFORE he opens his mouth. For a permission gate that ordering is the
