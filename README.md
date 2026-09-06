@@ -4,10 +4,12 @@ A specialised Electrical Engineering copilot for **LB**. He listens for his name
 loud, and floats on the desktop as an animated face. A Gemini router reads each question and
 hands it to the one agent that should answer it.
 
-**Runs on Windows 11.** He lived on a Raspberry Pi 5 until 2026-08-26 and now runs on LB's
-workstation (Ryzen 7 5700X, 32 GB, RX 6600). The Linux code was **deleted, not disabled** —
-`tools/os_controller.py` and `tools/app_catalogue.py` raise on import off Windows,
-deliberately, so that nothing can quietly degrade into a guard that allows everything. Restore from git history (or the `v0-terminal` tag) if the Pi ever comes back.
+**Runs on Windows 11** — LB's workstation (Ryzen 7 5700X, 32 GB, RX 6600). He lived on a
+Raspberry Pi 5 until 2026-08-26; that chapter is closed, and the Linux code was **deleted,
+not disabled** — `tools/os_controller.py` and `tools/app_catalogue.py` raise on import off
+Windows, deliberately, so that nothing can quietly degrade into a guard that allows
+everything. The Pi-era history is in `docs/DECISIONS.md` and `tasks/lessons.md`, not carried
+here.
 
 > The `v0-terminal` tag is the engine as it ran in the terminal, before the voice, personality
 > and animated face were merged in. It is kept so the original is always recoverable.
@@ -95,7 +97,7 @@ but not built. Both are written up in `tasks/todo.md`.
 
 `docs/DEPLOY.md` is the long version, and is what to read when something breaks.
 
-## How it routes
+## How it works
 
 **A free tier runs first, and most short questions never reach an API at all.**
 `engine/core.py:_free_turn` tries `orchestrator/instant.py` before the router: the time, the
