@@ -235,6 +235,23 @@ def safe_name(raw: str) -> str:
     return cleaned
 
 
+def safe_segment(text: str, fallback: str) -> str:
+    """One filesystem-safe path component. Never empty, never `.` or `..`, never nested.
+
+    Lives here, in the layer with no dependencies, because it had three copies: this module's
+    `_SAFE_NAME` rule, `tools/file_manager._safe_segment` and
+    `tools/knowledge_vault._safe_segment` — byte-identical, and each one the guard that turns
+    "../../.ssh/authorized_keys" into a filename rather than a traversal.
+
+    Three copies of a traversal guard is three places to fix and two to forget. That is the
+    same argument `pending_uploads` below makes about counting the inbox: two answers to one
+    question is how they disagree, except that here disagreeing means one door is still open.
+    """
+    cleaned = _SAFE_NAME.sub("_", (text or "").strip().replace("\\", "/").split("/")[-1])
+    cleaned = cleaned.strip(". ").strip()
+    return cleaned or fallback
+
+
 def unique_path(directory: Path, filename: str) -> Path:
     """A path in `directory` that does not exist yet, by suffixing `-2`, `-3`, ...
 

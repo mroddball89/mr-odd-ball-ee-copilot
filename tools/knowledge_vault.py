@@ -84,6 +84,10 @@ if __package__ in (None, ""):                                          # pragma:
 from memory.speakable import MAX_WORDS                                 # noqa: E402
 from orchestrator.instant import normalise                             # noqa: E402
 
+# The traversal guard, from the layer with no dependencies. It had a byte-identical twin
+# here and a third copy in engine/server.py until 2026-09-06; see `safe_segment` there.
+from engine.server import safe_segment as _safe_segment
+
 LOG = logging.getLogger("oddball.vault")
 
 __all__ = ["VAULT_DIR", "TRASH_DIR", "VAULT_TOOLS", "VAULT_INSTRUCTION", "followup_prompt",
@@ -119,14 +123,6 @@ MAX_RESULT_CHARS = 24_000
 
 # What may appear in a vault path segment. Everything else becomes an underscore, which turns
 # "../../etc/passwd" into a filename rather than a traversal.
-_SAFE_SEGMENT = re.compile(r"[^A-Za-z0-9._ -]+")
-
-
-def _safe_segment(text: str, fallback: str) -> str:
-    """One filesystem-safe path component. Never empty, never `.` or `..`, never nested."""
-    cleaned = _SAFE_SEGMENT.sub("_", (text or "").strip().replace("\\", "/").split("/")[-1])
-    cleaned = cleaned.strip(". ").strip()
-    return cleaned or fallback
 
 
 def _resolve(folder: str, filename: str) -> Path:

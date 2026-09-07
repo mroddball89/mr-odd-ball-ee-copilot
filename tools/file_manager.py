@@ -99,12 +99,14 @@ from langchain_core.tools import tool
 # Guarded rather than an unconditional `sys.path.insert`, so importing this module from an
 # agent has no side effect on the interpreter's search path.
 try:
-    from engine.server import INBOX_DIR, pending_uploads
+    from engine.server import (INBOX_DIR, pending_uploads, safe_segment as _safe_segment,
+                               unique_path as _unique)
 except ModuleNotFoundError:                                           # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from engine.server import INBOX_DIR, pending_uploads
+    from engine.server import (INBOX_DIR, pending_uploads, safe_segment as _safe_segment,
+                               unique_path as _unique)
 
 LOG = logging.getLogger("oddball.files")
 
@@ -144,19 +146,11 @@ _PROJECT_SUFFIXES = frozenset({".kicad_sch", ".kicad_pcb", ".kicad_pro", ".kicad
 
 # One safe path segment. Everything else becomes an underscore, so a project name chosen by a
 # model cannot walk out of `data/projects/`. Same rule as tools/knowledge_vault._safe_segment.
-_SAFE_SEGMENT = re.compile(r"[^A-Za-z0-9._ -]+")
 
 # Zip guards. A gerber bundle is a few dozen small files; these bounds are two orders of
 # magnitude above that and exist to make a zip bomb a sentence rather than a full disk.
 _MAX_ZIP_MEMBERS = 2000
 _MAX_ZIP_BYTES = 256 * 1024 * 1024
-
-
-def _safe_segment(text: str, fallback: str) -> str:
-    """One filesystem-safe path component. Never empty, never `.` or `..`, never nested."""
-    cleaned = _SAFE_SEGMENT.sub("_", (text or "").strip().replace("\\", "/").split("/")[-1])
-    cleaned = cleaned.strip(". ").strip()
-    return cleaned or fallback
 
 
 def _slug(text: str) -> str:
@@ -678,20 +672,6 @@ def guess_category(path: Path) -> str:
 # ---------------------------------------------------------------------------------------
 # Moving it
 # ---------------------------------------------------------------------------------------
-
-def _unique(directory: Path, filename: str) -> Path:
-    """A path in `directory` that does not exist yet. Never overwrites — see `engine/server.py`."""
-    candidate = directory / filename
-    if not candidate.exists():
-        return candidate
-    stem, dot, suffix = filename.rpartition(".")
-    stem, suffix = (stem, "." + suffix) if dot else (filename, "")
-    for n in range(2, 1000):
-        candidate = directory / f"{stem}-{n}{suffix}"
-        if not candidate.exists():
-            return candidate
-    raise OSError(f"a thousand files are already called {filename}")
-
 
 def _where(directory: Path) -> str:
     """A directory as a short repo-relative posix path, for saying out loud.
