@@ -129,3 +129,35 @@ data/face_scale
 # lines of speech in LB's house, captured by false wakes. The published CSV keeps only the
 # short fragments the analysis rests on. See memory: never-publish-personal-data.
 media/data/*.raw.csv
+
+# Wake-word audio recorded after 2026-09-06. LB's decision: the 35 clips from that session
+# stay on this machine as training material and are NOT published.
+#
+# They are recordings of him speaking in his own house, and the negative set is worse than the
+# positive one for this — "hey mister odd", "hey mr on call", ambient room tone and ordinary
+# speech, captured to teach the model what is NOT the wake word. Same rule as
+# media/data/*.raw.csv above: see memory note never-publish-personal-data, and note that the
+# copilot repo is public.
+#
+# **The 42 clips committed before this line stay tracked**, because .gitignore does not untrack
+# what git already has, and removing them would break `tools/verify_wake.py` for anyone who
+# clones. So the fixture set is deliberately split: a public 42 that the harness runs against
+# on a fresh clone, and a local 77 that this machine measures and trains from. A clone will
+# therefore report DIFFERENT numbers from `media/data/2026-09-07-wake-fixtures.csv`, and that
+# CSV is the record of what the full set does.
+#
+# Adding a fixture that SHOULD be published needs `git add -f`.
+tests/fixtures/wake/**/*.wav
+
+# The same rule, same session, same reasoning: the sleep-phrase and near-miss command clips
+# recorded on 2026-09-06/07 are LB saying "go to sleep", "goodnight", "that's all" and a set of
+# deliberate near-misses in his own house. 14 command fixtures committed before this line stay
+# tracked, for the reason above — `tools/verify_router.py` and `verify_speakable.py` run
+# against them on a clone.
+tests/fixtures/commands/**/*.wav
+
+# Rotated or hand-kept copies of the runtime log. `*.log` above does not match a suffixed name
+# like `oddball.log.2026-09-07`, and the log is the single worst file in the tree to publish by
+# accident: every capture writes `heard '<whatever was said in the room>'`. One 24-hour log
+# measured 215 of those lines.
+*.log.*

@@ -1,0 +1,50 @@
+{
+  "what": "Every wake fixture scored by the real ONNX model (true_peak) and transcribed by faster-whisper base.en, after LB recorded 35 more clips on 2026-09-06/07 — 21 positives, 11 negatives, 3 known-limits. 77 clips total, up from 42.",
+  "why": "config/oddball.toml has said since 2026-08-30 that the FIXTURE SET, not the threshold, is what constrains this — every threshold derived from the old set was calibrated against LB's best day, because its six 'normal' clips all scored 0.983-0.998. This is the first measurement against a set that contains his ordinary voice as well as his clearest one.",
+  "how": "python media/scripts/measure_wake_fixtures.py — scores config/oddball.toml's configured model at its configured threshold. Recording: python tools/record_fixture.py --plan / --marginal.",
+  "conditions": {
+    "box": "Windows 11 AMD64",
+    "model": "models/hey_mr_odd_ball.onnx, trained 2026-08-11 on synthesised speech",
+    "threshold": 0.76,
+    "microphone": "Logitech C270, Windows WASAPI",
+    "fixture_set": "47 positive, 23 negative, 7 known-limits",
+    "note": "35 of these clips are gitignored and exist only on LB's machine. A clone runs the harness against the public 42 and will not reproduce these numbers."
+  },
+  "headline": "There is no longer any threshold that works. The loudest NEGATIVE — hey-mister-odd-03.wav, a deliberate non-wake-word — peaks at 0.7571, which is 0.0029 under the configured 0.76. And 26 of 47 real positives score BELOW that negative. Raise the threshold and he answers fewer than half of LB's calls; lower it and the room starts firing.",
+  "results": {
+    "positives_firing_at_0.76": "21/47",
+    "negatives_correctly_silent": "23/23",
+    "by_label": {
+      "midsentence": {
+        "fires": "0/7",
+        "peaks": "0.0014-0.6276"
+      },
+      "normal": {
+        "fires": "8/12",
+        "peaks": "0.0185-0.9975"
+      },
+      "offaxis": {
+        "fires": "1/6",
+        "peaks": "0.0032-0.8228"
+      },
+      "quiet": {
+        "fires": "2/4",
+        "peaks": "0.0024-0.9992"
+      },
+      "quiet-marginal": {
+        "fires": "9/12",
+        "peaks": "0.0022-0.9978"
+      },
+      "room": {
+        "fires": "1/6",
+        "peaks": "0.0015-0.8260"
+      }
+    }
+  },
+  "what_changed_since_2026_08_30": "The old set said MARGINAL calls fail — quiet, off-axis, across the room. This set shows ORDINARY desk-range calls failing too: normal-10 peaks 0.1323 and whisper transcribes it cleanly as 'Hey, Mr. Upall.', normal-07 at 0.5456, normal-09 at 0.5927. The original six normal clips were 0.983-0.998, which is exactly the best-day bias the 2026-08-30 note predicted and could not yet demonstrate.",
+  "caveats": [
+    "Two of the original midsentence takes remain bad and are not model failures: midsentence-01 transcribes as 'I'm going to the store, Mr. Albo.' with no 'hey'. Carried forward from the 2026-08-30 note.",
+    "true_peak is the raw two-pass score, not what the live detector reports — it resets on firing, so fired_at understates every positive. Use true_peak to choose a threshold."
+  ],
+  "next": "Retrain. This is no longer 'the durable fix' — it is the only one. The material the 2026-08-11 model never had is now on disk: 47 real positives spanning quiet, off-axis, room and mid-sentence, and 23 hard negatives recorded on the same microphone in the same room, including 'hey mister odd' at 0.7571."
+}

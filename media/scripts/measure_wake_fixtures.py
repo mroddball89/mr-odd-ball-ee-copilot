@@ -8,7 +8,7 @@ Date:    2026-08-30
 
     python media/scripts/measure_wake_fixtures.py
 
-Writes `media/data/2026-08-30-wake-fixtures.csv`.
+Writes `media/data/<today>-wake-fixtures.csv`; `--out` overrides it.
 
 ## Why the transcript column exists, and why it is the whole point
 
@@ -38,15 +38,30 @@ passes deliberately — see its docstring for why it cannot simply be imported.
 
 from __future__ import annotations
 
+import argparse
 import csv
 import sys
+from datetime import date
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 FIXTURES = REPO / "tests" / "fixtures" / "wake"
-OUT_CSV = REPO / "media" / "data" / "2026-08-30-wake-fixtures.csv"
+
+# **Dated on the day it RUNS, not the day this file was written.** 2026-09-07.
+#
+# This was a hardcoded `2026-08-30-wake-fixtures.csv`, and re-running the script after LB
+# recorded 48 more clips silently overwrote the 2026-08-30 measurement with a 2026-09-07 one —
+# leaving a file whose name asserted a date its contents did not have. That file is the
+# evidence base for four separate threshold arguments in `config/oddball.toml`, all of which
+# cite numbers from it; the overwrite made every one of those citations unverifiable, and
+# nothing said so.
+#
+# A measurement's filename is part of the measurement. Two runs against different fixture sets
+# are two results, not one result twice, and the conditions differ precisely BECAUSE the set
+# grew — which is the whole reason to re-run it. `--out` is there for a deliberate rewrite.
+OUT_CSV = REPO / "media" / "data" / f"{date.today():%Y-%m-%d}-wake-fixtures.csv"
 
 # Recorded before this date = the original close-mic set; on/after = the marginal set added
 # 2026-08-30 by `record_fixture.py --marginal`. Used only to label rows.
@@ -90,6 +105,17 @@ def score_clip(model, path: Path, threshold: float) -> tuple[int, float, float]:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="score every wake fixture and write the day's measurement CSV")
+    ap.add_argument("--out", metavar="FILE", default="",
+                    help="write here instead of media/data/<today>-wake-fixtures.csv. Use it "
+                         "to redo a run whose date you know; the default never overwrites an "
+                         "earlier day's result.")
+    args = ap.parse_args()
+    global OUT_CSV
+    if args.out:
+        OUT_CSV = Path(args.out)
+
     from audio.stt import Transcriber, build_model as build_stt, wav_audio   # noqa: PLC0415
     from audio.wake import build_model as build_wake                         # noqa: PLC0415
     from orchestrator.settings import load_config                            # noqa: PLC0415

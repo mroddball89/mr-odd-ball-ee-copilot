@@ -1,0 +1,78 @@
+kind,clip,label,set,fires,fired_at,true_peak,threshold,transcript
+positive,midsentence-01.wav,midsentence,marginal,0,0.0014,0.0014,0.76,"I'm going to the store, Mr. Albo."
+positive,midsentence-02.wav,midsentence,marginal,0,0.0075,0.0075,0.76,"I was walking down the street and I was like, hey, Mr. Oh, what time is it?"
+positive,midsentence-03.wav,midsentence,marginal,0,0.0028,0.0032,0.76,"Last night I went to the store and got some potato chips. Hey, Mr."
+positive,midsentence-04.wav,midsentence,marginal,0,0.0190,0.0190,0.76,"I love chocolate. Hey, Mr. All-Ball. What time is it?"
+positive,midsentence-05.wav,midsentence,marginal,0,0.6276,0.6276,0.76,"I was going around the corner, hey Mr. Ullball, what time is it?"
+positive,midsentence-06.wav,midsentence,marginal,0,0.0021,0.0035,0.76,"So last night I was having fun with my friends. So anyway, hey, Mr. Albo, what time is it?"
+positive,midsentence-07.wav,midsentence,marginal,0,0.0051,0.0051,0.76,"I love chocolate pie and going to the movies. Hey, Mr. Albo, what time is it?"
+positive,normal-01.wav,normal,original,1,0.8218,0.9864,0.76,"Hey, Mr. All-Bong."
+positive,normal-02.wav,normal,original,1,0.9830,0.9830,0.76,Hey Mr. Arbol
+positive,normal-03.wav,normal,original,1,0.8140,0.9946,0.76,"Hey, Mr. Arbol."
+positive,normal-04.wav,normal,original,1,0.9853,0.9853,0.76,Hey Mr. Artball
+positive,normal-05.wav,normal,original,1,0.9883,0.9975,0.76,"Hey, Mr. R. Ball."
+positive,normal-06.wav,normal,original,1,0.9274,0.9926,0.76,"Hey, Mr. Upball."
+positive,normal-07.wav,normal,original,0,0.5456,0.5456,0.76,"Hey, Mr. Alba."
+positive,normal-08.wav,normal,original,1,0.8606,0.8606,0.76,"Hey, Mr. Arbol."
+positive,normal-09.wav,normal,original,0,0.5927,0.5927,0.76,"Hey, Mr. Arbaugh."
+positive,normal-10.wav,normal,original,0,0.1323,0.1323,0.76,"Hey, Mr. Upall."
+positive,normal-11.wav,normal,original,1,0.7934,0.7934,0.76,"Hey, Mr. Alba."
+positive,normal-12.wav,normal,original,0,0.0204,0.0185,0.76,"Hey, Mr. All-Ball."
+positive,offaxis-01.wav,offaxis,marginal,1,0.7663,0.8228,0.76,"Hey, Mr. Ho-boom."
+positive,offaxis-02.wav,offaxis,marginal,0,0.0142,0.0142,0.76,"Hey, Mr. All-Boy."
+positive,offaxis-03.wav,offaxis,marginal,0,0.0037,0.0032,0.76,"Hey, Mr. Oh, boy."
+positive,offaxis-04.wav,offaxis,marginal,0,0.0032,0.0032,0.76,"Hey, Mr. Upwell."
+positive,offaxis-05.wav,offaxis,marginal,0,0.0362,0.0362,0.76,"Hey, Mr. Oh, boy."
+positive,offaxis-06.wav,offaxis,marginal,0,0.5838,0.5838,0.76,"Hey, Mr. Oh, boy."
+positive,quiet-01.wav,quiet,original,1,0.9971,0.9992,0.76,"Hey, Mr. All-Ball."
+positive,quiet-02.wav,quiet,original,1,0.9771,0.9771,0.76,"Hey, Mr. Harbaugh."
+positive,quiet-13.wav,quiet,original,0,0.0024,0.0024,0.76,"Hey, Mr. Arbo."
+positive,quiet-14.wav,quiet,original,0,0.0037,0.0037,0.76,"Hey, Mr. Arbon."
+positive,quiet-marginal-01.wav,quiet-marginal,marginal,0,0.0277,0.0277,0.76,"Hey, Mr. Oddball."
+positive,quiet-marginal-02.wav,quiet-marginal,marginal,1,0.9676,0.9789,0.76,"Hey, Mr. Alleball."
+positive,quiet-marginal-03.wav,quiet-marginal,marginal,0,0.4875,0.4875,0.76,"Hey, Mr. Oh-ball."
+positive,quiet-marginal-04.wav,quiet-marginal,marginal,0,0.0022,0.0022,0.76,"Hey, Mr. Oh, boy."
+positive,quiet-marginal-05.wav,quiet-marginal,marginal,1,0.9551,0.9864,0.76,Hey mister all ball
+positive,quiet-marginal-06.wav,quiet-marginal,marginal,1,0.8218,0.8218,0.76,"Hey, Mr. Albal."
+positive,quiet-marginal-07.wav,quiet-marginal,marginal,1,0.9094,0.9978,0.76,"Hey, Mr. R. Ball."
+positive,quiet-marginal-08.wav,quiet-marginal,marginal,1,0.8522,0.8522,0.76,Hey Mr. Artball
+positive,quiet-marginal-09.wav,quiet-marginal,marginal,1,0.8875,0.9908,0.76,"Hey, Mr. Alba."
+positive,quiet-marginal-10.wav,quiet-marginal,marginal,1,0.8397,0.9967,0.76,"Hey, Mr. Oddball."
+positive,quiet-marginal-11.wav,quiet-marginal,marginal,1,0.9406,0.9406,0.76,"Hey, Mr. Artball."
+positive,quiet-marginal-12.wav,quiet-marginal,marginal,1,0.8968,0.8968,0.76,"Hey, Mr. Oddball."
+positive,room-01.wav,room,marginal,0,0.0015,0.0015,0.76,"Hey, Mr. Alpone."
+positive,room-02.wav,room,marginal,0,0.0398,0.0398,0.76,"Hey, it's the hot ball."
+positive,room-03.wav,room,marginal,0,0.3853,0.3853,0.76,"Hey, Mr. All-Bol."
+positive,room-04.wav,room,marginal,0,0.0045,0.0029,0.76,All right.
+positive,room-05.wav,room,marginal,0,0.0626,0.0626,0.76,"Hey, Mr. All Hall."
+positive,room-06.wav,room,marginal,1,0.7676,0.8260,0.76,"Hey, Mr. All ball."
+negative,ambient-01.wav,ambient,original,0,0.0035,0.0035,0.76,Okay.
+negative,ambient-02.wav,ambient,original,0,0.0126,0.0126,0.76,I'm just ready to help you.
+negative,hey-jarvis-01.wav,hey-jarvis,original,0,0.0065,0.0065,0.76,Hey Jarvis
+negative,hey-jarvis-02.wav,hey-jarvis,original,0,0.0027,0.0027,0.76,Hey Jarvis
+negative,hey-jarvis-03.wav,hey-jarvis,original,0,0.0035,0.0035,0.76,Hey Jarvis
+negative,hey-jarvis-04.wav,hey-jarvis,original,0,0.0073,0.0073,0.76,Hey Jarvis
+negative,hey-mister-01.wav,hey-mister,original,0,0.0066,0.0066,0.76,"Hey, Mr."
+negative,hey-mister-03.wav,hey-mister,original,0,0.0018,0.0018,0.76,"Hey, Mr."
+negative,hey-mister-05.wav,hey-mister,original,0,0.0037,0.0027,0.76,"Hey, Mr."
+negative,hey-mister-odd-01.wav,hey-mister-odd,original,0,0.0033,0.0033,0.76,"Hey, Mr. Art."
+negative,hey-mister-odd-02.wav,hey-mister-odd,original,0,0.0025,0.0028,0.76,"Hey, Mr. Art."
+negative,hey-mister-odd-03.wav,hey-mister-odd,original,0,0.7571,0.7571,0.76,"Hey, Mr. Ollie."
+negative,hey-mister-odd-04.wav,hey-mister-odd,original,0,0.0069,0.0069,0.76,"Hey, Mr. R."
+negative,hey-mr-odd-01.wav,hey-mr-odd,original,0,0.0433,0.0433,0.76,"Hey, Mr. R."
+negative,hey-mr-odd-02.wav,hey-mr-odd,original,0,0.0885,0.0885,0.76,"Hey, Mr. Allin."
+negative,hey-mr-odd-03.wav,hey-mr-odd,original,0,0.0035,0.0028,0.76,"Hey, Mr. R."
+negative,hey-mr-odd-04.wav,hey-mr-odd,original,0,0.1694,0.1694,0.76,"Hey, Mr. Ola."
+negative,hey-mr-on-call-01.wav,hey-mr-on-call,original,0,0.1461,0.1461,0.76,"Mr. Hey, Mr. Oncall."
+negative,hey-mr-on-call-02.wav,hey-mr-on-call,original,0,0.1325,0.1325,0.76,"Hey, Mr. Honkall."
+negative,odd-ball-01.wav,odd-ball,original,0,0.0014,0.0014,0.76,Aw-ball. No. Hey.
+negative,odd-ball-02.wav,odd-ball,original,0,0.0044,0.0051,0.76,"Oddball, no hit."
+negative,speech-01.wav,speech,original,0,0.0606,0.0606,0.76,"Short of physical object. They've done some primitives, stuff like this. People have done like holographic effects where you project stuff onto a clear screen. So it looks like it's not there, Tupac. I'm talking about kidding. He's totally a lot. So I'm gonna try and show you guys how you can make your own holographic projector very simply and very cheaply. So we're going to be projecting an image on a fog screen that normally you can't really see but the light illuminates the little particles and projects the image. And if this ends up going as planned I'll hopefully be able to control this with my hand like I'll be able to touch this makeshift screen and interact with the actual holograms. So let's hit the hardwood store and see what we can find."
+negative,speech-02.wav,speech,original,0,0.0235,0.0235,0.76,Yesterday I went to the store of the song music.
+known-limits,far-01.wav,far,original,0,0.3432,0.3432,0.76,"Hey, Mr. Albo."
+known-limits,far-02.wav,far,original,0,0.0023,0.0023,0.76,Okay.
+known-limits,far-03.wav,far,original,0,0.0099,0.0099,0.76,Hey Mr. All-in-law
+known-limits,far-04.wav,far,original,0,0.0173,0.0227,0.76,Hey Mr. Oh boy.
+known-limits,hey-mr-on-call-01.wav,hey-mr-on-call,original,1,0.8214,0.8214,0.76,"Hey, Mr. Arbaugh."
+known-limits,mister-odd-ball-01.wav,mister-odd-ball,original,1,0.9912,0.9912,0.76,"Mr. Arbaugh, no. Hey."
+known-limits,mister-odd-ball-02.wav,mister-odd-ball,original,0,0.5435,0.5435,0.76,"Mr. All-Bowl, now paid."

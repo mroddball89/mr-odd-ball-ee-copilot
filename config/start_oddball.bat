@@ -108,7 +108,24 @@ REM ONE LINE, no `^` continuations. A caret continues a line for the BATCH parse
 REM text after `cmd /c` is a quoted string being handed to a second parser that never sees it
 REM - so the first attempt at this split the command in half and cmd tried to run `--log` as a
 REM program. Long lines are the price of the redirection; splitting them is not available.
-start "" /B cmd /c ""%PY%" "%REPO%\main.py" --voice --log "%LOGDIR%\oddball.log" --save-captures "%REPO%\captures" >> "%LOGDIR%\oddball.log" 2>&1"
+REM `--log ""` and NOT a missing --log. Two writers were opening one file: this line passed
+REM `--log <path>` AND redirected stdout to that same path, so `run_voice`'s FileHandler lost
+REM the race and warned "could not open the log file ... Permission denied" at every single
+REM start-up. Harmless in itself - the redirect below still captured everything - but it meant
+REM the log was always the CONSOLE format, with no logger names, which is why the regex in
+REM `audio/autotune.py --replay` had to be loosened to make the name optional.
+REM
+REM **Deleting `--log` would have been worse, not neutral.** It DEFAULTS to "oddball.log", a
+REM relative path, and this script has already pushd'd to %REPO% - so the FileHandler would
+REM have succeeded against a SECOND file at %REPO%\oddball.log, and the timing lines would
+REM have gone there while everything else went to data/. Two logs disagreeing is worse than
+REM one log missing a column. `""` is the documented way to switch the handler off; see the
+REM --log help text in engine/run_voice.py.
+REM
+REM So the redirect below is the single writer, deliberately. It is `>>` rather than `>`, so
+REM the file spans sessions - `--replay` segments them by clock rollover, which is what the
+REM 2026-08-31 false-wake accounting did.
+start "" /B cmd /c ""%PY%" "%REPO%\main.py" --voice --log "" --save-captures "%REPO%\captures" >> "%LOGDIR%\oddball.log" 2>&1"
 
 REM --- 2. his face ---------------------------------------------------------------------------
 REM Started immediately and deliberately. See the note about `timeout` at the top.
