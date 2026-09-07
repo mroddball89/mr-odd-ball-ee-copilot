@@ -47,6 +47,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.harness_lib import bootstrap, check, counts as _tally, section  # noqa: E402
+
+bootstrap()
 
 # These ledgers are written from `Engine.ask` and `agents/os_agent.py`, so this harness writes
 # to them the moment it drives a failure — even though it was written before they existed and
@@ -66,12 +69,6 @@ os.environ.setdefault("ODDBALL_MEMORY_FILE",
                       os.path.join(_HARNESS_TMP, "harness_memory.json"))
 
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
-
 import os                                                            # noqa: E402
 
 # Keyless by construction — D7: the box this is authored on has no key. Every check here
@@ -83,25 +80,6 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 _k = os.environ.get("GOOGLE_API_KEY", "").strip()
 if len(_k) < 20 or any(p in _k.lower() for p in ("paste", "here", "your-key", "xxx")):
     os.environ["GOOGLE_API_KEY"] = "harness-not-a-real-key-but-long-enough-to-pass"
-
-PASSED = 0
-FAILED = 0
-
-
-def check(ok: bool, what: str, detail: str = "") -> None:
-    global PASSED, FAILED
-    if ok:
-        PASSED += 1
-        print(f"   PASS  {what}")
-    else:
-        FAILED += 1
-        print(f"   FAIL  {what}")
-    if detail:
-        print(f"           {detail}")
-
-
-def section(name: str) -> None:
-    print(f"\n  {name}")
 
 
 def _days_out(n: int) -> str:
@@ -436,11 +414,11 @@ if __name__ == "__main__":
         store_checks()
 
     print("\n" + "=" * 78)
-    print(f"  {PASSED + FAILED} checks, {PASSED} passed, {FAILED} failed")
+    print(f"  {_tally.passed + _tally.failed} checks, {_tally.passed} passed, {_tally.failed} failed")
     print("=" * 78)
-    if FAILED:
-        print(f"\n  {FAILED} RED\n")
+    if _tally.failed:
+        print(f"\n  {_tally.failed} RED\n")
         raise SystemExit(1)
-    print(f"\n  {PASSED}/{PASSED} checks passed — all green\n")
+    print(f"\n  {_tally.passed}/{_tally.passed} checks passed — all green\n")
     if not args.store:
         print("  (collection isolation not checked — rerun with --store)\n")

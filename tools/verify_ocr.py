@@ -35,34 +35,13 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.harness_lib import bootstrap, check, counts as _tally, section  # noqa: E402
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
+bootstrap()
+
 
 from tools import pdf_ocr                                            # noqa: E402
 from tools.vector_db import fill_blanks_with_ocr                     # noqa: E402
-
-PASSED = 0
-FAILED = 0
-
-
-def check(ok: bool, what: str, detail: str = "") -> None:
-    global PASSED, FAILED
-    if ok:
-        PASSED += 1
-        print(f"   PASS  {what}")
-    else:
-        FAILED += 1
-        print(f"   FAIL  {what}")
-    if detail:
-        print(f"           {detail}")
-
-
-def section(name: str) -> None:
-    print(f"\n  {name}")
 
 
 class _Doc:
@@ -278,18 +257,18 @@ def run(probe: bool = False) -> int:
         shutil.rmtree(tmp, ignore_errors=True)
 
     print("\n" + "=" * 78)
-    print(f"  {PASSED + FAILED} checks, {PASSED} passed, {FAILED} failed")
+    print(f"  {_tally.passed + _tally.failed} checks, {_tally.passed} passed, {_tally.failed} failed")
     print("=" * 78)
     if probe:
-        if FAILED:
-            print(f"\n  The harness BITES: {FAILED} check(s) in section 4 went red.\n")
+        if _tally.failed:
+            print(f"\n  The harness BITES: {_tally.failed} check(s) in section 4 went red.\n")
             return 0
         print("\n  PROBE DID NOT BITE — section 4 is not testing what it claims.\n")
         return 1
-    if FAILED:
-        print(f"\n  {FAILED} RED\n")
+    if _tally.failed:
+        print(f"\n  {_tally.failed} RED\n")
         return 1
-    print(f"\n  {PASSED}/{PASSED} checks passed — all green\n")
+    print(f"\n  {_tally.passed}/{_tally.passed} checks passed — all green\n")
     return 0
 
 

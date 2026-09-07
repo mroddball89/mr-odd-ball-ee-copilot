@@ -47,13 +47,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+from tools.harness_lib import bootstrap, check, counts as _tally, section  # noqa: E402
+
+bootstrap()
 sys.path.insert(0, str(REPO_ROOT / "tests" / "fixtures"))
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
 
 import os                                                            # noqa: E402
 
@@ -67,25 +65,6 @@ if len(_k) < 20 or any(p in _k.lower() for p in ("paste", "here", "your-key", "x
 import tools.knowledge_vault as KV                                   # noqa: E402
 import tools.syllabus_to_vault as S                                  # noqa: E402
 from make_syllabus_pdf import write as write_syllabus_pdf            # noqa: E402
-
-PASSED = 0
-FAILED = 0
-
-
-def check(ok: bool, what: str, detail: str = "") -> None:
-    global PASSED, FAILED
-    if ok:
-        PASSED += 1
-        print(f"   PASS  {what}")
-    else:
-        FAILED += 1
-        print(f"   FAIL  {what}")
-    if detail:
-        print(f"           {detail}")
-
-
-def section(name: str) -> None:
-    print(f"\n  {name}")
 
 
 FULL = S.SyllabusFacts(
@@ -281,10 +260,10 @@ check('suffix != ".pdf"' in academic,
 
 
 print("\n" + "=" * 76)
-total = PASSED + FAILED
-if FAILED:
-    print(f"{PASSED}/{total} checks passed — {FAILED} FAILED")
+total = _tally.passed + _tally.failed
+if _tally.failed:
+    print(f"{_tally.passed}/{total} checks passed — {_tally.failed} _tally.failed")
 else:
     print(f"{total}/{total} checks passed  — all green")
     print("textless refusal, absence preserved, replace-not-append, findability, wiring")
-raise SystemExit(1 if FAILED else 0)
+raise SystemExit(1 if _tally.failed else 0)

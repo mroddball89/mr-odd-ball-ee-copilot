@@ -46,6 +46,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+from tools.harness_lib import bootstrap, check, counts as _tally, section  # noqa: E402
+
+bootstrap()
 
 # The ledgers are written from `Engine.ask` and `agents/os_agent.py`, and `screen_agent` records
 # a failed capture too. Redirected to a temp directory BEFORE anything under `tools/` is
@@ -53,33 +56,9 @@ sys.path.insert(0, str(REPO_ROOT))
 os.environ.setdefault("ODDBALL_VAULT_DIR",
                       tempfile.mkdtemp(prefix="oddball-harness-vault-"))
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
 
 from tools import screen_capture                                     # noqa: E402
 from tools.screen_capture import KINDS                               # noqa: E402
-
-PASSED = 0
-FAILED = 0
-
-
-def check(ok: bool, what: str, detail: str = "") -> None:
-    global PASSED, FAILED
-    if ok:
-        PASSED += 1
-        print(f"   PASS  {what}")
-    else:
-        FAILED += 1
-        print(f"   FAIL  {what}")
-    if detail:
-        print(f"           {detail}")
-
-
-def section(name: str) -> None:
-    print(f"\n  {name}")
 
 
 def speech_table() -> dict[str, str]:
@@ -294,10 +273,10 @@ if __name__ == "__main__":
         raise SystemExit(capture_now())
 
     print("\n" + "=" * 78)
-    print(f"  {PASSED + FAILED} checks, {PASSED} passed, {FAILED} failed")
+    print(f"  {_tally.passed + _tally.failed} checks, {_tally.passed} passed, {_tally.failed} failed")
     print("=" * 78)
-    if FAILED:
-        print(f"\n  {FAILED} RED\n")
+    if _tally.failed:
+        print(f"\n  {_tally.failed} RED\n")
         raise SystemExit(1)
-    print(f"\n  {PASSED}/{PASSED} checks passed — all green\n")
+    print(f"\n  {_tally.passed}/{_tally.passed} checks passed — all green\n")
     raise SystemExit(0)

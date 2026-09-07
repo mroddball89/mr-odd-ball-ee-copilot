@@ -52,37 +52,16 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
+from tools.harness_lib import bootstrap, check, counts as _tally, section  # noqa: E402
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
+bootstrap()
+
 
 from tools import harness_env                                        # noqa: E402
 
 _TMP = harness_env.isolate("memory-file")
 
 from tools import memory_manager                                     # noqa: E402
-
-PASSED = 0
-FAILED = 0
-
-
-def check(ok: bool, what: str, detail: str = "") -> None:
-    global PASSED, FAILED
-    if ok:
-        PASSED += 1
-        print(f"   PASS  {what}")
-    else:
-        FAILED += 1
-        print(f"   FAIL  {what}")
-    if detail:
-        print(f"           {detail}")
-
-
-def section(name: str) -> None:
-    print(f"\n  {name}")
 
 
 def _point_at(directory: Path) -> None:
@@ -314,7 +293,7 @@ def main() -> int:
               "...but the raw transcript is still on record, unedited",
               "`said` is the record of record; only the derived Rule was corrected")
 
-    return 0 if FAILED == 0 else 1
+    return 0 if _tally.failed == 0 else 1
 
 
 def probe() -> int:
@@ -365,5 +344,5 @@ if __name__ == "__main__":
         raise SystemExit(probe())
 
     code = main()
-    print(f"\n  {PASSED} passed, {FAILED} failed\n")
+    print(f"\n  {_tally.passed} passed, {_tally.failed} failed\n")
     raise SystemExit(code)

@@ -67,37 +67,17 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.harness_lib import bootstrap, check, counts as _tally, section  # noqa: E402
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
+bootstrap()
+
 
 from orchestrator import credible                                    # noqa: E402
 from orchestrator.credible import assess                             # noqa: E402
 
-PASSED = 0
-FAILED = 0
 
 KEEP = "KEEP"
 DROP = "DROP"
-
-
-def check(ok: bool, what: str, detail: str = "") -> None:
-    global PASSED, FAILED
-    if ok:
-        PASSED += 1
-        print(f"   PASS  {what}")
-    else:
-        FAILED += 1
-        print(f"   FAIL  {what}")
-    if detail:
-        print(f"           {detail}")
-
-
-def section(name: str) -> None:
-    print(f"\n  {name}")
 
 
 # (label, voiced_s, audio_s, transcript, when)
@@ -487,9 +467,9 @@ if __name__ == "__main__":
 
     run()
     print("\n" + "=" * 78)
-    print(f"  {PASSED + FAILED} checks, {PASSED} passed, {FAILED} failed")
+    print(f"  {_tally.passed + _tally.failed} checks, {_tally.passed} passed, {_tally.failed} failed")
     print("=" * 78)
-    if FAILED:
-        print(f"\n  {FAILED} RED\n")
+    if _tally.failed:
+        print(f"\n  {_tally.failed} RED\n")
         raise SystemExit(1)
-    print(f"\n  {PASSED}/{PASSED} checks passed — all green\n")
+    print(f"\n  {_tally.passed}/{_tally.passed} checks passed — all green\n")

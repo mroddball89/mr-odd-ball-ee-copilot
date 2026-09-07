@@ -55,12 +55,10 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.harness_lib import bootstrap, check, counts as _tally, section  # noqa: E402
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
+bootstrap()
+
 
 # BEFORE any `engine.` import. `core.ROUTER_DEADLINE_S` is read at import time, so setting
 # this further down rebinds nothing and section 6 would sit through the real 20-second wait to
@@ -71,25 +69,6 @@ os.environ.setdefault("GOOGLE_API_KEY", "harness-not-a-real-key-but-long-enough-
 os.environ["ODDBALL_SELF_CONTEXT"] = "0"
 
 import engine.run_voice as rv                                        # noqa: E402
-
-PASSED = 0
-FAILED = 0
-
-
-def check(ok: bool, what: str, detail: str = "") -> None:
-    global PASSED, FAILED
-    if ok:
-        PASSED += 1
-        print(f"   PASS  {what}")
-    else:
-        FAILED += 1
-        print(f"   FAIL  {what}")
-    if detail:
-        print(f"           {detail}")
-
-
-def section(name: str) -> None:
-    print(f"\n  {name}")
 
 
 FRAME = np.zeros(1280, dtype=np.int16)
@@ -351,11 +330,10 @@ check(dispatched == [AgentRoute.MATH],
       "" if dispatched == [AgentRoute.MATH] else f"dispatched to {dispatched}")
 
 
-
 print("\n" + "=" * 78)
-print(f"  {PASSED + FAILED} checks, {PASSED} passed, {FAILED} failed")
+print(f"  {_tally.passed + _tally.failed} checks, {_tally.passed} passed, {_tally.failed} failed")
 print("=" * 78)
-if FAILED:
-    print(f"\n  {FAILED} RED\n")
+if _tally.failed:
+    print(f"\n  {_tally.failed} RED\n")
     raise SystemExit(1)
-print(f"\n  {PASSED}/{PASSED} checks passed — all green\n")
+print(f"\n  {_tally.passed}/{_tally.passed} checks passed — all green\n")

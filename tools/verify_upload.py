@@ -51,12 +51,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
+from tools.harness_lib import bootstrap, check, counts as _tally, section  # noqa: E402
 
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, OSError):
-        pass
+bootstrap()
+
 
 # Keyless by construction — D7: the box this is authored on has no key, and section 7 imports
 # the agent modules to read their tool tables. `engine/models.py` validates the key at IMPORT
@@ -74,25 +72,6 @@ if len(_k) < 20 or any(p in _k.lower() for p in ("paste", "here", "your-key", "x
 
 import engine.server as S                                            # noqa: E402
 import tools.file_manager as F                                       # noqa: E402
-
-PASSED = 0
-FAILED = 0
-
-
-def check(ok: bool, what: str, detail: str = "") -> None:
-    global PASSED, FAILED
-    if ok:
-        PASSED += 1
-        print(f"   PASS  {what}")
-    else:
-        FAILED += 1
-        print(f"   FAIL  {what}")
-    if detail:
-        print(f"           {detail}")
-
-
-def section(name: str) -> None:
-    print(f"\n  {name}")
 
 
 BOUNDARY = b"----OddBallBoundary7MA4YWxkTrZu0gW"
@@ -1027,10 +1006,10 @@ check("Never tell him a document is searchable" in F.FILE_INSTRUCTION,
 # ============================================================
 
 print("\n" + "=" * 76)
-total = PASSED + FAILED
-if FAILED:
-    print(f"{PASSED}/{total} checks passed — {FAILED} FAILED")
+total = _tally.passed + _tally.failed
+if _tally.failed:
+    print(f"{_tally.passed}/{total} checks passed — {_tally.failed} _tally.failed")
 else:
     print(f"{total}/{total} checks passed  — all green")
     print("parser, names, origin, accept list, live HTTP round trip, filing, agent wiring")
-raise SystemExit(1 if FAILED else 0)
+raise SystemExit(1 if _tally.failed else 0)
