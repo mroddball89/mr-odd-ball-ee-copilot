@@ -280,7 +280,6 @@ sys.modules["tools.quiz_manager"] = _manager
 _explained = []
 _grader = types.ModuleType("agents.quiz_agent")
 _grader.explain_quiz_answer = lambda **kw: (_explained.append(kw), "Because V over I is R.")[1]
-_grader.evaluate_quiz_answer = _grader.explain_quiz_answer
 sys.modules["agents.quiz_agent"] = _grader
 
 r = eng.ask("quiz me")

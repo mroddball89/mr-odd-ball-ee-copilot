@@ -1,4 +1,3 @@
-import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from engine.models import AGENT_MODEL, CLOUD_TIMEOUT_S, LLM_MAX_RETRIES

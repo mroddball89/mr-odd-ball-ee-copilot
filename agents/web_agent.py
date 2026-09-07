@@ -1,4 +1,3 @@
-import os
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from tools.web_search import perform_web_search
@@ -6,7 +5,6 @@ from engine.models import AGENT_MODEL, CLOUD_TIMEOUT_S, LLM_MAX_RETRIES
 from engine.llm_text import extract_text_content
 from engine.response import Card, CardKind, Pending, Response
 from engine.split import SPOKEN_INSTRUCTION, is_speakable, split
-from orchestrator.classify_yes import approve_at_keyboard
 from tools.memory_manager import format_memory_for_llm
 
 WEB_PROMPT_TEMPLATE = """
@@ -102,28 +100,3 @@ def resume_web_search(pending: Pending) -> Response:
         cards=list(out.cards) + [Card(CardKind.LOG, "Search results", str(result))],
         route="web",
         raw=summary)
-
-
-def run_web_agent(query: str) -> str:
-    """The old blocking entry point, kept for `main.py --text` and the existing tests.
-
-    Deliberately NOT the path the voice loop takes — it reads stdin, which a spoken turn
-    cannot answer.
-
-    Approval is the keyboard here, same as on the OS path — see
-    `agents/os_agent.py:run_os_agent`, including what left with the camera on 2026-08-29 and
-    what did not. The gate here protects the boundary rather than the machine: LB's rule is
-    local-first with cloud opt-in per request, so leaving the box is still a thing he agrees
-    to each time.
-    """
-    proposed = propose_web_search(query)
-    if proposed.pending is None:
-        return proposed.raw or proposed.speech
-
-    print("\n⚠️  SECURITY CHECK: The AI wants to search the web for:")
-    print(f"   > '{proposed.pending.shown}'")
-
-    if approve_at_keyboard("   Allow search? (y/n): "):
-        print("   Searching...", flush=True)
-        return resume_web_search(proposed.pending).raw
-    return "Action aborted by the user. No web search was performed."

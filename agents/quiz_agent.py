@@ -41,7 +41,7 @@ import logging
 
 LOG = logging.getLogger("oddball.quiz")
 
-__all__ = ["explain_quiz_answer", "evaluate_quiz_answer"]
+__all__ = ["explain_quiz_answer"]
 
 EXPLANATION_PROMPT = """
 You are an expert tutor helping a student revise.
@@ -58,10 +58,6 @@ They have asked you to explain the answer further. Explain WHY the answer is wha
    stored answer itself looks wrong to you.
 Keep it under 150 words. The student is listening to this out loud.
 """
-
-# Kept for the case where a deck carries no answer at all, and for anything still importing the
-# old name. NOT on the marking path any more — see the module docstring.
-EVALUATION_PROMPT = EXPLANATION_PROMPT
 
 
 def explain_quiz_answer(question: str, correct_answer: str, user_answer: str = "") -> str:
@@ -109,13 +105,3 @@ def explain_quiz_answer(question: str, correct_answer: str, user_answer: str = "
                 f"{_failure_line(exc, where='quiz explanation')} "
                 f"The answer is still: {correct_answer}")
 
-
-def evaluate_quiz_answer(question: str, correct_answer: str, user_answer: str) -> str:
-    """**Deprecated.** Marking is `tools.quiz_grade.grade`, which is local and free.
-
-    Kept as a name so nothing that imports it breaks, and delegating to the explainer rather
-    than to a second copy of the old prompt — the one thing this must not do is quietly become
-    a marking path again and put a network call back on every answer.
-    """
-    LOG.warning("evaluate_quiz_answer is deprecated — marking is local, see tools/quiz_grade.py")
-    return explain_quiz_answer(question, correct_answer, user_answer)

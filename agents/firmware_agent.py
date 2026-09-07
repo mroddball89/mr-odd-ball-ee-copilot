@@ -104,16 +104,6 @@ User Question: {question}
 """ + VAULT_INSTRUCTION + FILE_INSTRUCTION + SPOKEN_INSTRUCTION
 
 
-def run_firmware_agent(query: str) -> str:
-    """Answer a firmware question, grounded in the local datasheet store where possible.
-
-    Returns the raw reply text. `engine/core.py` calls `run_firmware_agent_response` instead
-    when it wants the sources card too; this signature is kept so `main.py --text` and the
-    existing tests are unaffected.
-    """
-    return _answer(query)[0]
-
-
 def run_firmware_agent_response(query: str, retrieved: "tuple[str, list[dict]] | None" = None
                                 ) -> Response:
     """The same answer, as a Response, with a Sources card when retrieval grounded it.

@@ -43,23 +43,13 @@ from tools.quiz_grade import Grade, explain_locally, grade  # noqa: F401
 
 LOG = logging.getLogger("oddball.quiz")
 
-__all__ = ["get_random_question", "next_question", "grade", "explain_locally", "Grade",
+__all__ = ["get_random_question", "grade", "explain_locally", "Grade",
            "QuizItem", "subjects", "deck_sizes", "resolve_subject", "bank_summary",
-           "load_deck", "load_all", "import_document"]
-
-
-def next_question(subject: str = "", asked: set | None = None) -> QuizItem | None:
-    """The next question to put to LB. None when the bank is empty.
-
-    Args:
-        subject: a deck to stay inside, or "" for everything.
-        asked:   ids already used this session, so the same question is not asked twice.
-    """
-    return pick(subject, exclude=asked)
+           "load_deck", "load_all"]
 
 
 def get_random_question() -> dict:
-    """One question as a plain dict. **Kept for compatibility — prefer `next_question`.**
+    """One question as a plain dict. The shape `engine/core.py` and the harnesses expect.
 
     The old signature, returning the old shape: `{"question": ..., "answer": ...}`. Callers
     that only know about those two keys keep working; the `choices`, `kind` and `explanation`
@@ -89,18 +79,3 @@ def bank_summary() -> str:
     total = sum(sizes.values())
     listed = ", ".join(f"{name} ({count})" for name, count in sizes.items())
     return f"I have {total} question(s) across {len(sizes)} subject(s): {listed}."
-
-
-def import_document(path, subject: str = ""):
-    """Read a PDF, .txt or .md of questions into the bank. Returns an `ImportReport`.
-
-    Imported inside the function rather than at module scope: `quiz_import` pulls in `pypdf`
-    and, for a scanned paper, the OCR stack behind `tools/pdf_ocr.py`. Neither belongs in the
-    import cost of asking one question, and `engine/core.py` imports this module on the turn
-    path.
-    """
-    from pathlib import Path                                         # noqa: PLC0415
-
-    from tools.quiz_import import import_pdf                         # noqa: PLC0415
-
-    return import_pdf(Path(path), subject=subject)
