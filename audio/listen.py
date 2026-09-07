@@ -131,6 +131,46 @@ class UtteranceRecorder:
         self.reset()
 
     @property
+    def wait_s(self) -> float:
+        """How long to wait for the utterance to BEGIN, in seconds. Settable between captures.
+
+        **Why this is writable at all**, added 2026-09-06: answering a quiz question is not the
+        same activity as asking one, and one number cannot serve both. 1.5s is generous for
+        "what time is it" and it is a stopwatch for "the equivalent resistance of two 4.7k
+        resistors in parallel" — LB hears the question, starts working it in his head, and at
+        1.5 seconds this recorder gives up on him while he is still doing the arithmetic.
+
+        What that looked like from the outside, which is the reason he asked for it:
+        `engine/turn.py` reads SILENT and speaks the greeting — "What's up LB?" — into the
+        middle of his working, and a second silence ends the turn with nothing heard, which
+        does not extend the conversation window, which puts him to sleep with the quiz still
+        open. One pause, and the machine interrupts, gives up, and locks the door behind it.
+
+        Raising the number globally is the wrong fix for the same reason `max_s`'s docstring
+        gives about the cap: 1.5s is correct for an ordinary turn, and a wake nobody meant
+        should not hold the microphone for half a minute waiting for a room to speak. So
+        `engine/turn.py` raises it only while a quiz question is actually on the table, and
+        puts it back in a `finally`.
+
+        **A wait budget is not spent unless it is needed.** `_step` only returns SILENT at this
+        deadline if no voice ever started; the moment LB speaks, `hangover_s` takes over and
+        this number stops mattering. So a generous wait costs nothing at all on every turn he
+        answers quickly — which is why quiz mode gets ONE number rather than one per question
+        kind. There is no trade here to optimise.
+
+        Set between captures, never during one — `_step` reads it each frame, so changing it
+        mid-utterance would move the goalposts on a recording already in progress.
+        """
+        return self._wait_s
+
+    @wait_s.setter
+    def wait_s(self, seconds: float) -> None:
+        seconds = float(seconds)
+        if seconds <= 0:
+            raise ValueError(f"wait_s must be > 0, got {seconds}")
+        self._wait_s = seconds
+
+    @property
     def max_s(self) -> float:
         """The hard cap on one utterance, in seconds. Settable between captures.
 

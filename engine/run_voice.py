@@ -415,6 +415,21 @@ async def main(argv: list[str] | None = None) -> int:
     conversation_s = wake_cfg["conversation_s"]
     conversation_until = 0.0
 
+    # The quiz's pacing knobs. `[quiz]` is an OPTIONAL section — a config written before
+    # 2026-09-06 does not have it — so every read carries the default that reproduces the old
+    # behaviour exactly. See orchestrator/settings._OPTIONAL.
+    quiz_cfg = cfg.get("quiz", {})
+
+    # The score of the wake that opened the turn now running, and whether it cleared
+    # `greet_threshold`. Written by the audio thread in `on_detect`, read by the turn thread
+    # through `should_greet`. A plain list for the same reason `conversation_until` is a plain
+    # float: every write is a whole assignment and neither side needs a consistent pair.
+    #
+    # Starts True, so the very first turn of a session — and every turn in `--simulate`, which
+    # never calls `on_detect` with a real Detection — behaves exactly as it always did.
+    last_wake_greetable = [True]
+    greet_threshold = float(wake_cfg.get("greet_threshold", 0.0))
+
     def rearm() -> None:
         """Start (or restart) the drift back to rest. Event-loop thread only."""
         nonlocal idle_handle
@@ -486,7 +501,14 @@ async def main(argv: list[str] | None = None) -> int:
     # What that cost is written down in docs/DECISIONS.md D1 and D3: the local model was the
     # only part of this system with no quota attached, and dropping it put every joke on the
     # 20-requests-a-day free tier.
-    engine = Engine()
+    # The quiz knobs are passed HERE and nowhere else. `main.py --text` builds a bare `Engine()`
+    # and keeps the old behaviour on purpose: the commit phrase exists because a SPOKEN answer
+    # has no end marker and the recorder had to guess from silence. Typing already has one.
+    engine = Engine(
+        quiz_commit=bool(quiz_cfg.get("commit_required", False)),
+        quiz_idle_turns=int(quiz_cfg.get("idle_turns", 0)),
+        quiz_nudge_after=int(quiz_cfg.get("nudge_after_ignored", 0)),
+    )
     LOG.info("engine up: router=%s agents=%s", models.ROUTER_MODEL, models.AGENT_MODEL)
 
     # --- warm the embedding model, off the answer path -------------------------------------
@@ -560,6 +582,11 @@ async def main(argv: list[str] | None = None) -> int:
             # rather than failing to start.
             dictation_max_s=float(listen_cfg.get("dictation_max_s", 0.0)),
             wake_tail_s=float(listen_cfg.get("wake_tail_s", 0.0)),
+            quiz_wait_s=float(listen_cfg.get("quiz_wait_s", 0.0)),
+            quiz_max_s=float(listen_cfg.get("quiz_max_s", 0.0)),
+            # Read at the moment the turn asks, not captured when the Turn was built — the
+            # answer belongs to the wake that opened THIS turn.
+            should_greet=lambda: last_wake_greetable[0],
         )
 
         def turn_finished(result=None) -> None:
@@ -588,7 +615,25 @@ async def main(argv: list[str] | None = None) -> int:
             answered = result is not None and bool(result.heard.strip())
             now = time.monotonic()
 
-            if answered and not dismissed and conversation_s > 0:
+            # **A quiz question being worked on is not a conversation that has run out.**
+            #
+            # The rule above — heard nothing, so do not extend — exists because a false wake
+            # captures silence and would otherwise hold the microphone open by re-triggering
+            # itself. A quiz session cannot be opened by a false wake: it is entered by an
+            # utterance that was heard, found credible, routed and answered with a question.
+            # `Engine.quiz_heard_nothing` owns the exception and its own bound; when it has
+            # counted enough silent turns it closes the session and returns False, and this
+            # falls straight back to the ordinary behaviour.
+            quizzing = False
+            if not answered and not dismissed:
+                try:
+                    quizzing = (engine is not None and getattr(engine, "mode", "") == "quiz"
+                                and engine.quiz_heard_nothing())
+                except Exception:                                     # noqa: BLE001
+                    LOG.exception("quiz_heard_nothing raised — closing the window")
+                    quizzing = False
+
+            if (answered or quizzing) and not dismissed and conversation_s > 0:
                 conversation_until = now + conversation_s
 
             # Stale audio must never open the next exchange, whether that exchange comes from
@@ -753,12 +798,47 @@ async def main(argv: list[str] | None = None) -> int:
 
         threading.Thread(target=_typed_thread, name="typed", daemon=True).start()
 
-    def on_detect(_det) -> None:
+    def on_detect(det) -> None:
         """Called from the audio thread."""
         # Startle first and unconditionally: whatever follows takes a moment, and a face that
         # reacts instantly is what makes that read as a pause for breath rather than a lag.
+        #
+        # **The face is never gated on the score, and that is deliberate.** `rearm` puts it
+        # plainly — "his face IS the interface, so it has to be telling the truth about the
+        # microphone." The microphone really is open here. Showing `sleeping` over an open mic
+        # to hide a false wake would be the single most misleading thing this rig could do.
+        # Only the VOICE waits for a reason; see `greet_threshold`.
         bridge.play_gesture("startle")
         bridge.set_state("listening")
+
+        # Does this wake deserve to be spoken to if nothing follows it? Recorded here because
+        # this is the only place the score exists — `Turn` has no business knowing what one is.
+        #
+        # 0 disables the rule and greets unconditionally, which is the behaviour up to
+        # 2026-09-06. `det` may be a stand-in from `--simulate`, which has no score at all; a
+        # wake nobody can score is treated as greetable, because refusing to speak on a
+        # diagnostic path would look exactly like the diagnostic being broken.
+        score = getattr(det, "score", None)
+        last_wake_greetable[0] = (
+            True if (not greet_threshold or score is None) else float(score) >= greet_threshold)
+        if not last_wake_greetable[0]:
+            LOG.info("wake scored %.3f, under the %.2f needed to speak first — "
+                     "listening without greeting", float(score), greet_threshold)
+
+        # **The wake word said while a quiz is open is LB reaching for the exit.**
+        #
+        # `Engine.leave_quiz` has existed since 2026-08-19, documents itself as "the way out
+        # that does not depend on being heard correctly", and was called from NOWHERE in the
+        # repo until now — so the only exit from the quiz lock was a phrase `base.en` had to
+        # transcribe correctly first, which is exactly the failure it was written to prevent.
+        #
+        # Guarded, because `Engine` is optional on the step-3/4 paths below.
+        try:
+            if engine is not None and getattr(engine, "mode", "") == "quiz":
+                LOG.info("wake word during a quiz — leaving quiz mode")
+                engine.leave_quiz()
+        except Exception:                                             # noqa: BLE001
+            LOG.exception("could not leave quiz mode on a wake")
 
         if full_turn:
             try:

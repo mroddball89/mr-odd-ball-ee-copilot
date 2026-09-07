@@ -163,7 +163,7 @@ SLIDES_PAPER = [
 ]
 
 
-def run(probe: bool = False) -> int:
+def run(probe: bool = False, probe_pacing: bool = False) -> int:
     print("=" * 78)
     print("  verify_quiz.py — the question bank, the local grader, and the silence")
     print("=" * 78)
@@ -174,7 +174,7 @@ def run(probe: bool = False) -> int:
     quiz_bank.LEGACY_FILE = workspace / "quiz_data.json"
 
     try:
-        _sections(workspace, probe)
+        _sections(workspace, probe, probe_pacing)
     finally:
         quiz_bank.QUIZ_DIR, quiz_bank.LEGACY_FILE = real_dir, real_legacy
         shutil.rmtree(workspace, ignore_errors=True)
@@ -182,11 +182,13 @@ def run(probe: bool = False) -> int:
     print("\n" + "=" * 78)
     print(f"  {_tally.passed + _tally.failed} checks, {_tally.passed} passed, {_tally.failed} failed")
     print("=" * 78)
-    if probe:
+    if probe or probe_pacing:
+        which = "5" if probe else "6"
         if _tally.failed:
             print(f"\n  The harness BITES: {_tally.failed} check(s) went red.\n")
             return 0
-        print("\n  PROBE DID NOT BITE — section 5 is not testing what it claims.\n")
+        print(f"\n  PROBE DID NOT BITE — section {which} is not testing what it "
+              f"claims.\n")
         return 1
     if _tally.failed:
         print(f"\n  {_tally.failed} RED\n")
@@ -195,7 +197,7 @@ def run(probe: bool = False) -> int:
     return 0
 
 
-def _sections(workspace: Path, probe: bool) -> None:
+def _sections(workspace: Path, probe: bool, probe_pacing: bool = False) -> None:
     # =====================================================================================
     section("1. the bank — decks by subject, stable ids, no duplicates on re-import")
     # =====================================================================================
@@ -517,12 +519,274 @@ def _sections(workspace: Path, probe: bool) -> None:
         socket.socket = real_socket
 
 
+    # =====================================================================================
+    section("6. pacing — the quiz waits for him, and gives the microphone back")
+    # 2026-09-06. LB: *"i need him to take on a different persona so he can wait for my answers
+    # especially if its math i need time to answer the question."*
+    #
+    # Two independent mechanisms, and this section covers both:
+    #   the BUDGET  — engine/turn.py raises `wait_s` while a question is on the table
+    #   the COMMIT  — engine/core.py marks nothing until LB says he is ready
+    #
+    # The checks that matter most are the ones about giving the microphone BACK. A raised wait
+    # left raised is spent on every ordinary turn that hears nothing, for the rest of the day.
+
+    from engine.core import Engine, QuizSession                       # noqa: PLC0415
+    from engine.turn import Turn                                      # noqa: PLC0415
+    from agents.quiz_agent import QUIZ_PERSONA                        # noqa: PLC0415
+    from agents.persona_agent import PERSONA                          # noqa: PLC0415
+
+    item_short = QuizItem(question="What is the derivative of x squared?", answer="2x",
+                          subject="Calculus", kind="short")
+
+    class _Rec:
+        """A recorder that can be told to wait, like the real one since 2026-09-06."""
+
+        def __init__(self):
+            self.wait_s, self.max_s, self.ignore_start_s = 1.5, 15.0, 0.0
+            self.seen = {}
+
+        def reset(self):
+            pass
+
+        def feed(self, _frame):
+            self.seen = {"wait_s": self.wait_s, "max_s": self.max_s}
+            return "captured"
+
+    class _OldRec:
+        """A stub written BEFORE `wait_s` was a property. Three harnesses contain one."""
+
+        __slots__ = ("max_s",)
+
+        def __init__(self):
+            self.max_s = 15.0
+
+        def reset(self):
+            pass
+
+        def feed(self, _frame):
+            return "captured"
+
+    def _turn(recorder, engine, greet=None):
+        return Turn(recorder=recorder, transcriber=None, engine=engine, speaker=None,
+                    bridge=None, gate=None, frames=lambda: b"f", greeting=["What's up LB?"],
+                    gate_tail_s=0.0,
+                    # --probe-pacing puts the old behaviour back: no budget at all.
+                    quiz_wait_s=0.0 if probe_pacing else 30.0,
+                    quiz_max_s=0.0 if probe_pacing else 45.0,
+                    should_greet=greet)
+
+    def _quizzing(item=item_short):
+        eng = Engine(quiz_commit=True, quiz_idle_turns=4, quiz_nudge_after=3)
+        eng.mode = "quiz"
+        eng.quiz = QuizSession(subject="Calculus", item=item, asked=set())
+        return eng
+
+    def _boom(_frame):
+        raise RuntimeError("mid-capture")
+
+    # ---- the budget -------------------------------------------------------------------
+    rec = _Rec()
+    _turn(rec, _quizzing())._capture()
+    check(rec.seen.get("wait_s") == 30.0,
+          "a quiz question on the table raises wait_s for the capture",
+          f"waited {rec.seen.get('wait_s')}s, not 1.5s")
+    check(rec.seen.get("max_s") == 45.0,
+          "...and raises the cap, so he can work an answer out loud",
+          f"cap {rec.seen.get('max_s')}s")
+    check((rec.wait_s, rec.max_s) == (1.5, 15.0),
+          "BOTH are given back when the capture ends",
+          f"wait_s={rec.wait_s} max_s={rec.max_s}")
+
+    # The one that would be a silent bug: an exception out of the recorder must still restore.
+    # A raised wait left raised is a microphone that sits in silence for thirty seconds after
+    # every false wake for the rest of the session.
+    rec = _Rec()
+    rec.feed = _boom
+    try:
+        _turn(rec, _quizzing())._capture()
+    except RuntimeError:
+        pass
+    check((rec.wait_s, rec.max_s) == (1.5, 15.0),
+          "...and given back even when the capture RAISES — the `finally` is the point",
+          f"wait_s={rec.wait_s} max_s={rec.max_s}")
+
+    # The `verify_deafness` lesson, and the one that has actually bitten: a stub recorder
+    # predating the property must not take the microphone thread down with it.
+    try:
+        got = _turn(_OldRec(), _quizzing())._capture()
+        check(got == "captured",
+              "a recorder with no settable wait_s does not crash, it just does not wait longer",
+              "no AttributeError")
+    except AttributeError as exc:
+        check(False, "a recorder with no settable wait_s does not crash", f"raised {exc}")
+
+    # A recorder with `wait_s` but no `max_s`. Written as ONE try block, the raise on max_s
+    # lands in the same `except` that clears `was_wait_s`, so the `finally` restores nothing
+    # and the wait stays at 30s for the rest of the session — the exact leak the guard exists
+    # to prevent, reintroduced by the guard. Found by writing this check.
+    class _WaitOnly:
+        def __init__(self):
+            self.wait_s = 1.5
+
+        def reset(self):
+            pass
+
+        def feed(self, _frame):
+            return "captured"
+
+        @property
+        def max_s(self):
+            raise AttributeError("this stub has no max_s")
+
+        @max_s.setter
+        def max_s(self, _v):
+            raise AttributeError("this stub has no max_s")
+
+    partial = _WaitOnly()
+    _turn(partial, _quizzing())._capture()
+    check(partial.wait_s == 1.5,
+          "a recorder that raises on max_s still gets its WAIT back — two guards, not one",
+          f"wait_s={partial.wait_s}")
+
+    rec = _Rec()
+    _turn(rec, Engine())._capture()
+    check(rec.seen.get("wait_s") == 1.5,
+          "an ordinary turn is untouched — the budget is scoped to the quiz",
+          f"waited {rec.seen.get('wait_s')}s")
+
+    rec = _Rec()
+    _turn(rec, _quizzing(item=None))._capture()
+    check(rec.seen.get("wait_s") == 1.5,
+          "quiz mode with an EMPTY bank gets no long wait — there is nothing to work out",
+          f"waited {rec.seen.get('wait_s')}s")
+
+    # ---- the greeting that must not fire ----------------------------------------------
+    plain = Engine()
+    check(_turn(_Rec(), plain, greet=lambda: True)._silence_line(1) == "What's up LB?",
+          "a wake that scored well is still greeted when nothing follows it")
+    check(_turn(_Rec(), plain, greet=lambda: False)._silence_line(1) is None,
+          "a wake nobody meant is answered with SILENCE — None also skips the second capture",
+          "the whole audible cost of a false wake")
+    check(_turn(_Rec(), plain)._silence_line(1) == "What's up LB?",
+          "...and a Turn built without should_greet behaves exactly as it always did")
+
+    # ---- the commit phrase ------------------------------------------------------------
+    eng = _quizzing()
+    reply = eng.ask("okay so I bring the power down")
+    check(not (reply.speech or "").strip(),
+          "thinking out loud is answered with SILENCE — speaking would gate the mic shut",
+          "empty speech")
+    check(eng.quiz.answered == 0,
+          "...and is not marked, which is the whole point of commit_required",
+          f"answered={eng.quiz.answered}")
+
+    eng = _quizzing()
+    eng.ask("my answer is 2x")
+    check(eng.quiz.answered == 1 and eng.quiz.score == 1.0,
+          "'my answer is 2x' marks 2x, and marks it right", eng.quiz.tally())
+
+    eng = _quizzing()
+    eng.ask("the answer is V = I times R")
+    check(eng.quiz.last_answer == "V = I times R",
+          "the payload is sliced from the ORIGINAL text, so an equals sign survives",
+          f"graded {eng.quiz.last_answer!r}")
+
+    eng = _quizzing()
+    said = eng.ask("ready")
+    check(eng.quiz.awaiting == "answer" and eng.quiz.answered == 0,
+          "a bare 'ready' marks nothing and opens the door", f"said {said.speech!r}")
+    eng.ask("2x")
+    check(eng.quiz.answered == 1 and eng.quiz.awaiting == "commit",
+          "...and the NEXT utterance is the answer, whole", eng.quiz.tally())
+
+    eng = _quizzing()
+    eng.ask("I have no idea")
+    check(eng.quiz.answered == 1,
+          "'I don't know' is an ANSWER and is marked as one, commit phrase or not",
+          "not left waiting for a phrase he should not have to say")
+
+    for utterance, label in (("exit quiz", "exit"), ("how am i doing", "score"),
+                             ("skip this one", "skip")):
+        eng = _quizzing()
+        eng.ask(utterance)
+        check("thinking aloud" not in " ".join(eng.last.extras),
+              f"'{utterance}' still wins over the commit gate", label)
+
+    eng = _quizzing()
+    for _ in range(2):
+        eng.ask("hmm let me see")
+    check("reminded" not in " ".join(eng.last.extras),
+          "he does NOT interrupt after one or two mutters", "silence held")
+    third = eng.ask("something like that")
+    check("ready" in (third.speech or ""),
+          "...but after the third he says the phrase once, so a mis-heard commit is escapable",
+          (third.speech or "")[:60])
+
+    # ---- silence, and the bound on it -------------------------------------------------
+    eng = _quizzing()
+    first = eng.quiz_silence_line(1)
+    check(first is not None and len(first.split()) <= 4,
+          "a nudge into a pause is at most four words — speaking holds the mic gate shut",
+          repr(first))
+
+    mcq = QuizItem(question="Who wrote the Categorical Imperative?", answer="B",
+                   choices={"A": "Plato", "B": "Kant", "C": "Hume", "D": "Mill"},
+                   subject="Philosophy", kind="mcq")
+    eng = _quizzing(item=mcq)
+    reread = eng.quiz_silence_line(2)
+    check(bool(reread) and "Categorical" in reread,
+          "the second pause re-reads the question", (reread or "")[:60])
+    check(bool(reread) and not any(o in reread for o in ("Plato", "Kant", "Hume", "Mill")),
+          "...stem ONLY — re-reading four options is twenty seconds he does not need",
+          "no option text, and no answer, leaked")
+
+    eng = _quizzing()
+    kept = [eng.quiz_heard_nothing() for _ in range(4)]
+    check(kept == [True, True, True, False],
+          "four silent turns end the session — a man thinking and an empty room look alike",
+          f"{kept}")
+    check(eng.mode == "normal" and eng.quiz is None,
+          "...and it ends through leave_quiz, the escape hatch nothing called until today",
+          f"mode={eng.mode}")
+
+    eng = _quizzing()
+    eng.ask("still working on it")
+    eng.quiz_heard_nothing()
+    eng.ask("nearly there")
+    check(eng.quiz is not None and eng.quiz.silences == 0,
+          "any utterance resets the count — a man muttering is a man still there", "silences=0")
+
+    # ---- the character ----------------------------------------------------------------
+    identity = PERSONA.split("You are cheerful")[0].strip()
+    check(bool(identity) and identity in QUIZ_PERSONA,
+          "QUIZ_PERSONA still quotes PERSONA's identity verbatim — one ball, one description",
+          "if this goes red, PERSONA changed and QUIZ_PERSONA must follow it")
+    check("patient" in QUIZ_PERSONA and "Never fill it" in QUIZ_PERSONA,
+          "...and adds the examiner's hat: patient, unhurried, does not fill the silence")
+
+    # The regression this section exists to prevent as much as any bug. Prefixing a verdict on
+    # top of `Grade.why` produced "Correct. Correct - B, act only on maxims..." out loud on
+    # 2026-08-19. The persona frames the quiz; it never touches the marking.
+    check(marked("2x", "2x").why.startswith("Correct"),
+          "the marking sentence is still the grader's own, unwrapped by any persona",
+          marked("2x", "2x").why[:50])
+    check(marked("2x", "seventeen bananas").why.startswith("Not quite"),
+          "...for a wrong answer too", marked("2x", "seventeen bananas").why[:50])
+    check(marked("2x", "x").why.startswith("Part of it"),
+          "...and for a partial, which is its own sentence and its own half mark",
+          marked("2x", "x").why[:50])
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="prove the quiz marks locally and stays offline")
     ap.add_argument("--probe", action="store_true",
                     help="reintroduce the per-answer network call section 5 exists to catch")
+    ap.add_argument("--probe-pacing", action="store_true",
+                    help="take the quiz listen budget away again — the 1.5s wait that cut LB "
+                         "off mid-calculation, which section 6 exists to catch")
     args = ap.parse_args(argv)
-    return run(probe=args.probe)
+    return run(probe=args.probe, probe_pacing=args.probe_pacing)
 
 
 if __name__ == "__main__":

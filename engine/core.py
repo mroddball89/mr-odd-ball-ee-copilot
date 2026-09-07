@@ -42,6 +42,7 @@ It deliberately does NOT hold the conversation history. That already lives in
 from __future__ import annotations
 
 import logging
+import random
 import re
 import os
 import threading
@@ -112,6 +113,74 @@ _QUIZ_SCORE = ("how am i doing", "whats my score", "what is my score", "how many
                "how many did i get", "score so far", "how am i getting on", "my score")
 
 
+# ---------------------------------------------------------------------------------------
+# Committing an answer. 2026-09-06.
+#
+# LB, asked how the quiz should decide he has finished answering, chose: *"you say when you're
+# ready."* Nothing is marked until he says so. A pause is then never mistaken for an answer,
+# and — the case that actually matters — muttering through a derivation out loud is not marked
+# as one either. "Okay so one over 4.7k plus one over 4.7k" is a man thinking, and the machine
+# used to mark it wrong and move on.
+#
+# Two shapes, because both are things people say and refusing either would be a trap:
+#
+#   "my answer is 2x"     the answer arrives with the phrase.   -> graded immediately
+#   "ready" / "got it"    the phrase arrives first.             -> the NEXT utterance is it
+#
+# Only active while `[quiz] commit_required` is on, which is the default for VOICE and off for
+# typing — see `Engine.__init__`.
+# ---------------------------------------------------------------------------------------
+
+# The answer carried in the same breath. A REGEX and not a phrase tuple, because the payload has
+# to be sliced out of the ORIGINAL text: `_matches` normalises through
+# `re.sub(r"[^a-z0-9' ]+", " ", ...)`, which would turn "V = I times R" into "v i times r" and
+# hand the grader an answer with its equals sign removed. The prefix is matched loosely; what
+# follows it is passed through untouched.
+#
+# Longest alternatives first — "my final answer is" has to win against "answer is", or the
+# payload keeps the word "final" and the grader marks it wrong.
+_COMMIT_CARRY = re.compile(
+    r"^\s*(?:"
+    r"my\s+final\s+answer\s+is|my\s+answer\s+is|the\s+answer\s+is|final\s+answer\s+is|"
+    r"answer\s+is|"
+    r"i(?:['’]|\s+wi)?ll\s+go\s+with|i\s+go\s+with|going\s+with|"
+    r"i(?:['’]|\s+wi)?ll\s+say|"
+    r"i(?:['’]|\s+wi)?ll\s+choose|i\s+choose|"
+    r"i(?:['’]|\s+wi)?ll\s+pick|i\s+pick"
+    r")\s*[:,]?\s+(?P<body>\S.*)$",
+    re.I)
+
+# The bare signal: he has it, but has not said it yet.
+#
+# **"i'm done" is deliberately NOT here.** It is already in `_QUIZ_EXITS`, which is checked
+# first, so it ends the quiz — and that ordering is not changed. The exit family is loose on
+# purpose ("being trapped in a mode is worse than dropping one answer"), and quietly stealing
+# one of its phrases for a new meaning would break the way out. Bare "done" is fine: it is not
+# in the exit family and cannot reach it.
+_QUIZ_COMMIT_BARE = ("ready", "i'm ready", "im ready", "i am ready", "i've got it",
+                     "ive got it", "i have it", "got it", "done", "finished",
+                     "that's my answer", "thats my answer", "final answer", "thats it",
+                     "that's it")
+
+# What he says into a pause, when he has been quiet long enough that saying nothing would start
+# to read as the machine having crashed.
+#
+# **Three words.** Speaking holds `MicGate.speaking` plus `gate_tail_s`, so every syllable here
+# is a syllable he is not being heard through — a nudge that arrives just as he starts answering
+# eats the start of his answer. A long reassurance is a long deafness.
+_QUIZ_NUDGE = ("Take your time.", "No rush.", "Still with you.")
+
+
+def _commit_payload(text: str) -> str:
+    """The answer carried by a commit phrase, or "" when there is none.
+
+    Sliced out of the original text rather than a normalised copy, so "my answer is V = I R"
+    keeps its equals sign for `quiz_grade._sympy_verdict` to read.
+    """
+    found = _COMMIT_CARRY.match(text or "")
+    return found.group("body").strip() if found else ""
+
+
 @dataclass
 class QuizSession:
     """One run of the quiz. What `mode == "quiz"` is holding while it is on.
@@ -133,6 +202,18 @@ class QuizSession:
                     question has been asked, explains the one he means rather than the one on
                     the table. Getting this wrong would explain a question he has not yet had a
                     chance to answer, which is the quiz spoiling itself.
+        awaiting:   "commit" while waiting for LB to say he is ready, "answer" once he has said
+                    it and the next thing he says is the answer. Only meaningful while
+                    `[quiz] commit_required` is on; otherwise it stays "answer" forever, which
+                    is exactly the behaviour before 2026-09-06.
+        silences:   consecutive TURNS that heard nothing at all. Reset by any utterance, even
+                    one ignored as thinking-aloud, because a man muttering is a man still there.
+                    Bounded by `[quiz] idle_turns` — this is what stops a forgotten session
+                    holding the microphone open on an empty room.
+        ignored:    consecutive utterances that carried no commit phrase. Bounded by
+                    `[quiz] nudge_after_ignored`, after which he says the phrase out loud once.
+                    Without this a mis-transcribed "my answer is" leaves LB answering into a
+                    machine that will never mark him, with no feedback at all.
     """
 
     subject: str = ""
@@ -143,6 +224,9 @@ class QuizSession:
     last_item: object | None = None
     last_grade: object | None = None
     last_answer: str = ""
+    awaiting: str = "commit"
+    silences: int = 0
+    ignored: int = 0
 
     def tally(self) -> str:
         """The score, as a sentence. "" before anything has been answered."""
@@ -371,14 +455,33 @@ class Engine:
         confirm_gates: when False, OS and WEB run without asking. **Only for harnesses.**
                        The default is the safe one, and it is not configurable from the UI —
                        a permission gate with an off switch on the surface is not a gate.
+        quiz_commit:   require a commit phrase ("my answer is...", "ready") before anything is
+                       marked. See `[quiz] commit_required`.
+        quiz_idle_turns:     consecutive silent turns before a quiz session gives up. 0 = never.
+        quiz_nudge_after:    thinking-aloud utterances before he reminds LB of the phrase.
+                             0 = never remind.
     """
 
-    def __init__(self, confirm_gates: bool = True) -> None:
+    def __init__(self, confirm_gates: bool = True, quiz_commit: bool = False,
+                 quiz_idle_turns: int = 0, quiz_nudge_after: int = 0) -> None:
         self.mode = "normal"
         self.quiz: QuizSession | None = None
         self.pending: Pending | None = None
         self.note_draft: NoteDraft | None = None
         self._confirm_gates = confirm_gates
+        # **Defaults are OFF, and `engine/run_voice.py` is the only caller that turns them on.**
+        #
+        # That is not timidity about a new feature, it is where the problem lives. The commit
+        # phrase exists because a spoken answer has no end marker — the recorder has to guess
+        # from silence, and it guessed at 1.5 seconds. **Typing has no such problem**: Enter is
+        # the end marker, it is unambiguous, and it is already there. Requiring "my answer is"
+        # from a man at a keyboard would be pure friction bought for nothing.
+        #
+        # So `main.py --text` and all three harnesses keep the behaviour they have always had,
+        # and the voice rig gets the pacing LB asked for.
+        self._quiz_commit = bool(quiz_commit)
+        self._quiz_idle_turns = int(quiz_idle_turns)
+        self._quiz_nudge_after = int(quiz_nudge_after)
         self.last: Turnlog = Turnlog()
 
     # `quiz_item` was the whole of the quiz's state before `QuizSession` existed, and it is
@@ -1555,9 +1658,23 @@ class Engine:
 
         scope = f"{subject} — {pool} question(s)" if subject else f"{pool} question(s)"
         opening = f"Quiz time, {subject}." if subject else "Quiz time."
+
+        # The pacing is set ONCE, here, rather than nagged before every question. He is told the
+        # rule at the start and then left alone with it — which is the whole point of the
+        # change, and a reminder attached to each question would undo it.
+        #
+        # Only said when the rule is actually in force. Typed mode does not require a commit
+        # phrase (Enter is already an end marker), and promising one there would be a lie.
+        if self._quiz_commit:
+            how = ("Take your time on these — I'll wait. Say 'ready' when you have an answer, "
+                   "or just say 'my answer is' and then your answer. Say 'exit quiz' to stop, "
+                   "or 'explain that' after an answer.")
+        else:
+            how = ("Say 'exit quiz' whenever you want to stop, or 'explain that' after an "
+                   "answer.")
+
         return Response(
-            speech=f"{opening} Say 'exit quiz' whenever you want to stop, or 'explain that' "
-                   f"after an answer. First question: {_speakable_question(item)}",
+            speech=f"{opening} {how} First question: {_speakable_question(item)}",
             cards=[Card(CardKind.MARKDOWN, QUIZ_CHIP, _question_card(item, scope))],
             route=AgentRoute.QUIZ.value,
             raw=f"Entering quiz mode ({scope}).\n\n{_question_card(item, scope)}")
@@ -1568,10 +1685,29 @@ class Engine:
         The order of the checks is the behaviour, and each one sits above the marking for a
         reason: leaving, being taught, asking the score and skipping are all things LB says
         that are *not* answers, and marking them as answers would be the machine not listening.
+
+            exit / explain / score / skip     unchanged, and still above everything
+              |
+              +-- awaiting == "answer"        this utterance is the answer, whole
+              +-- "I don't know"              an answer too; graded, not ignored
+              +-- "my answer is 2x"           graded as "2x" — payload sliced, not normalised
+              +-- "ready" (bare)              marks nothing, opens the door, "Go ahead."
+              +-- anything else               THINKING ALOUD. Silence. Nothing marked.
+
+        The last row is what `[quiz] commit_required` buys, and it is the whole of LB's
+        request. Before it, the next thing he said after a question was graded as his answer to
+        it — so working a derivation out loud was marked wrong and the quiz moved on while he
+        was still doing the arithmetic. The commit stage only runs when that setting is on,
+        which is true for VOICE and false for typing: Enter is already an end marker.
         """
         t.route = "quiz"
         if self.quiz is None:                          # defensive: mode on, session gone
             self.quiz = QuizSession()
+
+        # He said SOMETHING, so he has not walked away. Reset before any of the branches below,
+        # including the ones that ignore what he said — a man muttering through a derivation is
+        # a man still sitting there, and `quiz_heard_nothing` must not count him out.
+        self.quiz.silences = 0
 
         if _is_quiz_exit(text):
             return self._leave_quiz_reply(t)
@@ -1595,22 +1731,58 @@ class Engine:
         if item is None:
             return self._next_quiz_question(t, prefix="Let me put a question to you.")
 
+        # ---- THE COMMIT STAGE. Nothing below this point runs until LB says he is ready. ----
+        #
+        # Sits BELOW exit, explain, score and skip on purpose: those are all things he says
+        # that are not answers, and they must keep working whether or not he has committed.
+        # It sits ABOVE the marking because its whole job is to decide what gets marked.
+        from tools.quiz_grade import looks_like_pass                  # noqa: PLC0415
+
+        answer = text
+        if self._quiz_commit and self.quiz.awaiting == "commit":
+            carried = _commit_payload(text)
+            if carried:
+                # "My answer is 2x" — the phrase and the answer arrived together.
+                answer = carried
+            elif _matches(text, _QUIZ_COMMIT_BARE):
+                # "Ready" — he has it but has not said it. Mark nothing; open the door.
+                self.quiz.awaiting = "answer"
+                self.quiz.ignored = 0
+                t.extras.append("quiz: committed, waiting for the answer")
+                return Response(speech="Go ahead.", route="quiz", raw="Go ahead.")
+            elif looks_like_pass(text):
+                # "I don't know" is an ANSWER and is marked as one — `grade` has a branch for
+                # it that replies "No problem. The answer is..." A shrug is not thinking aloud,
+                # and making him say "my answer is I don't know" would be absurd.
+                pass
+            else:
+                # Thinking out loud. Not an answer, not a command, not marked.
+                return self._quiz_thinking(t)
+
+        # He committed on a previous turn and this utterance is the answer, whole.
+        if self.quiz.awaiting == "answer":
+            self.quiz.awaiting = "commit"
+
         # THE MARKING. No network, no key, no quota. `grade` never raises — its own failure
         # path returns an "I could not mark that" verdict rather than an exception, because an
         # exception here would drop him out of quiz mode entirely.
         from tools.memory_manager import add_message
         from tools.quiz_grade import grade
 
+        # The ORIGINAL utterance goes into the conversation memory, not the sliced payload:
+        # what he actually said was "my answer is 2x", and a history that records "2x" is a
+        # history of something nobody said.
         add_message("user", text)
         t0 = time.monotonic()
-        result = grade(item, text)
+        result = grade(item, answer)
         t.agent_s = time.monotonic() - t0
         t.extras.append(f"marked locally: {result.verdict} ({result.method})")
 
         self.quiz.answered += 1
         self.quiz.score += result.scored
+        self.quiz.ignored = 0
         self.quiz.last_item, self.quiz.last_grade = item, result
-        self.quiz.last_answer = text
+        self.quiz.last_answer = answer
 
         # `result.why` is the whole sentence and already states the verdict. Prefixing another
         # verdict word on top produced "Correct. Correct — B, act only on maxims..." and
@@ -1620,6 +1792,115 @@ class Engine:
         add_message("assistant", marking)
 
         return self._next_quiz_question(t, prefix=marking, marked=result, answered=item)
+
+    def _quiz_thinking(self, t: Turnlog) -> Response:
+        """He is working it out aloud. Say nothing, mark nothing, keep listening.
+
+        This is the branch `[quiz] commit_required` exists to create. Before it, the next thing
+        LB said after a question was graded as his answer to it — so "okay so one over 4.7k
+        plus one over 4.7k" was marked wrong, and the quiz moved on while he was still working.
+
+        **The reply is an empty `speech`, which `engine/turn.py::_deliver` reads as "say
+        nothing".** Not a filler line: speaking holds the microphone gate shut, so a reply here
+        would deafen him to the very next thing he says, which is the thing he is working
+        towards. The right answer to a man thinking is silence.
+
+        The one exception is the reminder, and it is a trap-door rather than a feature. If
+        `base.en` mis-hears "my answer is", every utterance lands here and he is answering into
+        a machine that will never mark him, with nothing on screen or in the air to say why.
+        After `[quiz] nudge_after_ignored` of them he is told the phrase — once, not every time,
+        because interrupting him is the behaviour this whole change removes.
+        """
+        session = self.quiz
+        session.ignored += 1
+        t.extras.append(f"quiz: thinking aloud ({session.ignored})")
+
+        if self._quiz_nudge_after and session.ignored == self._quiz_nudge_after:
+            session.ignored = 0
+            t.extras.append("quiz: reminded him of the phrase")
+            line = "Say 'ready' when you have it, or 'my answer is' and then your answer."
+            return Response(speech=line, route="quiz", raw=line)
+
+        return Response(speech="", route="quiz", raw="")
+
+    def quiz_silence_line(self, attempt: int) -> "str | None":
+        """What he says into a silent quiz turn — or None to say nothing at all.
+
+        Called from `engine/turn.py::_silence_line`, which owns the decision for every OTHER
+        kind of silence. This one is quiz-specific for a reason: the generic answer is the
+        greeting, "What's up LB?", and asking a man in the middle of long division what he
+        wants is the single most annoying thing this machine currently does. It is the exact
+        behaviour LB reported: *"i need time to answer the question."*
+
+        Args:
+            attempt: 1 for the first silent capture of a turn, 2 for the one after it.
+
+        Returns:
+            Attempt 1 — three words, at most. Speaking holds `MicGate.speaking` plus
+            `gate_tail_s`, so every syllable is one he is not being heard through; a nudge that
+            lands as he starts answering eats the start of his answer.
+
+            Attempt 2 — the question again, **stem only, never the options.** Reading four MCQ
+            options a second time is twenty seconds of speech at the measured 160 wpm, to
+            deliver something already sitting on the card in front of him, and it would arrive
+            just as he was about to answer.
+
+            None once the session has been silent for `[quiz] idle_turns` — at which point
+            `quiz_heard_nothing` is about to close the session, and a nudge would be the
+            machine talking to an empty room on its way out.
+        """
+        session = self.quiz
+        if session is None or session.item is None:
+            return None
+        # Close to giving up: `quiz_heard_nothing` is counting, and one more silent turn ends
+        # the session. Do not spend a line on it.
+        if self._quiz_idle_turns and session.silences >= self._quiz_idle_turns - 1:
+            return None
+        if attempt <= 1:
+            return random.choice(_QUIZ_NUDGE)
+        return f"The question again. {_speakable_question(session.item, options=False)}"
+
+    def quiz_heard_nothing(self) -> bool:
+        """A turn ended without a word while a quiz was open. True to keep waiting.
+
+        Called from `engine/run_voice.py::turn_finished`, which is the only place that knows a
+        turn heard nothing — `_quiz_turn` is by definition never reached without an utterance.
+
+        **This deliberately keeps the conversation window open on an UNANSWERED turn**, which
+        the rule in `turn_finished` exists to forbid, so the exception has to argue for itself.
+
+        That rule is there because *a false wake captures silence, and without it one of them
+        would hold the microphone open indefinitely by re-triggering itself.* **A quiz session
+        cannot be opened by a false wake.** It is entered by an utterance that was heard,
+        found credible, routed, and answered with a question. The silence here is a question
+        being worked on, not a room that made a noise.
+
+        Bounded, and it has to be, because two minutes of a man thinking and two minutes of an
+        empty room are the same recording. On the limit the session ENDS — through
+        `leave_quiz`, which has existed since 2026-08-19 as the documented escape hatch and
+        was called from nowhere in the repo until today. That is how a quiz became a mode with
+        exactly one exit, and that exit a phrase `base.en` had to hear correctly first.
+
+        Returns:
+            True while the quiz should keep listening. False once it has given up, at which
+            point the mode is already back to "normal".
+        """
+        session = self.quiz
+        if self.mode != "quiz" or session is None or session.item is None:
+            return False
+
+        session.silences += 1
+        # 0 means never give up. Legal, configured, and not recommended — see config.
+        if not self._quiz_idle_turns:
+            return True
+        if session.silences < self._quiz_idle_turns:
+            LOG.info("quiz: silent turn %d of %d — still waiting",
+                     session.silences, self._quiz_idle_turns)
+            return True
+
+        LOG.info("quiz: %d silent turns — closing the session", session.silences)
+        self.leave_quiz()
+        return False
 
     def _next_quiz_question(self, t: Turnlog, prefix: str = "", skipped: bool = False,
                             marked=None, answered=None) -> Response:
@@ -1766,11 +2047,22 @@ class Engine:
 # letters mean nothing without their text, so both halves carry all four.
 # ---------------------------------------------------------------------------------------
 
-def _speakable_question(item) -> str:
-    """The question as it should be READ ALOUD, options included."""
+def _speakable_question(item, options: bool = True) -> str:
+    """The question as it should be READ ALOUD.
+
+    Args:
+        item:    the `QuizItem`.
+        options: include the lettered options. True everywhere a question is ASKED, because
+                 the letters mean nothing without their text and he has one hearing of them.
+
+                 False for a RE-READ into a pause — `Engine.quiz_silence_line(2)`. He has
+                 already heard the options once and they are on the card in front of him;
+                 reading four of them again is about twenty seconds of speech at the measured
+                 160 wpm, and it would arrive just as he was about to answer.
+    """
     text = getattr(item, "question", "") or ""
     choices = getattr(item, "choices", {}) or {}
-    if not choices:
+    if not choices or not options:
         return text
     spoken = ". ".join(f"{letter}, {body}" for letter, body in sorted(choices.items()))
     return f"{text} Your options are: {spoken}."

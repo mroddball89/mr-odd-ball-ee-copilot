@@ -7,9 +7,21 @@
 # Either a pre-trained name shipped with openWakeWord ("hey_jarvis", "alexa", "hey_mycroft",
 # "hey_rhasspy") or a path to a trained .onnx, e.g. "models/hey_mr_odd_ball.onnx".
 #
-# Trained 2026-08-11 on free Colab from training/hey_mr_odd_ball.ipynb. Replaced the
-# "hey_jarvis" stand-in, which measured 0.0000-0.0120 against real recordings of this phrase —
-# below the ambient floor. Nothing else in the pipeline changed.
+# Trained 2026-08-11 on free Colab. Replaced the "hey_jarvis" stand-in, which measured
+# 0.0000-0.0120 against real recordings of this phrase — below the ambient floor. Nothing else
+# in the pipeline changed.
+#
+# **THE NOTEBOOK THAT BUILT THIS FILE IS NOT IN THE REPO.** This comment named
+# `training/hey_mr_odd_ball.ipynb` until 2026-09-06; there is no `training/` directory and no
+# `.ipynb` anywhere in the tree. So the model has no reproducible provenance: it cannot be
+# rebuilt, its training set cannot be inspected, and the fix its own measurements call for —
+# retraining, see the 2026-08-31 block below — has to start by reconstructing the notebook.
+#
+# The material for that retrain is on disk and is the one good thing about the situation:
+# `captures/` holds 245 WAVs saved by `--save-captures`, including ~25 from 2026-08-31 that are
+# the room producing CONFIDENT FALSE FIRES on this exact microphone. The 2026-08-11 model was
+# trained on synthesised speech and never saw a single hard negative from LB's actual room.
+# `tests/fixtures/wake/` holds the 18 marginal positives recorded 2026-08-30.
 model = "models/hey_mr_odd_ball.onnx"
 
 # Score 0..1 above which a frame counts as a detection.
@@ -183,6 +195,34 @@ model = "models/hey_mr_odd_ball.onnx"
 #
 # Revert with one number if quiet calls turn out to matter more than the false wakes.
 threshold = 0.76
+
+# Score below which a wake is answered with SILENCE instead of the spoken greeting. 2026-09-06.
+#
+# LB, 2026-08-31: *"i have not used him at all today but have heard him wake up multiple
+# times."* **What he hears from another room is not the startle** — that is a face gesture on a
+# screen he is not looking at. It is the voice. And `engine/turn.py` speaks the greeting on
+# `Outcome.SILENT`, which is exactly the outcome a false wake produces: the room makes a noise,
+# he wakes, nobody says anything, and he asks the empty room what it wants. The current logic
+# answers the television out loud, by construction.
+#
+# 0.90, and the numbers are already in this file. LB's real calls fire between **0.769 and
+# 0.964** (the 2026-08-29 meter run, 33 attempts). The 107 near misses on 2026-08-31 topped out
+# at **0.753**, and of the 27 that did fire, the revert table above records only **5** still
+# firing at 0.82. So a false wake clearing 0.90 is rare and a real call clearing it is ordinary.
+#
+# WHAT THIS COSTS, stated rather than discovered later: a real call that fires between 0.76 and
+# 0.90 and is then followed by silence gets no greeting. He woke him, said nothing, and hears
+# nothing back — his face still changes, because that is instant and unconditional. The cost is
+# one lost prompt on a turn he had already abandoned; the saving is the machine not talking to
+# an empty room six times a day.
+#
+# This does NOT classify the wake. It is still logged at its score, still counted, and
+# `audio/autotune.classify_wake` sees exactly what it saw before — which is the rule 935f6b0
+# set down: post-wake silence is not evidence the wake was false. Nothing here infers anything.
+# It only declines to SPEAK before there is a reason to.
+#
+# Set to 0 to greet unconditionally, which is the behaviour up to 2026-09-06.
+greet_threshold = 0.90
 
 # Seconds to ignore further detections after one fires. Without this, a single utterance
 # triggers on several consecutive frames, because the phrase spans more than one 80ms window.
@@ -361,6 +401,55 @@ max_s = 15.0
 # cap only fires if speech is genuinely continuous for a minute and a half.
 dictation_max_s = 90.0
 
+# The same two caps again, for the turns where LB is ANSWERING A QUIZ QUESTION rather than
+# asking one. 2026-09-06, on his own report: *"i need him to take on a different persona so he
+# can wait for my answers especially if its math i need time to answer the question."*
+#
+# ## The knob is `wait_s`, and that is not the one you would guess
+#
+# `max_s` is not what breaks. `wait_s` is — the time he has to BEGIN speaking, and it is 1.5
+# seconds. A numeric item is a calculation: he hears "the equivalent resistance of two 4.7k
+# resistors in parallel", starts working it, and at 1.5s `UtteranceRecorder` returns SILENT
+# while he is still doing the arithmetic. `engine/turn.py` then speaks the greeting — "What's
+# up LB?" — into the middle of his working, and a second silence ends the turn with nothing
+# heard, which does not extend the conversation window, which drops him to `resting_state`
+# with the quiz still logically open. One pause, and the machine interrupts, gives up, and
+# locks the door behind it.
+#
+# ## Why a generous number is free
+#
+# **A wait budget is not spent unless it is needed.** `UtteranceRecorder._step` only returns
+# SILENT at this deadline if no voice ever started; the moment he speaks, `hangover_s` takes
+# over and this number stops mattering. Thirty seconds on a multiple-choice question he answers
+# in three costs exactly nothing.
+#
+# That is also why there is ONE number here and not one per question kind. The obvious
+# refinement is a longer wait for `numeric` than for `mcq`; it is refused because
+# `quiz_bank.infer_kind` is a heuristic, and a maths question misfiled as `prose` would
+# silently lose its thinking time with nothing in the log to say why. There is no trade to
+# optimise, so there is nothing to buy by taking the risk.
+#
+# 30.0 is a first estimate and this comment says so rather than pretending otherwise. The
+# number that replaces it is ALREADY BEING RECORDED: `audio/listen.py` logs `waited %.2fs` on
+# every capture, so a session's real think-time distribution can be read straight out of
+# `data/oddball.log`. Replace this with the 95th percentile of that once a session exists.
+#
+# Set to 0 to switch the quiz budget off entirely — quiz turns then get the ordinary 1.5s,
+# which is the behaviour up to 2026-09-06.
+quiz_wait_s = 30.0
+
+# And the hard cap on one spoken answer. 45s is about 110 words at Piper's measured 160 wpm —
+# far more than any answer he has given, and still a hard stop.
+#
+# **Why 45 and not `dictation_max_s`'s 90.** The dictation cap is raised for ONE TURN, opened
+# by LB himself one utterance earlier: "A television cannot open a note draft." Quiz mode is
+# not a turn, it is a MODE — this cap stays raised for every turn of the session, which may be
+# twenty minutes. That is a genuinely weaker safety story than dictation's and it is written
+# down here rather than discovered later. What bounds it is not this number, it is
+# `[quiz] idle_turns`: a forgotten session with a television in the room leaves quiz mode after
+# four silent turns instead of recording all afternoon.
+quiz_max_s = 45.0
+
 # How long, after a WAKE, voice may not begin an utterance. 2026-09-03.
 #
 # ## The measurement
@@ -395,6 +484,55 @@ dictation_max_s = 90.0
 #
 # Set to 0.0 to switch it off entirely.
 wake_tail_s = 0.25
+
+[quiz]
+# How the quiz waits. Added 2026-09-06, and every key here answers the same sentence from LB:
+# *"i need him to take on a different persona so he can wait for my answers especially if its
+# math i need time to answer the question."*
+#
+# The listen BUDGET lives in [listen] as `quiz_wait_s` / `quiz_max_s`, because those set the
+# recorder. These three set what he DOES with the time.
+
+# Nothing is graded until LB says so. His choice, given three options and picked deliberately:
+# he asks for the question, works it out for as long as he wants, and then says "my answer is
+# 2x" or a bare "ready" — and only then is anything marked.
+#
+# What this buys: a pause is never mistaken for an answer, and muttering through a derivation
+# out loud ("okay so one over 4.7k plus one over 4.7k...") is not marked as one either.
+#
+# What it costs, and it is the reason `nudge_after_ignored` exists: he MUST say the phrase, and
+# `base.en` must hear it. A mangled "my answer is" leaves him repeating himself into a machine
+# that will never mark him. See `engine/core._QUIZ_COMMIT_CARRY`.
+#
+# Set to false to restore the behaviour up to 2026-09-06, where the next thing he says after a
+# question is graded as the answer to it, whatever it was.
+commit_required = true
+
+# Consecutive turns that hear NOTHING AT ALL before the session gives up and leaves quiz mode.
+#
+# At `quiz_wait_s = 30` this is about two minutes of complete silence. That is a hard question
+# he is still working on, not an abandoned room — and any utterance at all resets it, including
+# one that was ignored as thinking-aloud, because a man muttering is a man still there.
+#
+# **This is the bound on the open microphone**, and it is the honest cost of `commit_required`.
+# Waiting until he says he is ready means waiting, and waiting means listening. `quiz_max_s`
+# caps any single recording at 45s; this caps how many times in a row he will re-open for one.
+# Four, not one, because the whole complaint was a machine that gave up too early.
+#
+# Set to 0 to never give up, which leaves quiz mode running until he says "exit quiz" or the
+# wake word. That is legal and it is not recommended.
+idle_turns = 4
+
+# Utterances treated as thinking-aloud before he reminds LB of the commit phrase, once.
+#
+# The trap this exists to spring: `commit_required` means an utterance that carries no commit
+# phrase is IGNORED, so a transcription that turns "my answer is" into something else leaves
+# him answering into a void with no feedback at all. After this many, he says "Say 'ready' when
+# you have it" — once, not every time.
+#
+# Three, not one. Interrupting a man muttering through a derivation is the exact behaviour this
+# whole change exists to remove, and one stray phrase is not evidence of anything.
+nudge_after_ignored = 3
 
 [stt]
 # ===================================================================================

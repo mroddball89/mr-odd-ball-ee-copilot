@@ -137,11 +137,22 @@ class Turn:
                  stall_phrase: str = "",
                  capturing: "threading.Event | None" = None,
                  drain=None, dictation_max_s: float = 0.0,
-                 wake_tail_s: float = 0.0) -> None:
+                 wake_tail_s: float = 0.0, quiz_wait_s: float = 0.0,
+                 quiz_max_s: float = 0.0, should_greet=None) -> None:
         self._rec = recorder
         # 0.0 means "leave the cap alone", which is what every harness that does not pass it
         # gets. See `_capture` and `dictation_max_s` in config/oddball.toml.
         self._dictation_max_s = float(dictation_max_s or 0.0)
+        # The same bargain again, for the turns where LB is ANSWERING a quiz question rather
+        # than asking one. 0.0 leaves both knobs alone. See `_is_quizzing` and `[listen]
+        # quiz_wait_s` / `quiz_max_s`.
+        self._quiz_wait_s = float(quiz_wait_s or 0.0)
+        self._quiz_max_s = float(quiz_max_s or 0.0)
+        # "Is there a reason to believe LB actually called him?" A zero-argument callable, and
+        # deliberately NOT a reference to the detector: `Turn` has no business knowing what a
+        # wake score is, and a harness has to be able to answer the question with a lambda.
+        # Defaults to "always", which is the behaviour before 2026-09-06.
+        self._should_greet = should_greet if callable(should_greet) else (lambda: True)
         # Applied to the FIRST capture of a turn only — the one that follows the wake word and
         # therefore opens into its tail. See `wake_tail_s` in config/oddball.toml.
         self._wake_tail_s = float(wake_tail_s or 0.0)
@@ -237,6 +248,36 @@ class Turn:
             except AttributeError:
                 was_max_s = None
 
+        # The quiz budget. Same guarded shape, and it must sit AFTER the dictation block so it
+        # cannot clobber a `was_max_s` that block already took — the two predicates are
+        # mutually exclusive in practice (an open note draft and an open quiz question cannot
+        # both be true), but the restore in `finally` must not depend on that being true.
+        was_wait_s = None
+        if self._quiz_wait_s and self._is_quizzing():
+            # **Two attributes, two `try` blocks, and that is not tidiness.** Written as one
+            # block, a recorder that has `wait_s` but not `max_s` raises AFTER the wait has
+            # already been raised, and the single `except` would then clear `was_wait_s` — so
+            # the `finally` restores nothing and the microphone waits thirty seconds on every
+            # turn for the rest of the session. That is precisely the leak this whole guard
+            # exists to prevent, reintroduced by the guard itself.
+            try:
+                was_wait_s = self._rec.wait_s
+                self._rec.wait_s = self._quiz_wait_s
+            except AttributeError:
+                # A recorder that cannot be told to wait simply does not wait longer. This is
+                # the `verify_deafness` lesson from the dictation block above, and it is the
+                # one that has actually bitten: `wait_s` did not exist as a property at all
+                # until 2026-09-06, so every stub written before then lacks it.
+                was_wait_s = None
+            if self._quiz_max_s and was_max_s is None:
+                try:
+                    was_max_s = self._rec.max_s
+                    self._rec.max_s = self._quiz_max_s
+                except AttributeError:
+                    was_max_s = None
+            LOG.info("quiz: %.0fs to begin answering, %.0fs cap on this answer",
+                     getattr(self._rec, "wait_s", 0.0), getattr(self._rec, "max_s", 0.0))
+
         # Same guarded shape, and for the same reason: a stub recorder in a harness has no
         # such attribute, and the microphone thread must not die because of it.
         was_ignore_s = None
@@ -268,6 +309,12 @@ class Turn:
             # records a television for ninety seconds on every turn for the rest of the day.
             if was_max_s is not None:
                 self._rec.max_s = was_max_s
+            # And the wait, which matters MORE than the cap does. A raised cap only costs
+            # anything on a turn that is genuinely still recording; a raised wait is spent on
+            # every ordinary turn that hears nothing at all, so leaving it set would make him
+            # sit in silence for thirty seconds after every false wake for the rest of the day.
+            if was_wait_s is not None:
+                self._rec.wait_s = was_wait_s
             # And the suppression window, which left in place would deafen him to the first
             # quarter-second of every answer at every permission gate.
             if was_ignore_s is not None:
@@ -287,6 +334,26 @@ class Turn:
         try:
             draft = getattr(self._engine, "note_draft", None)
             return draft is not None and getattr(draft, "awaiting", "") == "content"
+        except Exception:                                             # noqa: BLE001
+            return False
+
+    def _is_quizzing(self) -> bool:
+        """True when a quiz question is on the table and LB owes an answer to it.
+
+        Not merely `mode == "quiz"`: with `quiz.item` None the bank has run dry and there is
+        nothing to work out, so a thirty-second wait would only mean waiting longer to be told
+        the deck is empty.
+
+        Duck-typed and wrapped for the reason `_is_dictating` gives — `Turn` is built with a
+        real Engine in the rig and with stubs in three harnesses, and a stub without `quiz`
+        must not take the microphone thread down with an AttributeError. It just does not get
+        the longer wait.
+        """
+        try:
+            engine = self._engine
+            if getattr(engine, "mode", "") != "quiz":
+                return False
+            return getattr(getattr(engine, "quiz", None), "item", None) is not None
         except Exception:                                             # noqa: BLE001
             return False
 
@@ -360,6 +427,50 @@ class Turn:
             timings.extras.append("nothing spoken")
 
 
+    def _silence_line(self, attempt: int) -> "str | None":
+        """What to say when a capture came back silent — or None to say nothing and stop.
+
+        Every silent capture used to be answered the same way, with the greeting. Three
+        different things produce one, and only the last of them is a greeting's business.
+
+        **Mid-quiz.** He is working the question out. "What's up LB?" arriving in the middle of
+        long division is the machine talking over the exact thinking it just asked for, and it
+        is what LB reported: *"i need time to answer the question."* The Engine owns these
+        words because they are quiz words — see `Engine.quiz_silence_line`, which also decides
+        when to shut up entirely because the session is about to close.
+
+        **A wake nobody meant.** `should_greet()` is False: the detector fired below the score
+        LB's own calls reach, and nothing has been heard since. Speaking here is the ENTIRE
+        audible cost of a false wake — on 2026-08-31 it was twenty-seven greetings addressed to
+        an empty room on a day he never touched the machine, and it is what he actually hears
+        from another room. His face still changed, instantly and unconditionally; only the
+        voice waits for a reason.
+
+        **Everything else.** Unchanged. You woke him, he heard you, and you said nothing — the
+        greeting earns its place and gets it.
+
+        Args:
+            attempt: 1 after the first silent capture, 2 after the one following the line.
+
+        Returns:
+            The line, or None meaning say nothing and end the turn. **Returning None on attempt
+            1 also skips the second capture**, which is the other half of what a false wake
+            costs: about four seconds of open microphone spent waiting for a room to answer.
+        """
+        if self._is_quizzing():
+            try:
+                return self._engine.quiz_silence_line(attempt)
+            except Exception:                                         # noqa: BLE001
+                # A stub Engine in a harness has no such method. Fall through to the greeting,
+                # which is what a Turn without a quiz has always done.
+                LOG.debug("engine has no quiz_silence_line; using the greeting")
+
+        if attempt <= 1 and not self._should_greet():
+            return None
+        if attempt > 1:
+            return None                    # the greeting is never repeated; it never was
+        return random.choice(self._greeting)
+
     def run(self) -> Timings:
         """One turn, from just after the wake word to just after his answer."""
         t = Timings()
@@ -374,15 +485,25 @@ class Turn:
         if capture is None:
             return t
 
-        # You woke him and said nothing. NOW the greeting earns its place.
+        # You woke him and said nothing. Whether that earns a spoken line depends on WHY it
+        # was silent, and `_silence_line` is where the three reasons are told apart.
         if capture.outcome is Outcome.SILENT:
+            line = self._silence_line(attempt=1)
+            if line is None:
+                LOG.info("silent capture and nothing worth saying — going back to rest")
+                t.extras.append("no answer")
+                t.capture_s = time.monotonic() - began
+                return t
             t.greeted = True
-            self._say(random.choice(self._greeting), t)
+            self._say(line, t)
             self._bridge.set_state("listening")
             capture = self._capture()
             if capture is None:
                 return t
             if capture.outcome is Outcome.SILENT:
+                second = self._silence_line(attempt=2)
+                if second:
+                    self._say(second, t)
                 LOG.info("nothing said after the greeting — going back to rest")
                 t.extras.append("no answer")
                 t.capture_s = time.monotonic() - began
@@ -485,7 +606,15 @@ class Turn:
         # safety property — the exact command has to be on screen while the question is being
         # asked, not after it has been answered.
         self._show(response)
-        self._say(response.speech, t)
+        # **An empty `speech` means say nothing, and that is a real answer.** Quiz mode uses it
+        # for a turn that was LB thinking out loud: he has not committed an answer yet, so
+        # there is nothing to mark and nothing to reply, and the right response is to keep
+        # listening in silence. Handing "" to the Speaker instead would enter the `speaking`
+        # state for zero samples and log "nothing to say" once per mutter.
+        if response.speech and response.speech.strip():
+            self._say(response.speech, t)
+        else:
+            t.extras.append("said nothing")
 
         # A gate. The Engine is holding the action; the next thing said resolves it, and
         # silence resolves it too — as a no.
