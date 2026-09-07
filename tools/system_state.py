@@ -8,44 +8,35 @@ Date:    2026-08-25
     python tools/system_state.py
     python tools/system_state.py --prompt
 
-## Why he needs this at all
+## What it is for
 
-Ask the running assistant "how hot are you" and, before this file, the answer cost a routed OS
-turn: a Gemini call to pick the route, a second to compose `cat /sys/class/thermal/thermal_zone0
-/temp`, a permission gate, an execution, and a third call to read the number out loud. Against
-D3's measured **20 requests per model per day** that is a meaningful fraction of a day's budget
-spent asking the machine about itself.
-
-The number is four bytes in a sysfs file. So it is read directly, for free, and put in front of
-every agent — which means he can answer "how hot are you" without a tool call, and, more
-usefully, he can *notice*: an answer given while the CPU is at 81 °C and swapping is allowed to
-mention that, because now he knows.
+This block rides on **every** agent prompt, so he can answer "what machine are you on", "how
+much disk is left" and "can you actually do X" without a routed turn — against D3's measured
+**20 requests per model per day**, spending a call to ask the machine about itself is a
+meaningful fraction of a day's budget.
 
 ## Everything here is free, and that constraint is what shapes the file
 
-This block rides on **every** agent prompt. So every reading is a `read()` of a small file in
-`/proc` or `/sys`, plus two loopback TCP connects with a 50 ms timeout. There is no subprocess
-anywhere on this path and that is deliberate:
+`shutil.disk_usage`, two loopback TCP connects with a 50 ms timeout, and a check of which
+modules exist on disk. No subprocess anywhere on this path, and `psutil` is not a dependency
+and is not being added. Readings are cached for `TTL_S` so an agent that builds two prompts in
+one turn — the firmware agent's bounded two-step — reads once rather than twice.
 
-- `vcgencmd get_throttled` would report under-voltage, which is a genuinely valuable Pi fact and
-  the single most common cause of "it just froze". It is **deliberately absent** because it
-  costs a fork and an exec on the turn path, and a 30 ms tax on every question LB asks is a
-  worse trade than a fact he can get by asking for it. If it earns its place later it belongs
-  behind the OS route, not here.
-- `psutil` is not a dependency and is not being added. Everything below is four files and
-  `shutil.disk_usage`.
+## What was removed on 2026-09-06, and why
 
-Readings are cached for `TTL_S` so that an agent that builds two prompts in one turn — the
-firmware agent's bounded two-step, for instance — reads `/proc` once rather than twice.
+CPU temperature, load average, memory and uptime all came from `/proc` and `/sys`. That is a
+Linux interface; the Pi was retired on 2026-08-26 and this machine is Windows, where all four
+returned `None` on every single turn. The block spent a line of every agent prompt saying
+"CPU temperature: you cannot read it on this machine", which is true, honest, and of no use to
+anybody several thousand times a day.
 
-## Windows
+They are deleted rather than ported. `vcgencmd`, WMI and OpenHardwareMonitor can all report a
+Windows CPU temperature and every one of them costs a subprocess or a COM call on the turn
+path — which is the trade this file was written to refuse. If the number earns its place later
+it belongs behind the OS route, not in front of every prompt.
 
-LB authors on Windows and the target is the Pi (D7: every harness runs on the authoring box).
-None of `/proc` or `/sys` exists there, so every reading comes back `None` and the rendered
-block says so plainly rather than inventing a temperature. **A missing reading is reported as
-missing.** The one thing this file must never do is give a model a number that is not real —
-an assistant that confidently states a CPU temperature it could not read is worse than one that
-says it cannot see the sensor.
+**The rule that survives them is the one that mattered**: a missing reading is reported as
+missing, never guessed. Nothing here reports a number it did not read.
 """
 
 from __future__ import annotations
@@ -111,14 +102,8 @@ class Snapshot:
     """One reading of the machine. Every numeric field is None when it could not be read.
 
     Args:
-        cpu_temp_c:     CPU temperature in degrees Celsius.
-        load_1:         one-minute load average.
-        cpu_count:      logical cores, for reading `load_1` against.
-        mem_total_mb:   total RAM in mebibytes.
-        mem_available_mb: RAM available without swapping, in mebibytes.
         disk_free_gb:   free space on the filesystem holding the repo, in gibibytes.
         disk_total_gb:  its size, in gibibytes.
-        uptime_s:       seconds since boot.
         host:           hostname.
         system:         "Linux", "Windows".
         listening:      {port: True/False} for each of `SERVICES`.
@@ -126,101 +111,15 @@ class Snapshot:
         taken:          monotonic time this snapshot was read, for the cache.
     """
 
-    cpu_temp_c: float | None = None
-    load_1: float | None = None
-    cpu_count: int | None = None
-    mem_total_mb: int | None = None
-    mem_available_mb: int | None = None
     disk_free_gb: float | None = None
     disk_total_gb: float | None = None
-    uptime_s: float | None = None
     host: str = ""
     system: str = ""
     listening: dict[int, bool] = field(default_factory=dict)
     capabilities: tuple[str, ...] = ()
     taken: float = 0.0
 
-    @property
-    def mem_used_pct(self) -> float | None:
-        if not self.mem_total_mb or self.mem_available_mb is None:
-            return None
-        return 100.0 * (1 - self.mem_available_mb / self.mem_total_mb)
-
-    @property
-    def uptime_phrase(self) -> str:
-        """"3 days, 4 hours" — for saying out loud, so no decimals and no seconds."""
-        if self.uptime_s is None:
-            return ""
-        days, rest = divmod(int(self.uptime_s), 86_400)
-        hours, rest = divmod(rest, 3_600)
-        minutes = rest // 60
-        if days:
-            return f"{days} day{'s' if days != 1 else ''}, {hours} hour{'s' if hours != 1 else ''}"
-        if hours:
-            return f"{hours} hour{'s' if hours != 1 else ''}, {minutes} minutes"
-        return f"{minutes} minute{'s' if minutes != 1 else ''}"
-
-
 _cache: Snapshot | None = None
-
-
-def _read_first_line(path: str) -> str:
-    """A small /proc or /sys file's first line, or "" when it is not there."""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            return handle.readline().strip()
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
-def _cpu_temp_c() -> float | None:
-    """CPU temperature in Celsius, from sysfs. None off the Pi, or when no zone reads.
-
-    `thermal_zone0` is the SoC on a Pi 5 and this reads it directly rather than scanning every
-    zone: on a desktop with a dozen zones the first one is as likely to be a disk controller as
-    a core, and a temperature attributed to the wrong sensor is a number that misleads rather
-    than one that is missing.
-    """
-    raw = _read_first_line("/sys/class/thermal/thermal_zone0/temp")
-    try:
-        # Millidegrees. A bare `45` would be a different unit and a different bug, so the
-        # divide is unconditional and a plausibility check catches a file that is not this.
-        celsius = float(raw) / 1000.0
-        return celsius if -40.0 < celsius < 150.0 else None
-    except ValueError:
-        return None
-
-
-def _load_1() -> float | None:
-    raw = _read_first_line("/proc/loadavg").split()
-    try:
-        return float(raw[0]) if raw else None
-    except ValueError:
-        return None
-
-
-def _meminfo() -> tuple[int | None, int | None]:
-    """(total, available) in MiB, from /proc/meminfo. (None, None) when unreadable."""
-    try:
-        with open("/proc/meminfo", encoding="utf-8") as handle:
-            fields = {}
-            for line in handle:
-                name, _, rest = line.partition(":")
-                if name in ("MemTotal", "MemAvailable"):
-                    fields[name] = int(rest.split()[0]) // 1024      # kB -> MiB
-                if len(fields) == 2:
-                    break
-        return fields.get("MemTotal"), fields.get("MemAvailable")
-    except (OSError, ValueError, IndexError):
-        return None, None
-
-
-def _uptime_s() -> float | None:
-    raw = _read_first_line("/proc/uptime").split()
-    try:
-        return float(raw[0]) if raw else None
-    except ValueError:
-        return None
 
 
 def _disk_gb() -> tuple[float | None, float | None]:
@@ -273,17 +172,10 @@ def read_state(force: bool = False) -> Snapshot:
         return _cache
 
     try:
-        total_mb, available_mb = _meminfo()
         free_gb, size_gb = _disk_gb()
         snapshot = Snapshot(
-            cpu_temp_c=_cpu_temp_c(),
-            load_1=_load_1(),
-            cpu_count=os.cpu_count(),
-            mem_total_mb=total_mb,
-            mem_available_mb=available_mb,
             disk_free_gb=free_gb,
             disk_total_gb=size_gb,
-            uptime_s=_uptime_s(),
             host=platform.node(),
             system=platform.system(),
             listening={port: _is_listening(port) for port, _ in SERVICES},
@@ -317,25 +209,7 @@ def for_prompt() -> str:
         where = f"You are running on {state.system or 'an unknown system'}"
         if state.host:
             where += f", a machine called {state.host}"
-        if state.uptime_phrase:
-            where += f", up for {state.uptime_phrase}"
         lines.append(where + ".")
-
-        if state.cpu_temp_c is not None:
-            hot = " — that is hot; say so if it is relevant" if state.cpu_temp_c >= 75 else ""
-            lines.append(f"- CPU temperature: {state.cpu_temp_c:.1f} degrees Celsius{hot}.")
-        else:
-            lines.append("- CPU temperature: you cannot read it on this machine. Say that "
-                         "plainly rather than guessing a number.")
-
-        if state.load_1 is not None:
-            cores = f" across {state.cpu_count} cores" if state.cpu_count else ""
-            lines.append(f"- Load average over the last minute: {state.load_1:.2f}{cores}.")
-
-        used = state.mem_used_pct
-        if used is not None:
-            lines.append(f"- Memory: {state.mem_available_mb} MB free of "
-                         f"{state.mem_total_mb} MB, about {used:.0f} percent in use.")
 
         if state.disk_free_gb is not None and state.disk_total_gb is not None:
             lines.append(f"- Disk: {state.disk_free_gb:.1f} GB free of "
@@ -373,14 +247,6 @@ def main(argv: list[str] | None = None) -> int:
 
     state = read_state(force=True)
     print(f"  host       {state.host or '?'} ({state.system or '?'})")
-    print(f"  uptime     {state.uptime_phrase or 'unknown'}")
-    print(f"  cpu temp   {f'{state.cpu_temp_c:.1f} C' if state.cpu_temp_c is not None else 'unreadable here'}")
-    print(f"  load (1m)  {state.load_1 if state.load_1 is not None else 'unreadable here'}"
-          f"  across {state.cpu_count} cores")
-    if state.mem_total_mb:
-        print(f"  memory     {state.mem_available_mb} MB free of {state.mem_total_mb} MB")
-    else:
-        print("  memory     unreadable here")
     if state.disk_total_gb:
         print(f"  disk       {state.disk_free_gb:.1f} GB free of {state.disk_total_gb:.0f} GB")
     for port, what in SERVICES:

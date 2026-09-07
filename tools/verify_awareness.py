@@ -80,27 +80,32 @@ try:
     state = system_state.read_state(force=True)
     check(state.system != "", "it knows what OS it is on", f"got {state.system!r}")
     check(state.host != "", "it knows the machine's name", f"got {state.host!r}")
-    check(state.cpu_count and state.cpu_count > 0, "it knows how many cores it has")
     check(state.disk_total_gb is not None, "disk space is readable on every platform")
 
-    on_linux = os.path.exists("/proc/meminfo")
-    if on_linux:
-        check(state.mem_total_mb is not None, "memory is readable on Linux")
-        check(state.uptime_s is not None, "uptime is readable on Linux")
-    else:
-        check(state.mem_total_mb is None, "memory reads as UNKNOWN off Linux, not as zero",
-              "a zero would be a number, and a wrong number is worse than a blank")
-        check(state.cpu_temp_c is None, "CPU temperature reads as UNKNOWN off the Pi")
+    # The /proc readings — cpu temperature, load, memory, uptime — were removed on 2026-09-06.
+    # They were a Linux interface returning None on every turn of a Windows-only rig. What the
+    # checks below defend is the rule that outlived them: nothing is reported that was not read.
+    for gone in ("cpu_temp_c", "load_1", "mem_total_mb", "uptime_s", "cpu_count"):
+        check(not hasattr(state, gone), f"the dead {gone} reading is gone, not merely None",
+              "a field that is always None is a line of prompt spent saying nothing")
+
+    # UNFORCED, so the cache branch actually runs. Every check here used force=True, which
+    # short-circuits `if not force and _cache is not None` before `_cache` is ever read — so
+    # when the module-level `_cache` declaration was accidentally deleted on 2026-09-06 this
+    # harness stayed 63/63 green and only the real prompt path raised NameError.
+    check(system_state.read_state() is not None, "read_state() works WITHOUT force",
+          "the cached branch is the one every agent turn actually takes")
+    check(system_state.read_state() is system_state.read_state(),
+          "...and a second call inside the TTL returns the cached object",
+          "two reads per turn is the thing TTL_S exists to prevent")
 
     block = system_state.for_prompt()
     check(block.strip() != "", "a state block is produced")
-    if state.cpu_temp_c is None:
-        check("cannot read it" in block,
-              "an unreadable temperature is STATED as unreadable, not omitted",
-              "an absent line reads as 'normal' to a model")
-        check("degrees Celsius" not in block, "...and no temperature number is invented")
-    else:
-        check(f"{state.cpu_temp_c:.1f}" in block, "the real temperature is in the block")
+    check("degrees Celsius" not in block and "cannot read it" not in block,
+          "the block no longer spends a line on a sensor this machine does not have")
+    check("Celsius" not in block and "Load average" not in block,
+          "...and invents no number in its place",
+          "the rule that survives the deletion: never report a reading that was not taken")
 
     # Every reading that IS present must be in the block; a snapshot nobody is told about is
     # the same as no snapshot.
