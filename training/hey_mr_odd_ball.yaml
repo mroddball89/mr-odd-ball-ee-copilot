@@ -1,0 +1,155 @@
+# Training config for models/hey_mr_odd_ball.onnx — the 2026-09 retrain.
+#
+# Run with training/train_wake.py, NOT `python -m openwakeword.train`: `openwakeword.data`
+# cannot be imported on this box until training/oww_compat.py has aliased the scipy function
+# `acoustics` needs. See that file for why the shim is an alias and not a stub.
+#
+# ## Why retrain at all — the measurement, not the impression
+#
+# media/data/2026-09-07-wake-fixtures.csv, 77 clips, the 2026-08-11 model at threshold 0.76:
+#
+#     positives firing                21 / 47
+#     loudest NEGATIVE                 0.7571   hey-mister-odd-03.wav  "Hey, Mr. Ollie."
+#     positives BELOW that negative    26 / 47
+#
+# A deliberate non-wake-word sits 0.0029 under the trigger and more than half of LB's real
+# calls score below it. There is no threshold that separates the two, which is why 0.76 -> 0.53
+# -> 0.76 happened inside one week and reverted twice. The lever was never the threshold.
+#
+# Worse, and this is what the 2026-09-06 recordings added: ORDINARY desk-range calls now fail.
+# normal-10 peaks 0.1323 and whisper transcribes it cleanly as "Hey, Mr. Upall."; normal-07 is
+# 0.5456, normal-09 is 0.5927. The original six `normal` clips scored 0.9830-0.9975 — the
+# 2026-08-30 note predicted exactly this best-day bias and could not yet demonstrate it.
+
+# ---------------------------------------------------------------------------------------
+# The phrase
+# ---------------------------------------------------------------------------------------
+
+# BOTH spellings, deliberately. `tests/fixtures/wake/known-limits/mister-odd-ball-01.wav` is
+# "Mister Odd Ball" without the "hey" and it fires at 0.9912 today; D27 records that LB did not
+# mind it firing. Training on both is how that stays true on purpose rather than by accident.
+target_phrase:
+  - "hey mr odd ball"
+  - "hey mister odd ball"
+
+model_name: hey_mr_odd_ball
+model_type: dnn
+
+# ---------------------------------------------------------------------------------------
+# The negatives that actually matter
+# ---------------------------------------------------------------------------------------
+
+# **This is the half the 2026-08-11 model never had.** It was trained on synthesised speech and
+# had never heard the specific near-misses LB's room produces. These four phrases are not
+# invented — every one is a clip he recorded because it was confusing the live model:
+#
+#     hey-mister-odd-03.wav   0.7571   "Hey, Mr. Ollie."      <- 0.003 under the trigger
+#     hey-mr-on-call-01.wav   0.8214   "Hey, Mr. Arbaugh."    <- FIRES today, and is not the phrase
+#     hey-mr-odd-04.wav       0.1694
+#     odd-ball-02.wav         0.0050
+#
+# openWakeWord generates adversarial TTS variants of these, so the model sees thousands of
+# renderings of the exact phrases that currently fool it, rather than the four takes on disk.
+custom_negative_phrases:
+  - "hey mister odd"
+  - "hey mr odd"
+  - "hey mr on call"
+  - "hey mister on call"
+  - "odd ball"
+  - "hey mister"
+  - "mr all ball"
+  - "hey mr overall"
+
+# ---------------------------------------------------------------------------------------
+# How much data
+# ---------------------------------------------------------------------------------------
+
+# 40,000 synthetic positives, and LB's 32 TRAINING positives are NOT a replacement for them —
+# they are 0.08% of this. A model fitted to 32 recordings learns those 32 recordings.
+#
+# His clips earn their place as hard negatives and as the frozen test set (training/splits.json),
+# which is where a real recording is worth more than a thousand synthetic ones.
+#
+# WHAT THIS COSTS IN DISK, stated because it is the one number that breaks the 2 GB budget if
+# nobody looks at it: 40,000 clips of ~2s at 16 kHz 16-bit mono is ~2.5 GB of WAV, transiently,
+# before augmentation turns it into ~123 MB of features. That is working space during step 5,
+# not corpus storage, and it is freed afterwards. Halve n_samples if the disk is tight.
+n_samples: 40000
+n_samples_val: 2000
+
+steps: 50000
+batch_n_per_class:
+  ACAV100M_sample: 1024
+  adversarial_negative: 50
+  positive: 50
+
+layer_size: 32
+max_negative_weight: 1500
+
+# The gate that decides whether this model is shippable at all. 0.2 false accepts per hour is
+# ~5 a day — already better than the 6/day the 0.76 threshold leaves today, and the honest
+# target is lower. Raise it and the room wakes him; lower it and quiet calls stop working,
+# which is the trade the whole threshold history is a record of failing to make.
+target_false_positives_per_hour: 0.2
+
+# ---------------------------------------------------------------------------------------
+# Corpora — under LB's 2 GB cap. See training/fetch_corpora.py.
+# ---------------------------------------------------------------------------------------
+
+# A 1.42 GB PREFIX of the 16.09 GB ACAV100M feature matrix: 496,435 rows of (16, 96) float16,
+# ~177 hours of negative audio. Rows are independent fixed-size training examples laid out
+# contiguously, so a byte range is a row range and every row taken is full fidelity. We take
+# fewer examples, not worse ones.
+#
+# The assumption, stated because this cannot be verified from here: that the corpus is not
+# ordered such that a prefix is unrepresentative. If the trained model turns out blind to one
+# KIND of background, doubt this first.
+feature_data_files:
+  ACAV100M_sample: training/corpora/acav100m_slice.npy
+
+false_positive_validation_data_path: training/corpora/validation_set_features.npy
+
+# 270 real room impulse responses, 8 MB. Reverberation augmentation is the single cheapest way
+# to buy across-the-room performance, and across-the-room is a measured failure: room-01 through
+# room-04 score 0.0015-0.0626 today.
+rir_paths:
+  - training/corpora/mit_rirs
+
+# **AudioSet and FMA are deliberately absent, and this is the one substitution that carries
+# real risk.** The standard recipe mixes multi-GB background corpora into the positives.
+# Replaced here by LB's own captures — ~20 minutes of his actual room, on the actual C270,
+# saved by `--save-captures`.
+#
+# The trade, honestly: 20 minutes is far less VARIETY than AudioSet, and a model augmented over
+# too few backgrounds can learn the background instead of the phrase. What it buys is that
+# every one of those minutes is the exact room, microphone and noise floor the model will run
+# in — which is the distribution that actually matters and the one AudioSet does not contain.
+#
+# `background_paths_duplication_rate` compensates for the short duration by reusing the clips
+# across augmentation rounds with different RIRs and SNRs, so 20 minutes yields many distinct
+# mixes rather than 20 minutes of identical ones.
+#
+# IF THE MODEL OVERFITS TO THE ROOM, this is the first thing to change: the symptom would be a
+# model that scores well on the held-out fixtures (recorded in the same room) and badly on a
+# laptop somewhere else. Given this model only ever runs on that desk, that is a trade worth
+# making — but it is a trade, and it is written down here rather than discovered later.
+# **A FROZEN COPY of captures/, not captures/ itself.** The rig is running and
+# `--save-captures` writes a new WAV there on every wake — the directory grew by two files
+# during the session that wrote this config. Augmentation scans this path and hands each file
+# to a WAV loader; one caught mid-write is a truncated RIFF header, and the crash would arrive
+# hours into a run on a file that is perfectly valid by the time anyone looks at it.
+#
+# `python training/train_wake.py --freeze-background` makes the copy and writes a manifest
+# saying which recordings trained the model, because captures/ will not answer that later.
+background_paths:
+  - training/corpora/background
+background_paths_duplication_rate:
+  - 12
+
+augmentation_rounds: 1
+augmentation_batch_size: 16
+tts_batch_size: 50
+total_length: 32000
+
+piper_sample_generator_path: training/piper-sample-generator
+output_dir: training/output

@@ -161,3 +161,16 @@ tests/fixtures/commands/**/*.wav
 # accident: every capture writes `heard '<whatever was said in the room>'`. One 24-hour log
 # measured 215 of those lines.
 *.log.*
+
+# Wake-model training working directories. The RECIPE is tracked — splits.json, the config,
+# fetch_corpora.py, oww_compat.py — because those are what make the retrain reproducible.
+# What they produce is not:
+#
+#   piper-sample-generator/  199 MB, a clone of a third-party repo with its own .git. Committing
+#                            a nested repo stores a gitlink nobody can check out.
+#   corpora/                 ~1.6 GB of downloaded features and impulse responses. Re-fetch with
+#                            `python training/fetch_corpora.py`; that script IS the provenance.
+#   output/                  the generated clips and features. ~2.5 GB of synthetic WAV at peak.
+training/piper-sample-generator/
+training/corpora/
+training/output/
