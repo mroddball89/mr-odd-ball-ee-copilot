@@ -46,6 +46,7 @@ import argparse
 import json
 import runpy
 import shutil
+import subprocess
 import sys
 import wave
 from datetime import datetime
@@ -117,6 +118,78 @@ def freeze_background() -> int:
     return 0
 
 
+def run_all() -> int:
+    """generate -> augment -> train, back to back, so the machine can be left alone.
+
+    **Each phase is a SUBPROCESS, not another `runpy` call in this one.** Three reasons, and
+    the last is the one that would actually bite:
+
+      * the trainer sets module-level state and rewrites `sys.argv`, so phase two would inherit
+        whatever phase one left behind.
+      * it calls `sys.exit()` on some paths, which `runpy` propagates as SystemExit — one phase
+        deciding to exit would take the other two with it.
+      * generation holds several GB of torch and audio buffers. A fresh process per phase hands
+        that back to the OS instead of carrying it into training.
+
+    Stops at the first failure. Training on features that were never written would produce a
+    model out of nothing and report success, which is the worst available outcome.
+    """
+    phases = [
+        ("generate_clips", "synthesising positives and adversarial negatives"),
+        ("augment_clips", "mixing in room noise and reverberation, then featurising"),
+        ("train_model", "training, and exporting the ONNX"),
+    ]
+    rule = "=" * 78
+    started = datetime.now()
+
+    for index, (flag, what) in enumerate(phases, 1):
+        print("")
+        print(rule)
+        print(f"  [{index}/{len(phases)}] --{flag}  ({what})")
+        print(rule, flush=True)
+
+        phase_started = datetime.now()
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve()), f"--{flag}"],
+                                cwd=str(REPO))
+        took = datetime.now() - phase_started
+
+        if result.returncode != 0:
+            print("")
+            print(f"  --{flag} FAILED after {took} (exit {result.returncode}). Stopping.")
+            print("  Nothing after this ran. Fix it and re-run --all: the finished phases skip")
+            print("  themselves, so no work is repeated.")
+            return result.returncode
+        print("")
+        print(f"  --{flag} done in {took}")
+
+    print("")
+    print(rule)
+    print(f"  ALL PHASES DONE in {datetime.now() - started}")
+    print(rule)
+
+    produced = sorted((REPO / "training" / "output").rglob("*.onnx"))
+    if not produced:
+        print("")
+        print("  no .onnx found under training/output — check the log above.")
+        return 0
+
+    print("")
+    print("  models written:")
+    for model in produced:
+        print(f"    {model.relative_to(REPO).as_posix()}  ({model.stat().st_size / 1024:.0f} KB)")
+
+    # NOT installed on purpose. Swapping the live model in automatically would mean the first
+    # evidence it is worse arrives as LB being unable to wake his assistant — and the whole
+    # point of training/splits.json is that the comparison happens against clips the model has
+    # never seen, before anything ships.
+    print("")
+    print("  NOT installed. models/hey_mr_odd_ball.onnx is untouched, deliberately.")
+    print("  Verify against the frozen split first:")
+    print("      python media/scripts/measure_wake_fixtures.py")
+    print("      python tools/verify_wake.py")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="run the openWakeWord trainer with this machine's compatibility patch")
@@ -127,13 +200,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--augment_clips", action="store_true")
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--train_model", action="store_true")
+    ap.add_argument("--all", action="store_true",
+                    help="run all three phases back to back, stopping at the first failure")
     args = ap.parse_args(argv)
 
     if args.freeze_background:
         return freeze_background()
 
+    if args.all:
+        if not BACKGROUND.exists() or not any(BACKGROUND.glob("*.wav")):
+            ap.error("no frozen background set — run --freeze-background first.")
+        return run_all()
+
     if not (args.generate_clips or args.augment_clips or args.train_model):
-        ap.error("pick a phase: --generate_clips, --augment_clips or --train_model")
+        ap.error("pick a phase: --generate_clips, --augment_clips, --train_model, or --all")
 
     if not BACKGROUND.exists() or not any(BACKGROUND.glob("*.wav")):
         ap.error("no frozen background set — run --freeze-background first. Training against "
