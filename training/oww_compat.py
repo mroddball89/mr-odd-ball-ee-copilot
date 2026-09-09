@@ -52,10 +52,12 @@ import logging
 
 LOG = logging.getLogger("oddball.training")
 
-__all__ = ["patch", "patch_torch_load"]
+__all__ = ["patch", "patch_torch_load", "patch_torchaudio_load", "patch_trim_mmap"]
 
 _PATCHED = False
 _LOAD_PATCHED = False
+_TA_PATCHED = False
+_TRIM_PATCHED = False
 
 
 def patch() -> bool:
@@ -140,6 +142,219 @@ def patch_torch_load() -> bool:
 
     torch.load = _load
     LOG.info("torch.load defaults to weights_only=False for the piper checkpoint")
+    return True
+
+
+def patch_torchaudio_load() -> bool:
+    """Route `torchaudio.load` through soundfile. Returns True if applied.
+
+    ## What breaks without it
+
+    torchaudio 2.11 removed its native I/O backends and routes every `load()` through
+    TorchCodec:
+
+        ImportError: TorchCodec is required for load_with_torchcodec.
+
+    `backend="soundfile"` does not help — the argument is still accepted and then ignored.
+    Augmentation dies on the first clip it tries to read, which is 12 seconds into a phase that
+    otherwise runs for hours.
+
+    ## Why not just install TorchCodec
+
+    Tried first, and it is worse than not having it. The wheel installs, then fails to load its
+    own DLL:
+
+        OSError: Could not load this library: ...\\torchcodec\\libtorchcodec_core4.dll
+
+    It needs FFmpeg shared libraries that are not on this box, and once installed it poisons the
+    import path — `torchaudio.load` then raises the DLL error instead of the clean ImportError,
+    so the failure gets harder to read rather than easier. It was uninstalled.
+
+    ## Why soundfile is sufficient HERE, stated as a limit rather than a claim
+
+    soundfile is libsndfile: WAV, FLAC, OGG. It cannot read MP3 or anything FFmpeg-only.
+
+    **Everything this pipeline reads is 16 kHz mono WAV** — the synthetic clips piper writes,
+    the MIT impulse responses, and LB's own captures, which `audio/turn.py` writes with the
+    `wave` module. So the formats soundfile lacks are formats that do not appear.
+
+    If a future corpus arrives as MP3, this shim is the thing that will fail, and it will fail
+    loudly on the first file rather than silently degrading. That is the right failure.
+
+    ## The contract
+
+    Matches `torchaudio.load`'s signature for the arguments openWakeWord and speechbrain
+    actually pass: returns `(waveform, sample_rate)` with waveform shaped
+    `(channels, frames)` when `channels_first`, float32 in [-1, 1] when `normalize`.
+    """
+    global _TA_PATCHED
+    if _TA_PATCHED:
+        return False
+
+    import torch                                                      # noqa: PLC0415
+    import torchaudio                                                 # noqa: PLC0415
+
+    _TA_PATCHED = True
+
+    # If a working backend exists, leave it alone. A shim that fires when it is not needed is a
+    # shim that hides a working library behind a narrower one.
+    try:
+        import numpy as _np                                           # noqa: PLC0415
+
+        with __import__("tempfile").NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            probe = tmp.name
+        import wave as _wave                                          # noqa: PLC0415
+
+        with _wave.open(probe, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(16_000)
+            handle.writeframes(b"\x00\x00" * 160)
+        torchaudio.load(probe)
+        __import__("os").unlink(probe)
+        LOG.debug("torchaudio.load works natively — no shim needed")
+        return False
+    except Exception:                                                 # noqa: BLE001
+        pass
+
+    import soundfile as sf                                            # noqa: PLC0415
+
+    def _load(uri, frame_offset=0, num_frames=-1, normalize=True,
+              channels_first=True, format=None, buffer_size=4096, backend=None):
+        data, sample_rate = sf.read(
+            str(uri), start=int(frame_offset),
+            frames=int(num_frames) if num_frames not in (-1, None) else -1,
+            dtype="float32" if normalize else "int16", always_2d=True)
+        tensor = torch.from_numpy(data)          # soundfile gives (frames, channels)
+        if channels_first:
+            tensor = tensor.T.contiguous()
+        return tensor, sample_rate
+
+    torchaudio.load = _load
+
+    # `torchaudio.info` is not merely routed through TorchCodec in 2.11 — it is GONE:
+    #
+    #     AttributeError: module 'torchaudio' has no attribute 'info'
+    #
+    # `openwakeword/data.py` calls it in three places (:220, :253, :271) to get a clip's
+    # duration before deciding how to batch it. Two of those wrap the call in
+    # `except RuntimeError`, so this raises RuntimeError on a bad file rather than whatever
+    # soundfile would throw — otherwise their guard does not catch it and augmentation dies on
+    # one unreadable clip instead of skipping it.
+    class _Info:
+        __slots__ = ("sample_rate", "num_frames", "num_channels", "bits_per_sample", "encoding")
+
+        def __init__(self, handle):
+            self.sample_rate = handle.samplerate
+            self.num_frames = handle.frames
+            self.num_channels = handle.channels
+            self.bits_per_sample = {"PCM_16": 16, "PCM_24": 24, "PCM_32": 32,
+                                    "PCM_S8": 8, "PCM_U8": 8, "FLOAT": 32,
+                                    "DOUBLE": 64}.get(handle.subtype, 0)
+            self.encoding = handle.subtype
+
+    def _info(uri, format=None, buffer_size=4096, backend=None):
+        try:
+            return _Info(sf.SoundFile(str(uri)))
+        except Exception as exc:                                      # noqa: BLE001
+            raise RuntimeError(f"could not read metadata from {uri}: {exc}") from exc
+
+    torchaudio.info = _info
+
+    LOG.info("torchaudio.load and .info routed through soundfile "
+             "(torchaudio %s has no native backend)", torchaudio.__version__)
+    return True
+
+
+def patch_trim_mmap() -> bool:
+    """Replace `openwakeword.data.trim_mmap`, which cannot complete on Windows. True if applied.
+
+    ## Two upstream bugs, in eight lines of code
+
+    `trim_mmap` drops the unused rows off the end of a feature file by copying the full rows
+    into a new mmap, deleting the original, and renaming. Both of the last two steps are wrong.
+
+    **1. It deletes a file it still has open.**
+
+        mmap_file1 = np.load(mmap_path, mmap_mode='r')
+        ...
+        os.remove(mmap_path)
+        PermissionError: [WinError 32] The process cannot access the file because it is
+        being used by another process
+
+    The other process is itself. POSIX allows unlinking an open file, so this is invisible on
+    Linux and fatal on Windows — it killed augmentation at 17:25, after every one of the 80,300
+    positive clips had already been featurised.
+
+    **2. `mmap_path.strip(".npy")` is not a suffix strip.** `str.strip` removes any of the
+    CHARACTERS ".", "n", "p", "y" from both ends, so it eats the "n" of "train" too:
+
+        'positive_features_train.npy'.strip('.npy')  ->  'positive_features_trai'
+
+    which is where the stray `positive_features_trai2.npy` on disk came from. Harmless on its
+    own — the name is only ever temporary — but it means the leftover from a failed run does
+    not look like the file it belongs to, so nobody recognises it as debris.
+
+    ## What this replacement changes, and what it does not
+
+    The trimming logic, the batch size, and the dtype are copied verbatim. The only differences
+    are `removesuffix` instead of `strip`, and closing both memmaps before touching the
+    filesystem. It is deliberately not an improvement: a rewrite here would be a second
+    implementation of something openWakeWord may fix upstream.
+
+    Patched on `openwakeword.data`, which is where `compute_features_from_generator` imports it
+    from **at call time** (`utils.py:563` does the import inside the function), so replacing the
+    module attribute is enough — there is no already-bound reference to miss.
+    """
+    global _TRIM_PATCHED
+    if _TRIM_PATCHED:
+        return False
+
+    import gc                                                         # noqa: PLC0415
+    import os                                                         # noqa: PLC0415
+
+    import numpy as np                                                # noqa: PLC0415
+
+    # `openwakeword.data` imports `acoustics`, which needs the scipy alias. Called here rather
+    # than assumed, so this function works whatever order a caller applies the patches in.
+    patch()
+
+    import openwakeword.data as oww_data                              # noqa: PLC0415
+    from numpy.lib.format import open_memmap                          # noqa: PLC0415
+    from tqdm import tqdm                                             # noqa: PLC0415
+
+    _TRIM_PATCHED = True
+
+    def trim_mmap(mmap_path):
+        mmap_file1 = np.load(mmap_path, mmap_mode="r")
+        index = -1
+        while np.all(mmap_file1[index, :, :] == 0):
+            index -= 1
+        n_new = mmap_file1.shape[0] + index + 1
+
+        output_file2 = str(mmap_path).removesuffix(".npy") + "2.npy"
+        mmap_file2 = open_memmap(output_file2, mode="w+", dtype=np.float32,
+                                 shape=(n_new, mmap_file1.shape[1], mmap_file1.shape[2]))
+
+        for start in tqdm(range(0, mmap_file1.shape[0], 1024),
+                          total=mmap_file1.shape[0] // 1024, desc="Trimming empty rows"):
+            stop = min(start + 1024, n_new)
+            if start >= n_new:
+                break
+            mmap_file2[start:stop] = mmap_file1[start:stop].copy()
+        mmap_file2.flush()
+
+        # **Both handles closed before the filesystem is touched.** This is the whole fix.
+        del mmap_file1
+        del mmap_file2
+        gc.collect()
+
+        os.remove(mmap_path)
+        os.rename(output_file2, mmap_path)
+
+    oww_data.trim_mmap = trim_mmap
+    LOG.info("patched openwakeword.data.trim_mmap (WinError 32 on remove, and a strip() that "
+             "ate a letter of the filename)")
     return True
 
 

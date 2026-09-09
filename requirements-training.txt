@@ -46,6 +46,15 @@
 torch==2.13.0
 torchaudio==2.11.0+cpu
 
+# **Do NOT install torchcodec.** torchaudio 2.11 removed its native I/O backends and routes
+# every `load()` through it, so the obvious fix looks like installing it. It is worse than not
+# having it here: the wheel installs, then fails to load `libtorchcodec_core4.dll` because the
+# FFmpeg shared libraries it needs are not on this box — and once present it poisons the import
+# path, so `torchaudio.load` raises a DLL error instead of a clean ImportError. Tried, measured,
+# uninstalled. `training/oww_compat.patch_torchaudio_load` routes load through soundfile
+# instead, which is enough because everything here is 16 kHz mono WAV.
+soundfile
+
 # openWakeWord's trainer and its data pipeline.
 openwakeword==0.6.0
 torchinfo==1.8.0

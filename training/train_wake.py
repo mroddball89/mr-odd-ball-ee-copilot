@@ -43,6 +43,7 @@ model" is part of the model's provenance and `captures/` will not answer it late
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import runpy
 import shutil
@@ -118,6 +119,106 @@ def freeze_background() -> int:
     return 0
 
 
+FEATURE_FILES = ("positive_features_train.npy", "negative_features_train.npy",
+                 "positive_features_test.npy", "negative_features_test.npy")
+
+
+def check_features() -> "list[str]":
+    """Return the reasons the feature set is not usable. Empty list means it is.
+
+    ## Why exit code 0 from --augment_clips is not enough
+
+    On 2026-09-09 augmentation died on its first clip — torchaudio 2.11 routing through a
+    TorchCodec that will not load here — and left behind
+    `positive_features_train.npy`, 471 MB, shape (80300, 16, 96), **entirely zeros**.
+
+    `openwakeword/train.py:755` gates the WHOLE augmentation block on that one filename
+    existing. So every later run skipped augmentation in 12 seconds, reported success, and left
+    the negative features that training needs unwritten. Training then failed on a missing file
+    — which was lucky. Had the negatives been present from an earlier attempt, it would have
+    trained on 80,300 rows of zeros and reported a model.
+
+    A file of zeros is the worst shape a failure can take: it is present, it is the right size,
+    it is the right dtype, and it is meaningless. So presence is not the test. Content is.
+
+    Checked cheaply: ~200 rows sampled across each file rather than reading 2 GB.
+    """
+    import numpy as np                                                # noqa: PLC0415
+
+    out_dir = REPO / "training" / "output" / "hey_mr_odd_ball"
+    problems = []
+    for name in FEATURE_FILES:
+        path = out_dir / name
+        if not path.exists():
+            problems.append(f"{name} was never written")
+            continue
+        try:
+            array = np.load(path, mmap_mode="r")
+        except Exception as exc:                                      # noqa: BLE001
+            problems.append(f"{name} will not load: {type(exc).__name__}: {exc}")
+            continue
+        if len(array) == 0:
+            problems.append(f"{name} is empty")
+            continue
+        rows = len(array)
+        step = max(1, rows // 200)
+        empty = not np.any(np.asarray(array[::step]))
+        del array                       # release the mmap handle; see clear_stale_features
+        gc.collect()
+        if empty:
+            problems.append(f"{name} is all zeros ({rows:,} rows) — augmentation "
+                            f"pre-allocated it and never filled it")
+    return problems
+
+
+def clear_stale_features() -> int:
+    """Delete the feature files if the set is not complete and usable. Returns how many went.
+
+    **All or nothing, and that is forced by openWakeWord rather than chosen.**
+
+    The first version of this kept files that were valid and removed only the corrupt ones,
+    which is the obvious behaviour and is wrong here. `train.py:755` gates ALL FOUR
+    `compute_features_from_generator` calls behind one condition:
+
+        if not os.path.exists(.../"positive_features_train.npy") or args.overwrite:
+
+    So a surviving `positive_features_train.npy` does not save the work it represents — it
+    makes augmentation skip the three files that are still missing, "succeed" in twelve
+    seconds, and leave training with nothing to read. Keeping it costs more than deleting it.
+
+    Measured: 17 minutes of positive featurisation completed, then `trim_mmap` died on
+    WinError 32. Keeping that output looked like saving 17 minutes and actually meant the
+    negatives could never be built without also deleting it.
+    """
+    import numpy as np                                                # noqa: PLC0415
+
+    out_dir = REPO / "training" / "output" / "hey_mr_odd_ball"
+
+    # If every file is present AND usable, there is nothing to do and augmentation will
+    # rightly skip itself. Anything less than that means the whole set is rebuilt.
+    if not check_features():
+        return 0
+
+    removed = 0
+    for name in FEATURE_FILES:
+        path = out_dir / name
+        if not path.exists():
+            continue
+        bad = True                       # incomplete set: this one goes too, whatever it holds
+        # **Close any memmap before unlinking.** np.load(mmap_mode=...) holds an open handle,
+        # and Windows refuses to delete an open file — "WinError 32: being used by another
+        # process", where the other process is this one. Caught by running it, and it is the
+        # same bug openWakeWord's own trim_mmap has.
+        gc.collect()
+        if bad:
+            size = path.stat().st_size / 2**20
+            path.unlink()
+            print(f"    removed {name} ({size:.0f} MB) — the set is incomplete, and "
+                  f"openWakeWord rebuilds all four or none")
+            removed += 1
+    return removed
+
+
 def run_all() -> int:
     """generate -> augment -> train, back to back, so the machine can be left alone.
 
@@ -148,10 +249,29 @@ def run_all() -> int:
         print(f"  [{index}/{len(phases)}] --{flag}  ({what})")
         print(rule, flush=True)
 
+        # A feature file that is present but full of zeros makes openWakeWord skip the whole
+        # augmentation block (train.py:755 gates it on one filename existing), so the phase
+        # "succeeds" in twelve seconds and training gets nothing. Clear those first.
+        if flag == "augment_clips":
+            cleared = clear_stale_features()
+            if cleared:
+                print(f"    {cleared} unusable feature file(s) cleared before augmenting")
+
         phase_started = datetime.now()
         result = subprocess.run([sys.executable, str(Path(__file__).resolve()), f"--{flag}"],
                                 cwd=str(REPO))
         took = datetime.now() - phase_started
+
+        # **Exit code 0 is not proof the phase did its job.** See check_features.
+        if flag == "augment_clips" and result.returncode == 0:
+            problems = check_features()
+            if problems:
+                print("")
+                print(f"  --augment_clips exited 0 but the features are not usable:")
+                for problem in problems:
+                    print(f"    - {problem}")
+                print("  Refusing to train on them. Re-run --all; the bad files are now gone.")
+                return 1
 
         if result.returncode != 0:
             print("")
@@ -219,7 +339,8 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("no frozen background set — run --freeze-background first. Training against "
                  "a live captures/ can hit a half-written WAV hours into the run.")
 
-    from training.oww_compat import patch, patch_torch_load            # noqa: PLC0415
+    from training.oww_compat import (patch, patch_torch_load,          # noqa: PLC0415
+                                     patch_torchaudio_load, patch_trim_mmap)
 
     patch()
     # Needed by --generate_clips: the trainer imports piper-sample-generator, which loads a
@@ -227,6 +348,14 @@ def main(argv: list[str] | None = None) -> int:
     # than only generation, because it is scoped to calls that state no opinion and costs
     # nothing when no checkpoint is loaded.
     patch_torch_load()
+    # Needed by --augment_clips: torchaudio 2.11 dropped its native backends and routes
+    # every load through TorchCodec, whose Windows DLL will not load here. Every file this
+    # pipeline reads is 16 kHz mono WAV, which soundfile handles.
+    patch_torchaudio_load()
+    # Needed by --augment_clips: openWakeWord's own trim_mmap deletes a memmap it still
+    # holds open, which POSIX allows and Windows does not. It killed augmentation AFTER
+    # all 80,300 positive clips had been featurised.
+    patch_trim_mmap()
 
     # Rebuilt rather than forwarded wholesale: the trainer parses argv itself, and it must not
     # see `--freeze-background`, which is ours.
