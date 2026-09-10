@@ -510,16 +510,29 @@ def s3_argv() -> None:
 
     # `os.startfile` raising OSError is the honesty guarantee that `--property=Type=exec` was
     # on the Pi: it is what separates "the shell accepted it" from "nothing happened".
+    #
+    # **The app is taken FROM the catalogue rather than named.** This read
+    # `launcher.launch("openscad")`, and OpenSCAD is not in the Start Menu on this machine —
+    # it is installed, but at `C:\Program Files\OpenSCAD` with no catalogued shortcut. So the
+    # name did not resolve, the probe returned `unknown-app` before `_start` was ever reached,
+    # and BOTH checks below went red while reporting a failure the launcher does not have.
+    #
+    # `_HAS_REAL_CATALOGUE` already exists because this probe is meant to be portable; naming
+    # one application undid that. Any resolvable entry proves the same property — that a shell
+    # refusal on a KNOWN app becomes `launch-failed` and not a silent success — so the probe
+    # asks the catalogue what is on this box instead of assuming.
+    _real_app = next((a.name for a in _cat_mod.load_catalogue()
+                      if getattr(a, "name", "")), "") if _HAS_REAL_CATALOGUE else ""
     calls = []
     real = launcher._start
     try:
         launcher._start = lambda path: (_ for _ in ()).throw(OSError(2, "no application"))
-        out = launcher.launch("openscad") if _HAS_REAL_CATALOGUE else None
+        out = launcher.launch(_real_app) if _real_app else None
     finally:
         launcher._start = real
-    if _HAS_REAL_CATALOGUE:
+    if _real_app:
         check(out is not None and out.kind == "launch-failed" and not out.ok,
-              "a shell refusal becomes launch-failed, never a silent success",
+              f"a shell refusal becomes launch-failed, never a silent success ({_real_app})",
               f"kind={out.kind!r}" if out else "")
         check(out is not None and "no application" in out.detail,
               "and the reason reaches the card verbatim")

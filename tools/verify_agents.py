@@ -55,8 +55,6 @@ os.environ.setdefault("ODDBALL_VAULT_DIR",
                       tempfile.mkdtemp(prefix="oddball-harness-vault-"))
 
 
-import os                                                            # noqa: E402
-
 # Load the REAL key first, THEN fall back to a dummy.
 #
 # The order matters and the first version had it backwards. `load_dotenv` does not override a
@@ -504,7 +502,6 @@ section("the persona provider — and a key alone no longer switches it")
 # machine, and `load_dotenv` re-reads it on reload — so a case that merely UNSETS one is not
 # testing what it thinks it is. That cost a red run.
 
-import importlib                                                      # noqa: E402
 import os as _os                                                      # noqa: E402
 
 _saved = {k: _os.environ.get(k) for k in ("OPENROUTER_API_KEY", "ODDBALL_PERSONA_MODEL")}
