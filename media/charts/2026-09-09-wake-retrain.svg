@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="632" viewBox="0 0 960 632" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<rect width="960" height="632" fill="#fcfcfb"/>
+<text x="24" y="34" font-size="17" font-weight="600" fill="#0b0b0b">The retrain separated the classes; it did not make him hear better</text>
+<text x="24.0" y="55.0" font-size="12" fill="#52514e">77 clips scored by the real ONNX model. Old = hey_mr_odd_ball.2026-08-11.onnx (synthetic training set), new = 2026-09-09,</text>
+<text x="24.0" y="72.0" font-size="12" fill="#52514e">retrained on 60+ real calls with LB&#8217;s own false fires as hard negatives. Real calls = 53, INCLUDING the 4 across-the-room and 2</text>
+<text x="24.0" y="89.0" font-size="12" fill="#52514e">&#8220;Mister Odd Ball&#8221; clips; not-calls = 24, including hey-mr-on-call, a deliberate near-miss phrase. Counting those 6 hard clips as</text>
+<text x="24.0" y="106.0" font-size="12" fill="#52514e">calls is the stricter accounting &#8212; it lowers the recall line everywhere. Measured 2026-09-09.</text>
+<text x="24" y="138" font-size="13.5" font-weight="600" fill="#0b0b0b">Threshold sweep &#8212; what fires, out of 53 real calls and 24 not-calls</text>
+<text x="660" y="138" font-size="13.5" font-weight="600" fill="#0b0b0b">Loudest score each class reaches</text>
+<line x1="74" y1="428.0" x2="544" y2="428.0" stroke="#e3e2df" stroke-width="1"/>
+<text x="66" y="431.5" font-size="10" text-anchor="end" fill="#52514e">0%</text>
+<line x1="74" y1="363.0" x2="544" y2="363.0" stroke="#e3e2df" stroke-width="1"/>
+<text x="66" y="366.5" font-size="10" text-anchor="end" fill="#52514e">25%</text>
+<line x1="74" y1="298.0" x2="544" y2="298.0" stroke="#e3e2df" stroke-width="1"/>
+<text x="66" y="301.5" font-size="10" text-anchor="end" fill="#52514e">50%</text>
+<line x1="74" y1="233.0" x2="544" y2="233.0" stroke="#e3e2df" stroke-width="1"/>
+<text x="66" y="236.5" font-size="10" text-anchor="end" fill="#52514e">75%</text>
+<line x1="74" y1="168.0" x2="544" y2="168.0" stroke="#e3e2df" stroke-width="1"/>
+<text x="66" y="171.5" font-size="10" text-anchor="end" fill="#52514e">100%</text>
+<text x="74.0" y="443.0" font-size="10" text-anchor="middle" fill="#52514e">0.05</text>
+<text x="152.3" y="443.0" font-size="10" text-anchor="middle" fill="#52514e">0.2</text>
+<text x="256.8" y="443.0" font-size="10" text-anchor="middle" fill="#52514e">0.4</text>
+<text x="361.2" y="443.0" font-size="10" text-anchor="middle" fill="#52514e">0.6</text>
+<text x="444.8" y="443.0" font-size="10" text-anchor="middle" fill="#52514e">0.76</text>
+<text x="544.0" y="443.0" font-size="10" text-anchor="middle" fill="#52514e">0.95</text>
+<text x="309.0" y="462.0" font-size="11" text-anchor="middle" fill="#52514e">wake threshold (model score, 0&#8211;1)</text>
+<rect x="74.0" y="168" width="78.3" height="260" fill="#1f7a4d" opacity="0.07"/>
+<text x="78.0" y="420.0" font-size="10" fill="#1f7a4d">zero false fires anywhere in here (loudest not-call 0.0342)</text>
+<line x1="444.8" y1="160" x2="444.8" y2="428.0" stroke="#52514e" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="438.8" y="155" font-size="10.5" text-anchor="end" fill="#52514e">0.76 &#8212; the old setting</text>
+<line x1="152.3" y1="160" x2="152.3" y2="428.0" stroke="#1f7a4d" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="158.3" y="155" font-size="10.5" text-anchor="start" fill="#1f7a4d">0.2 &#8212; now</text>
+<path d="M74.0,271.0 L87.1,275.9 L100.1,275.9 L113.2,275.9 L126.2,280.8 L139.3,280.8 L152.3,280.8 L165.4,280.8 L178.4,280.8 L191.5,280.8 L204.6,280.8 L217.6,280.8 L230.7,285.7 L243.7,285.7 L256.8,290.6 L269.8,290.6 L282.9,290.6 L295.9,290.6 L309.0,295.5 L322.1,295.5 L335.1,305.4 L348.2,305.4 L361.2,315.2 L374.3,315.2 L387.3,320.1 L400.4,320.1 L413.4,320.1 L426.5,320.1 L439.6,320.1 L452.6,320.1 L465.7,325.0 L478.7,334.8 L491.8,339.7 L504.8,349.5 L517.9,354.4 L530.9,354.4 L544.0,359.3" fill="none" stroke="#b8563e" stroke-width="2.4" stroke-dasharray="5 4"/>
+<path d="M74.0,290.6 L87.1,295.5 L100.1,295.5 L113.2,295.5 L126.2,295.5 L139.3,300.5 L152.3,305.4 L165.4,310.3 L178.4,310.3 L191.5,310.3 L204.6,310.3 L217.6,310.3 L230.7,315.2 L243.7,315.2 L256.8,315.2 L269.8,315.2 L282.9,315.2 L295.9,315.2 L309.0,320.1 L322.1,320.1 L335.1,320.1 L348.2,320.1 L361.2,320.1 L374.3,325.0 L387.3,325.0 L400.4,325.0 L413.4,329.9 L426.5,329.9 L439.6,334.8 L452.6,334.8 L465.7,339.7 L478.7,339.7 L491.8,344.6 L504.8,349.5 L517.9,349.5 L530.9,364.2 L544.0,383.8" fill="none" stroke="#2a78d6" stroke-width="2.4"/>
+<path d="M74.0,352.2 L87.1,363.0 L100.1,373.8 L113.2,373.8 L126.2,395.5 L139.3,406.3 L152.3,406.3 L165.4,406.3 L178.4,406.3 L191.5,406.3 L204.6,406.3 L217.6,406.3 L230.7,406.3 L243.7,406.3 L256.8,406.3 L269.8,406.3 L282.9,406.3 L295.9,406.3 L309.0,406.3 L322.1,406.3 L335.1,406.3 L348.2,406.3 L361.2,406.3 L374.3,406.3 L387.3,406.3 L400.4,406.3 L413.4,406.3 L426.5,406.3 L439.6,406.3 L452.6,417.2 L465.7,417.2 L478.7,428.0 L491.8,428.0 L504.8,428.0 L517.9,428.0 L530.9,428.0 L544.0,428.0" fill="none" stroke="#b8563e" stroke-width="1.6" stroke-dasharray="2 3"/>
+<path d="M74.0,428.0 L87.1,428.0 L100.1,428.0 L113.2,428.0 L126.2,428.0 L139.3,428.0 L152.3,428.0 L165.4,428.0 L178.4,428.0 L191.5,428.0 L204.6,428.0 L217.6,428.0 L230.7,428.0 L243.7,428.0 L256.8,428.0 L269.8,428.0 L282.9,428.0 L295.9,428.0 L309.0,428.0 L322.1,428.0 L335.1,428.0 L348.2,428.0 L361.2,428.0 L374.3,428.0 L387.3,428.0 L400.4,428.0 L413.4,428.0 L426.5,428.0 L439.6,428.0 L452.6,428.0 L465.7,428.0 L478.7,428.0 L491.8,428.0 L504.8,428.0 L517.9,428.0 L530.9,428.0 L544.0,428.0" fill="none" stroke="#2a78d6" stroke-width="1.6" stroke-dasharray="2 3"/>
+<line x1="372" y1="182" x2="398" y2="182" stroke="#2a78d6" stroke-width="2.2"/>
+<text x="404" y="185.5" font-size="10.5" fill="#52514e">new: real calls that fire</text>
+<line x1="372" y1="199" x2="398" y2="199" stroke="#b8563e" stroke-width="2.2" stroke-dasharray="5 4"/>
+<text x="404" y="202.5" font-size="10.5" fill="#52514e">old: real calls that fire</text>
+<line x1="372" y1="216" x2="398" y2="216" stroke="#2a78d6" stroke-width="2.2" stroke-dasharray="2 3"/>
+<text x="404" y="219.5" font-size="10.5" fill="#52514e">new: FALSE fires</text>
+<line x1="372" y1="233" x2="398" y2="233" stroke="#b8563e" stroke-width="2.2" stroke-dasharray="2 3"/>
+<text x="404" y="236.5" font-size="10.5" fill="#52514e">old: FALSE fires</text>
+<text x="660" y="170" font-size="11.5" font-weight="600" fill="#0b0b0b">real calls</text>
+<text x="660" y="186" font-size="10" fill="#52514e">the ceiling, not the typical clip</text>
+<rect x="660" y="198" width="195.8" height="26" fill="#b8563e" rx="2"/>
+<text x="862.8" y="215.0" font-size="11" fill="#52514e">old 0.9992</text>
+<rect x="660" y="232" width="189.4" height="26" fill="#2a78d6" rx="2"/>
+<text x="856.4" y="249.0" font-size="11" fill="#52514e">new 0.9664</text>
+<text x="660" y="288" font-size="11.5" font-weight="600" fill="#0b0b0b">not-calls</text>
+<text x="660" y="304" font-size="10" fill="#52514e">every false fire lives under this</text>
+<rect x="660" y="316" width="161.0" height="26" fill="#b8563e" rx="2"/>
+<text x="828.0" y="333.0" font-size="11" fill="#52514e">old 0.8214</text>
+<rect x="660" y="350" width="6.7" height="26" fill="#2a78d6" rx="2"/>
+<text x="673.7" y="367.0" font-size="11" fill="#52514e">new 0.0342</text>
+<line x1="699.2" y1="160" x2="699.2" y2="404.0" stroke="#1f7a4d" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="704.2" y="155" font-size="10.5" fill="#1f7a4d">0.2</text>
+<text x="24.0" y="500.0" font-size="11.5" fill="#0b0b0b">At 0.2 the new model answers 25 of 53 real calls (47%) with 0 false fires. The old model answered 30 there &#8212; but could never have</text>
+<text x="24.0" y="517.0" font-size="11.5" fill="#0b0b0b">been RUN there, because its loudest not-call peaked at 0.8214. 0.05 is the lowest swept threshold that still false-fires on</text>
+<text x="24.0" y="534.0" font-size="11.5" fill="#0b0b0b">nothing, and answers 28: 3 more calls than 0.2, at no measured cost.</text>
+<text x="24.0" y="555.0" font-size="10.5" fill="#52514e">The 25 still missed there are off-axis, mid-sentence and quiet. A more conservative model cannot recover them &#8212; a second stage has to. Data:</text>
+<text x="24.0" y="570.0" font-size="10.5" fill="#52514e">media/data/2026-09-09-wake-retrain-compare.csv + 2026-09-07-wake-fixtures.csv &#8212; regenerate with python media/scripts/compare_wake_models.py</text>
+<text x="24.0" y="585.0" font-size="10.5" fill="#52514e">then python media/scripts/plot_wake_retrain.py</text>
+</svg>
