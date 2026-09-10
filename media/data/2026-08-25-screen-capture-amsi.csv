@@ -1,0 +1,7 @@
+variant,invocation,contains_encoder_block,result,output_bytes,note
+inline_with_encoder,powershell -Command <script>,yes,BLOCKED,0,"ScriptContainedMaliciousContent — reported as a PowerShell ParserError"
+file_with_encoder,powershell -File tmp.ps1,yes,BLOCKED,0,"same block from a .ps1; -File alone was not enough"
+file_no_encoder_no_resize,powershell -File tmp.ps1,no,OK,208886,"CopyFromScreen + plain Save(ImageFormat::Jpeg), full resolution"
+file_no_encoder_scaled,powershell -File tmp.ps1,no,OK,70080,"same, downscaled to SCALE=0.5 — the shipped form"
+shipped_backend,tools/screen_capture.py,no,OK,70189,"through the real code path, data/screen/screen-20260825-091211.jpg"
+shipped_backend_rerun,tools/verify_screen.py --capture,no,OK,65772,"second capture, different desktop contents"

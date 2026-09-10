@@ -1,0 +1,15 @@
+question,defect,expected,before_spoken,before_verdict,after_spoken,after_verdict
+how many milliamps in 2 amps,-,2 amps is 2000 milliamps.,2 amps is 2000 milliamps.,right,2 amps is 2000 milliamps.,right
+how many microamps in 3 milliamps,-,3 milliamps is 3000 microamps.,3 milliamps is 3000 microamps.,right,3 milliamps is 3000 microamps.,right
+how many kiloamps in 3000 amps,-,3000 amps is 3 kiloamps.,3000 amps is 3 kiloamps.,right,3000 amps is 3 kiloamps.,right
+convert 5 a to ma,symbol,5 amps is 5000 milliamps.,(refused),refused,5 amps is 5000 milliamps.,right
+5 a in ma,symbol,5 amps is 5000 milliamps.,(refused),refused,5 amps is 5000 milliamps.,right
+how many ma in 5 a,symbol,5 amps is 5000 milliamps.,(refused),refused,5 amps is 5000 milliamps.,right
+how many milliamps in point 5 amps,amount,0.5 amps is 500 milliamps.,1 amp is 1000 milliamps.,wrong,0.5 amps is 500 milliamps.,right
+how many milliamps in .5 amps,amount,0.5 amps is 500 milliamps.,1 amp is 1000 milliamps.,wrong,0.5 amps is 500 milliamps.,right
+how many milliamps in 1/2 amp,amount,(must refuse),1 amp is 1000 milliamps.,wrong,(refused),right
+how many amps in 3000 milliamp hours,amp hour,(must refuse),3000 milliamps is 3 amps.,wrong,(refused),right
+how many amp hours in 3000 milliamp hours,amp hour,3000 milliamp hours is 3 amp hours.,3000 milliamps is 3 amps.,wrong,3000 milliamp hours is 3 amp hours.,right
+how many coulombs in 1 amp hour,amp hour,1 amp hour is 3600 coulombs.,(refused),refused,1 amp hour is 3600 coulombs.,right
+convert 2000 mah to ah,amp hour,2000 milliamp hours is 2 amp hours.,(refused),refused,2000 milliamp hours is 2 amp hours.,right
+how many mah in 2.5 ah,amp hour,2.5 amp hours is 2500 milliamp hours.,(refused),refused,2.5 amp hours is 2500 milliamp hours.,right

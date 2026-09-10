@@ -1,0 +1,578 @@
+{
+  "train": {
+    "positive": [
+      {
+        "clip": "midsentence-01.wav",
+        "label": "midsentence",
+        "sha256_16": "05b186a24c14db6c",
+        "true_peak_2026_09_07": 0.0014,
+        "transcript": "I'm going to the store, Mr. Albo."
+      },
+      {
+        "clip": "midsentence-02.wav",
+        "label": "midsentence",
+        "sha256_16": "b030bf5f3f49c23f",
+        "true_peak_2026_09_07": 0.0075,
+        "transcript": "I was walking down the street and I was like, hey, Mr. Oh, what time is it?"
+      },
+      {
+        "clip": "midsentence-03.wav",
+        "label": "midsentence",
+        "sha256_16": "7cb8ecbaf5fb2083",
+        "true_peak_2026_09_07": 0.0032,
+        "transcript": "Last night I went to the store and got some potato chips. Hey, Mr."
+      },
+      {
+        "clip": "midsentence-04.wav",
+        "label": "midsentence",
+        "sha256_16": "f8eb1ba377f10df1",
+        "true_peak_2026_09_07": 0.019,
+        "transcript": "I love chocolate. Hey, Mr. All-Ball. What time is it?"
+      },
+      {
+        "clip": "midsentence-07.wav",
+        "label": "midsentence",
+        "sha256_16": "e77c08795ba1e759",
+        "true_peak_2026_09_07": 0.0051,
+        "transcript": "I love chocolate pie and going to the movies. Hey, Mr. Albo, what time is it?"
+      },
+      {
+        "clip": "normal-01.wav",
+        "label": "normal",
+        "sha256_16": "e51b5271de8b4c38",
+        "true_peak_2026_09_07": 0.9864,
+        "transcript": "Hey, Mr. All-Bong."
+      },
+      {
+        "clip": "normal-02.wav",
+        "label": "normal",
+        "sha256_16": "d4b9662ccffb3694",
+        "true_peak_2026_09_07": 0.983,
+        "transcript": "Hey Mr. Arbol"
+      },
+      {
+        "clip": "normal-03.wav",
+        "label": "normal",
+        "sha256_16": "ddef009098009554",
+        "true_peak_2026_09_07": 0.9946,
+        "transcript": "Hey, Mr. Arbol."
+      },
+      {
+        "clip": "normal-04.wav",
+        "label": "normal",
+        "sha256_16": "be2d03b1042b41a6",
+        "true_peak_2026_09_07": 0.9853,
+        "transcript": "Hey Mr. Artball"
+      },
+      {
+        "clip": "normal-06.wav",
+        "label": "normal",
+        "sha256_16": "5d9fcc50c33e8a00",
+        "true_peak_2026_09_07": 0.9926,
+        "transcript": "Hey, Mr. Upball."
+      },
+      {
+        "clip": "normal-08.wav",
+        "label": "normal",
+        "sha256_16": "ab995254af819811",
+        "true_peak_2026_09_07": 0.8606,
+        "transcript": "Hey, Mr. Arbol."
+      },
+      {
+        "clip": "normal-11.wav",
+        "label": "normal",
+        "sha256_16": "4aca79b0f49f2a6d",
+        "true_peak_2026_09_07": 0.7934,
+        "transcript": "Hey, Mr. Alba."
+      },
+      {
+        "clip": "normal-12.wav",
+        "label": "normal",
+        "sha256_16": "b81618017766bc01",
+        "true_peak_2026_09_07": 0.0185,
+        "transcript": "Hey, Mr. All-Ball."
+      },
+      {
+        "clip": "offaxis-01.wav",
+        "label": "offaxis",
+        "sha256_16": "21195b0831219a99",
+        "true_peak_2026_09_07": 0.8228,
+        "transcript": "Hey, Mr. Ho-boom."
+      },
+      {
+        "clip": "offaxis-03.wav",
+        "label": "offaxis",
+        "sha256_16": "e712771ce690385a",
+        "true_peak_2026_09_07": 0.0032,
+        "transcript": "Hey, Mr. Oh, boy."
+      },
+      {
+        "clip": "offaxis-04.wav",
+        "label": "offaxis",
+        "sha256_16": "7d2dd2cb800ab504",
+        "true_peak_2026_09_07": 0.0032,
+        "transcript": "Hey, Mr. Upwell."
+      },
+      {
+        "clip": "offaxis-06.wav",
+        "label": "offaxis",
+        "sha256_16": "726915d5505f1481",
+        "true_peak_2026_09_07": 0.5838,
+        "transcript": "Hey, Mr. Oh, boy."
+      },
+      {
+        "clip": "quiet-01.wav",
+        "label": "quiet",
+        "sha256_16": "218e1df2b483bf92",
+        "true_peak_2026_09_07": 0.9992,
+        "transcript": "Hey, Mr. All-Ball."
+      },
+      {
+        "clip": "quiet-02.wav",
+        "label": "quiet",
+        "sha256_16": "21399e2112b18bca",
+        "true_peak_2026_09_07": 0.9771,
+        "transcript": "Hey, Mr. Harbaugh."
+      },
+      {
+        "clip": "quiet-14.wav",
+        "label": "quiet",
+        "sha256_16": "6defa9f96a1c5d68",
+        "true_peak_2026_09_07": 0.0037,
+        "transcript": "Hey, Mr. Arbon."
+      },
+      {
+        "clip": "quiet-marginal-01.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "35be6ec085c1be16",
+        "true_peak_2026_09_07": 0.0277,
+        "transcript": "Hey, Mr. Oddball."
+      },
+      {
+        "clip": "quiet-marginal-02.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "3df9b1b6da468a2d",
+        "true_peak_2026_09_07": 0.9789,
+        "transcript": "Hey, Mr. Alleball."
+      },
+      {
+        "clip": "quiet-marginal-04.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "f09aa09e7d100172",
+        "true_peak_2026_09_07": 0.0022,
+        "transcript": "Hey, Mr. Oh, boy."
+      },
+      {
+        "clip": "quiet-marginal-05.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "9912beedfdac1f19",
+        "true_peak_2026_09_07": 0.9864,
+        "transcript": "Hey mister all ball"
+      },
+      {
+        "clip": "quiet-marginal-06.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "00b0bb4fa4485791",
+        "true_peak_2026_09_07": 0.8218,
+        "transcript": "Hey, Mr. Albal."
+      },
+      {
+        "clip": "quiet-marginal-07.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "0b41018638f782c6",
+        "true_peak_2026_09_07": 0.9978,
+        "transcript": "Hey, Mr. R. Ball."
+      },
+      {
+        "clip": "quiet-marginal-11.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "88b4cb4f80c68b81",
+        "true_peak_2026_09_07": 0.9406,
+        "transcript": "Hey, Mr. Artball."
+      },
+      {
+        "clip": "quiet-marginal-12.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "a8ff12b19f581324",
+        "true_peak_2026_09_07": 0.8968,
+        "transcript": "Hey, Mr. Oddball."
+      },
+      {
+        "clip": "room-01.wav",
+        "label": "room",
+        "sha256_16": "7ef3eb9f6b21ae54",
+        "true_peak_2026_09_07": 0.0015,
+        "transcript": "Hey, Mr. Alpone."
+      },
+      {
+        "clip": "room-02.wav",
+        "label": "room",
+        "sha256_16": "d8d21b8b1f375571",
+        "true_peak_2026_09_07": 0.0398,
+        "transcript": "Hey, it's the hot ball."
+      },
+      {
+        "clip": "room-03.wav",
+        "label": "room",
+        "sha256_16": "f9c2cf31e0a2f665",
+        "true_peak_2026_09_07": 0.3853,
+        "transcript": "Hey, Mr. All-Bol."
+      },
+      {
+        "clip": "room-04.wav",
+        "label": "room",
+        "sha256_16": "d95222ba247d261d",
+        "true_peak_2026_09_07": 0.0029,
+        "transcript": "All right."
+      }
+    ],
+    "negative": [
+      {
+        "clip": "ambient-01.wav",
+        "label": "ambient",
+        "sha256_16": "b0bbbd6464d8fc1c",
+        "true_peak_2026_09_07": 0.0035,
+        "transcript": "Okay."
+      },
+      {
+        "clip": "hey-jarvis-01.wav",
+        "label": "hey-jarvis",
+        "sha256_16": "608faec4545806a2",
+        "true_peak_2026_09_07": 0.0065,
+        "transcript": "Hey Jarvis"
+      },
+      {
+        "clip": "hey-jarvis-03.wav",
+        "label": "hey-jarvis",
+        "sha256_16": "9ee85e67ccd2786c",
+        "true_peak_2026_09_07": 0.0035,
+        "transcript": "Hey Jarvis"
+      },
+      {
+        "clip": "hey-jarvis-04.wav",
+        "label": "hey-jarvis",
+        "sha256_16": "7d2655ebb7e030a4",
+        "true_peak_2026_09_07": 0.0073,
+        "transcript": "Hey Jarvis"
+      },
+      {
+        "clip": "hey-mister-03.wav",
+        "label": "hey-mister",
+        "sha256_16": "484791ebf9ad55cf",
+        "true_peak_2026_09_07": 0.0018,
+        "transcript": "Hey, Mr."
+      },
+      {
+        "clip": "hey-mister-05.wav",
+        "label": "hey-mister",
+        "sha256_16": "39d3eef9af3e9468",
+        "true_peak_2026_09_07": 0.0027,
+        "transcript": "Hey, Mr."
+      },
+      {
+        "clip": "hey-mister-odd-01.wav",
+        "label": "hey-mister-odd",
+        "sha256_16": "53531a9678146187",
+        "true_peak_2026_09_07": 0.0033,
+        "transcript": "Hey, Mr. Art."
+      },
+      {
+        "clip": "hey-mister-odd-02.wav",
+        "label": "hey-mister-odd",
+        "sha256_16": "e1ebbd1a87975efa",
+        "true_peak_2026_09_07": 0.0028,
+        "transcript": "Hey, Mr. Art."
+      },
+      {
+        "clip": "hey-mister-odd-04.wav",
+        "label": "hey-mister-odd",
+        "sha256_16": "bba856effb3e4c7e",
+        "true_peak_2026_09_07": 0.0069,
+        "transcript": "Hey, Mr. R."
+      },
+      {
+        "clip": "hey-mr-odd-01.wav",
+        "label": "hey-mr-odd",
+        "sha256_16": "fbd9c43557be534e",
+        "true_peak_2026_09_07": 0.0433,
+        "transcript": "Hey, Mr. R."
+      },
+      {
+        "clip": "hey-mr-odd-02.wav",
+        "label": "hey-mr-odd",
+        "sha256_16": "46acc441cc16b6cd",
+        "true_peak_2026_09_07": 0.0885,
+        "transcript": "Hey, Mr. Allin."
+      },
+      {
+        "clip": "hey-mr-odd-03.wav",
+        "label": "hey-mr-odd",
+        "sha256_16": "da2080bbf9112194",
+        "true_peak_2026_09_07": 0.0028,
+        "transcript": "Hey, Mr. R."
+      },
+      {
+        "clip": "hey-mr-on-call-01.wav",
+        "label": "hey-mr-on-call",
+        "sha256_16": "c6ddf386523b7374",
+        "true_peak_2026_09_07": 0.1461,
+        "transcript": "Mr. Hey, Mr. Oncall."
+      },
+      {
+        "clip": "odd-ball-02.wav",
+        "label": "odd-ball",
+        "sha256_16": "89e4c1514d1b6bf3",
+        "true_peak_2026_09_07": 0.0051,
+        "transcript": "Oddball, no hit."
+      },
+      {
+        "clip": "speech-02.wav",
+        "label": "speech",
+        "sha256_16": "002230a77fb42a0c",
+        "true_peak_2026_09_07": 0.0235,
+        "transcript": "Yesterday I went to the store of the song music."
+      }
+    ]
+  },
+  "test": {
+    "positive": [
+      {
+        "clip": "midsentence-05.wav",
+        "label": "midsentence",
+        "sha256_16": "e99f3a1d9433a96d",
+        "true_peak_2026_09_07": 0.6276,
+        "transcript": "I was going around the corner, hey Mr. Ullball, what time is it?",
+        "forced_into_test": "mid-sentence, scores 0.6276 \u2014 the near-miss shape"
+      },
+      {
+        "clip": "midsentence-06.wav",
+        "label": "midsentence",
+        "sha256_16": "a8aeba2d459aa88f",
+        "true_peak_2026_09_07": 0.0035,
+        "transcript": "So last night I was having fun with my friends. So anyway, hey, Mr. Albo, what time is it?"
+      },
+      {
+        "clip": "normal-05.wav",
+        "label": "normal",
+        "sha256_16": "ad66cbdeeadf1060",
+        "true_peak_2026_09_07": 0.9975,
+        "transcript": "Hey, Mr. R. Ball."
+      },
+      {
+        "clip": "normal-07.wav",
+        "label": "normal",
+        "sha256_16": "1945239476cd1579",
+        "true_peak_2026_09_07": 0.5456,
+        "transcript": "Hey, Mr. Alba.",
+        "forced_into_test": "ordinary desk-range call, scores 0.5456 today \u2014 must rise"
+      },
+      {
+        "clip": "normal-09.wav",
+        "label": "normal",
+        "sha256_16": "48eebaa5139fffee",
+        "true_peak_2026_09_07": 0.5927,
+        "transcript": "Hey, Mr. Arbaugh.",
+        "forced_into_test": "ordinary desk-range call, scores 0.5927 today \u2014 must rise"
+      },
+      {
+        "clip": "normal-10.wav",
+        "label": "normal",
+        "sha256_16": "fffc5413876a55a0",
+        "true_peak_2026_09_07": 0.1323,
+        "transcript": "Hey, Mr. Upall.",
+        "forced_into_test": "ordinary desk-range call, scores 0.1323 today, transcribes cleanly as 'Hey, Mr. Upall.' \u2014 the clearest single failure in the set"
+      },
+      {
+        "clip": "offaxis-02.wav",
+        "label": "offaxis",
+        "sha256_16": "70d688d5da649757",
+        "true_peak_2026_09_07": 0.0142,
+        "transcript": "Hey, Mr. All-Boy."
+      },
+      {
+        "clip": "offaxis-05.wav",
+        "label": "offaxis",
+        "sha256_16": "308c239f0f65e884",
+        "true_peak_2026_09_07": 0.0362,
+        "transcript": "Hey, Mr. Oh, boy.",
+        "forced_into_test": "off-axis, 2026-09-06 recording"
+      },
+      {
+        "clip": "quiet-13.wav",
+        "label": "quiet",
+        "sha256_16": "e7907b1e9ad994d4",
+        "true_peak_2026_09_07": 0.0024,
+        "transcript": "Hey, Mr. Arbo.",
+        "forced_into_test": "quiet call, scores 0.0024"
+      },
+      {
+        "clip": "quiet-marginal-03.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "438fad979e33a2e5",
+        "true_peak_2026_09_07": 0.4875,
+        "transcript": "Hey, Mr. Oh-ball."
+      },
+      {
+        "clip": "quiet-marginal-08.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "e58c842ed3a4c2c7",
+        "true_peak_2026_09_07": 0.8522,
+        "transcript": "Hey Mr. Artball"
+      },
+      {
+        "clip": "quiet-marginal-09.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "7e5928b493a0fceb",
+        "true_peak_2026_09_07": 0.9908,
+        "transcript": "Hey, Mr. Alba."
+      },
+      {
+        "clip": "quiet-marginal-10.wav",
+        "label": "quiet-marginal",
+        "sha256_16": "476a8b0cc8dcb5b9",
+        "true_peak_2026_09_07": 0.9967,
+        "transcript": "Hey, Mr. Oddball."
+      },
+      {
+        "clip": "room-05.wav",
+        "label": "room",
+        "sha256_16": "433378e69c722e4c",
+        "true_peak_2026_09_07": 0.0626,
+        "transcript": "Hey, Mr. All Hall.",
+        "forced_into_test": "across-the-room, 2026-09-06 recording"
+      },
+      {
+        "clip": "room-06.wav",
+        "label": "room",
+        "sha256_16": "a6672b008033a8f3",
+        "true_peak_2026_09_07": 0.826,
+        "transcript": "Hey, Mr. All ball.",
+        "forced_into_test": "across-the-room, 2026-09-06 recording"
+      }
+    ],
+    "negative": [
+      {
+        "clip": "ambient-02.wav",
+        "label": "ambient",
+        "sha256_16": "02b23f2020e7f7fd",
+        "true_peak_2026_09_07": 0.0126,
+        "transcript": "I'm just ready to help you."
+      },
+      {
+        "clip": "hey-jarvis-02.wav",
+        "label": "hey-jarvis",
+        "sha256_16": "8275328c05860cd3",
+        "true_peak_2026_09_07": 0.0027,
+        "transcript": "Hey Jarvis"
+      },
+      {
+        "clip": "hey-mister-01.wav",
+        "label": "hey-mister",
+        "sha256_16": "b1f213bdc5edbaa4",
+        "true_peak_2026_09_07": 0.0066,
+        "transcript": "Hey, Mr."
+      },
+      {
+        "clip": "hey-mister-odd-03.wav",
+        "label": "hey-mister-odd",
+        "sha256_16": "556f4fd81160f44e",
+        "true_peak_2026_09_07": 0.7571,
+        "transcript": "Hey, Mr. Ollie.",
+        "forced_into_test": "the 0.7571 negative, 0.0029 under the trigger \u2014 must fall"
+      },
+      {
+        "clip": "hey-mr-odd-04.wav",
+        "label": "hey-mr-odd",
+        "sha256_16": "1d129df9054c951c",
+        "true_peak_2026_09_07": 0.1694,
+        "transcript": "Hey, Mr. Ola."
+      },
+      {
+        "clip": "hey-mr-on-call-02.wav",
+        "label": "hey-mr-on-call",
+        "sha256_16": "d3cfe8341c537194",
+        "true_peak_2026_09_07": 0.1325,
+        "transcript": "Hey, Mr. Honkall.",
+        "forced_into_test": "the other confusable negative recorded 2026-09-06"
+      },
+      {
+        "clip": "odd-ball-01.wav",
+        "label": "odd-ball",
+        "sha256_16": "515c14253029b5a0",
+        "true_peak_2026_09_07": 0.0014,
+        "transcript": "Aw-ball. No. Hey."
+      },
+      {
+        "clip": "speech-01.wav",
+        "label": "speech",
+        "sha256_16": "660f0db44ab894dc",
+        "true_peak_2026_09_07": 0.0606,
+        "transcript": "Short of physical object. They've done some primitives, stuff like this. People have done like holographic effects where you project stuff onto a clear screen. So it looks like it's not there, Tupac. I'm talking about kidding. He's totally a lot. So I'm gonna try and show you guys how you can make your own holographic projector very simply and very cheaply. So we're going to be projecting an image on a fog screen that normally you can't really see but the light illuminates the little particles and projects the image. And if this ends up going as planned I'll hopefully be able to control this with my hand like I'll be able to touch this makeshift screen and interact with the actual holograms. So let's hit the hardwood store and see what we can find."
+      }
+    ]
+  },
+  "diagnostic_only": {
+    "known-limits": [
+      {
+        "clip": "far-01.wav",
+        "label": "far",
+        "sha256_16": "f2423ceb5911be07",
+        "true_peak_2026_09_07": 0.3432,
+        "transcript": "Hey, Mr. Albo."
+      },
+      {
+        "clip": "far-02.wav",
+        "label": "far",
+        "sha256_16": "14ee8c830be4ea1a",
+        "true_peak_2026_09_07": 0.0023,
+        "transcript": "Okay."
+      },
+      {
+        "clip": "far-03.wav",
+        "label": "far",
+        "sha256_16": "55f7b294ad6598d0",
+        "true_peak_2026_09_07": 0.0099,
+        "transcript": "Hey Mr. All-in-law"
+      },
+      {
+        "clip": "far-04.wav",
+        "label": "far",
+        "sha256_16": "570cdae7b5aaf0b2",
+        "true_peak_2026_09_07": 0.0227,
+        "transcript": "Hey Mr. Oh boy."
+      },
+      {
+        "clip": "hey-mr-on-call-01.wav",
+        "label": "hey-mr-on-call",
+        "sha256_16": "75be049a37e9cfde",
+        "true_peak_2026_09_07": 0.8214,
+        "transcript": "Hey, Mr. Arbaugh."
+      },
+      {
+        "clip": "mister-odd-ball-01.wav",
+        "label": "mister-odd-ball",
+        "sha256_16": "8b9ff8222912c1ef",
+        "true_peak_2026_09_07": 0.9912,
+        "transcript": "Mr. Arbaugh, no. Hey."
+      },
+      {
+        "clip": "mister-odd-ball-02.wav",
+        "label": "mister-odd-ball",
+        "sha256_16": "ab97820762bb1308",
+        "true_peak_2026_09_07": 0.5435,
+        "transcript": "Mr. All-Bowl, now paid."
+      }
+    ]
+  },
+  "_readme": {
+    "what": "The frozen train/test split of LB's 77 wake fixtures, fixed 2026-09-08 BEFORE any training data was generated.",
+    "why": "If a clip trains the model and then scores it, the score is meaningless. This file exists so that cannot happen by accident, and so the claim 'the new model is better' is checkable against clips it has never seen.",
+    "rules": [
+      "TEST clips never enter training, augmentation, or threshold selection.",
+      "sha256_16 is the first 16 hex of the file's SHA-256. If a clip changes, the split is stale and the comparison is void \u2014 re-derive it, do not edit it.",
+      "known-limits are diagnostic only: reported, never trained on, never a pass/fail gate.",
+      "true_peak_2026_09_07 is the BEFORE number, from the 2026-08-11 model. It is what the retrained model is measured against."
+    ],
+    "seed": 20260908
+  }
+}

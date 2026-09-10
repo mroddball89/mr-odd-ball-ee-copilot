@@ -1,0 +1,47 @@
+{
+  "what": "Every wake fixture scored by the real ONNX model (true_peak, raw two-pass) and independently transcribed by faster-whisper base.en, after 18 marginal positives were recorded on 2026-08-30.",
+  "why": "config/oddball.toml has argued since 2026-08-14 that the wake threshold is the lever and that the fixture set is what constrains it. This is the first measurement that can tell a NON-DETECTION apart from a BAD RECORDING, and it says the framing was wrong: the model is bimodal, so no threshold recovers the failures.",
+  "how": "python media/scripts/measure_wake_fixtures.py — scores config/oddball.toml's configured model at its configured threshold. Recording: python tools/record_fixture.py --marginal --device \"C270 HD WebCam), Windows WASAPI\"",
+  "conditions": {
+    "box": "DESKTOP-XXXXXXX — Windows 11 AMD64",
+    "model": "models/hey_mr_odd_ball.onnx, trained 2026-08-11",
+    "threshold": 0.53,
+    "microphone": "Logitech C270, Windows WASAPI — the device the live rig listens on",
+    "host_api_note": "FIRST fixtures ever recorded through WASAPI. Every clip dated before 2026-08-30 came through MME, because record_fixture.py could not open a WASAPI stream until 53ae576 — so the original and marginal sets are not strictly the same measurement path.",
+    "stt": "faster-whisper base.en, int8 — an independent witness with no idea what a wake word is"
+  },
+  "headline": "The score distribution is BIMODAL, not graded. Positives either land 0.82-0.998 or 0.001-0.049. Only two of 26 sit in between. A threshold cannot buy back the failures.",
+  "results": {
+    "positives_firing_at_0.53": "14/26",
+    "by_label": {
+      "normal": {"fires": "6/6", "peaks": "0.983-0.998"},
+      "quiet": {"fires": "2/2", "peaks": "0.977-0.999"},
+      "quiet-marginal": {"fires": "5/8", "peaks": "0.002, 0.028, 0.487, 0.822, 0.852, 0.979, 0.986, 0.998"},
+      "offaxis": {"fires": "1/3", "peaks": "0.003, 0.014, 0.823"},
+      "room": {"fires": "0/3", "peaks": "0.002, 0.040, 0.385"},
+      "midsentence": {"fires": "0/4", "peaks": "0.001, 0.004, 0.007, 0.019"}
+    },
+    "gap": "Nothing between 0.049 and 0.385. The two in-between clips are quiet-marginal-03 (0.487) and room-03 (0.385).",
+    "threshold_arithmetic": "0.53 -> 0.40 recovers exactly ONE clip (0.487). 0.53 -> 0.30 recovers TWO. 0.30 is the setting that produced 57 false wakes in 127 minutes on 2026-08-14."
+  },
+  "the_decisive_clip": {
+    "clip": "positive/quiet-marginal-01.wav",
+    "true_peak": 0.0277,
+    "transcript": "Hey, Mr. Oddball.",
+    "why_it_settles_it": "This is the cleanest transcript in the entire fixture set — base.en renders the wake phrase exactly, better than it renders most clips that DO fire. The phrase is unambiguously present and correctly spoken, and the wake model scores it 0.0277, below the loudest negative. The recording is not the problem. The model is."
+  },
+  "the_other_half_of_the_same_point": {
+    "clip": "known-limits/hey-mr-on-call-01.wav",
+    "true_peak": 0.8214,
+    "fires": true,
+    "transcript": "Hey, Mr. Arbaugh.",
+    "note": "This is 'Hey Mr On Call' — a deliberate NEGATIVE, a phrase that is not the wake word — and the model fires on it at 0.8214. So the model is confidently wrong in both directions: deaf to a clean 'Hey Mr Odd Ball' at 0.0277 and confident on a non-wake phrase at 0.8214. That is a discrimination problem, and no threshold has a setting for it."
+  },
+  "caveats": [
+    "TWO OF THE FOUR midsentence TAKES ARE BAD and must not be counted as model failures. midsentence-01 transcribes as 'I'm going to the store, Mr. Albo.' — no 'hey' was said. midsentence-03 is 'Last night I went to the store and got some potato chips. Hey, Mr.' — the 6s window cut the phrase off. That is a defect in the MARGINAL plan item, not in LB's speaking; the window has been raised to 8s. midsentence-02 and -04 DO contain the full phrase and score 0.0075 and 0.0190.",
+    "The original 8 positives were recorded through MME and the 18 new ones through WASAPI. WASAPI's resampler is the better of the two, so this should if anything favour the new clips — but the two sets are not the same measurement path and a strict comparison should re-record the originals.",
+    "'room' is a few steps back, not across the room. known-limits/far-01 (0.3432) already documents far-field as an accepted limit; room-03 at 0.385 sits in the same band, which suggests 'a few steps back' is already the far-field regime for this microphone.",
+    "n is small per label — 3 to 8 clips. The bimodality is clear across 26 positives, but any per-label rate (e.g. 'off-axis works 1 time in 3') is not yet a number worth quoting."
+  ],
+  "next": "Retraining, not tuning. These 18 clips are exactly the training material the 2026-08-11 model never had — training/hey_mr_odd_ball.ipynb was built from synthesised speech. Before any of that, decide whether midsentence/room stay as ENFORCED positives or move to known-limits/ beside far-*: as enforced positives they keep verify_wake red, which is honest but blocks the harness as a regression gate."
+}

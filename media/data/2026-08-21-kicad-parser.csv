@@ -1,0 +1,13 @@
+question,fixture,probes,expected,before_answer,before_verdict,after_answer,after_verdict
+how many parts are on the flat board,flat.kicad_sch,multi-unit,8,(error),error,8,right
+how many 10k resistors are on it,flat.kicad_sch,grouping,3,(error),error,3,right
+how many TL074s are on it,flat.kicad_sch,multi-unit,1,(error),error,1,right
+is the do-not-populate LED listed,flat.kicad_sch,DNP,1,(error),error,1,right
+how many parts on a schematic with no in_bom token,no-inbom.kicad_sch,in_bom default,3,(error),error,3,right
+how many parts across the hierarchical design,hier-root.kicad_sch,sub-sheets,5,(error),error,5,right
+how many parts when a sheet is placed twice,repeat-root.kicad_sch,sub-sheets,3,(error),error,3,right
+"does a corrupt schematic report an error, not an empty list",truncated.kicad_sch,corrupt file,1,1,right,1,right
+how many layers is the two-layer board,two-layer.kicad_pcb,layer count,2,29,wrong,2,right
+how many layers is the four-layer board,four-layer.kicad_pcb,layer count,4,20,wrong,4,right
+how many nets are on the two-layer board,two-layer.kicad_pcb,net 0,5,6,wrong,5,right
+how many footprints are placed on it,two-layer.kicad_pcb,-,5,5,right,5,right

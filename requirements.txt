@@ -1,25 +1,210 @@
 # Mr Odd Ball — EE Copilot
-# Versions are the ones this ran against on 2026-08-19. LangChain 1.x moved a lot of imports,
-# so these are pinned to minors rather than left open.
+# LOWER BOUNDS, NOT PINS — the same convention the assistant half already used.
+#
+# These were `~=` pins copied from a Windows environment where the packages were already
+# installed in a mutually compatible set. On a FRESH aarch64 venv that set is unreachable:
+# pinning langchain-core to ~=1.5 while langchain-community and langchain-google-genai each
+# constrain it from opposite directions gave pip a ResolutionImpossible, and its error named
+# langchain-core, which resolves fine on its own. An hour of the Pi bring-up went into that.
+#
+# A pin that only works on the machine it was captured on is not a pin, it is a snapshot. Let
+# pip solve it, and pin exactly only if the two boxes ever actually disagree.
 
 # --- LLM and routing -------------------------------------------------------------------
-langchain-core~=1.5
-langchain-google-genai~=4.3          # ChatGoogleGenerativeAI, with_structured_output
-pydantic~=2.13                       # RouteDecision — the router's structured output
-python-dotenv~=1.2                   # GOOGLE_API_KEY out of .env, never out of source
+langchain-google-genai>=4.3          # ChatGoogleGenerativeAI, with_structured_output
+langchain-openai>=1.5                # ChatOpenAI, pointed at OpenRouter for the PERSONA route
+                                     # (engine/models.build_persona_llm). NOT for OpenAI: it is
+                                     # the client that speaks the OpenAI wire format, and
+                                     # OpenRouter serves that format.
+                                     #
+                                     # Declared 2026-08-28, after tools/verify_agents.py caught
+                                     # it IMPORTED BUT NOT DECLARED. It was already installed
+                                     # here — transitively, by chance — so nothing failed
+                                     # locally and a fresh clone would have died on import.
+                                     # Same class as pypdf at the bottom of this file.
+pydantic>=2.13                       # RouteDecision — the router's structured output
+python-dotenv>=1.2                   # GOOGLE_API_KEY out of .env, never out of source
 
-# --- Firmware agent: the datasheet RAG pipeline ----------------------------------------
-langchain-community~=0.4             # PyPDFDirectoryLoader, DuckDuckGoSearchRun
-langchain-text-splitters~=1.1        # RecursiveCharacterTextSplitter
-langchain-huggingface~=1.2           # HuggingFaceEmbeddings (all-MiniLM-L6-v2)
-langchain-chroma~=1.1                # the persisted vector store
-chromadb~=1.5
-pypdf~=6.16                          # what PyPDFDirectoryLoader actually reads with
-sentence-transformers~=5.7           # pulls torch; the embedding model runs locally
+# --- Web agent's loaders, and the text splitter -----------------------------------------
+langchain-core>=0.3                  # @tool, ChatPromptTemplate — imported by name in
+                                     # every agent, and previously only ever arrived
+                                     # TRANSITIVELY via langchain-google-genai. Same
+                                     # shape as the pypdf entry below: a dependency you
+                                     # rely on and do not name is one that disappears
+                                     # when the package that happened to pull it changes.
+langchain-community>=0.4             # DuckDuckGoSearchRun, PyPDFDirectoryLoader
+langchain-text-splitters>=1.1        # RecursiveCharacterTextSplitter
 
 # --- Math agent ------------------------------------------------------------------------
-langchain-experimental~=0.4          # PythonREPLTool
+langchain-experimental>=0.4          # PythonREPLTool
+#
+# The REPL runs in THIS interpreter, so "available to the agent" and "installed here" are the
+# same statement. MATH_PROMPT_TEMPLATE invites it to solve filter and physics problems, and a
+# library the prompt implies but the venv lacks does not degrade — it comes back as a spoken
+# "ModuleNotFoundError", which is what the Pi actually said on 2026-08-19 when asked for a
+# derivative. tools/verify_agents.py now checks each of these can be imported FROM the sandbox.
+#
+# numpy and scipy are already pulled in by the audio stack below; sympy is not, and symbolic
+# work (derivatives, solving, simplification) is exactly what an EE student asks for.
+sympy>=1.13
+
+# --- Hardware agent ----------------------------------------------------------------------
+#
+# Reads .kicad_sch and .kicad_pcb S-expressions into Python objects. Pure Python, no compiler,
+# ~93KB, and it does NOT need KiCad installed — which matters, because the Pi does not have it
+# (KiCad 9.0.2 was installed there on 2026-08-22; kiutils still does not need it — see D9/D19).
+# Tested against 1.4.8 on Python 3.12; tools/verify_kicad.py pins the parts of
+# the API this repo actually uses, since `Schematic.symbols` (the obvious name) does not exist
+# and the real one is `schematicSymbols`.
+kiutils>=1.4.8
 
 # --- Web agent -------------------------------------------------------------------------
-duckduckgo-search~=8.1
-ddgs~=9.15                           # the renamed package DuckDuckGoSearchRun now calls into
+duckduckgo-search>=8.1
+ddgs>=9.15                           # the renamed package DuckDuckGoSearchRun now calls into
+
+# =======================================================================================
+# The assistant half — wake word, ears, voice, face. Merged from mroddball89/mr-odd-ball-ai.
+#
+# Lower bounds rather than pins, matching that repo: built against Python 3.12.10 on Windows
+# and 3.13.5 on the Pi.
+#
+# TWO THINGS THAT ARE NOT IN THIS FILE and are not optional on the Pi:
+#
+#   sudo apt install libportaudio2 pipewire-alsa
+#   pip install --no-deps "openwakeword>=0.6.0"
+#
+# `pipewire-alsa` is the one that is easy to miss: PortAudio speaks ALSA, and without that
+# plugin ALSA has no route to the PipeWire sink the Bluetooth speaker lives on — playback
+# "succeeds" into the HDMI card while the speaker sits silent.
+#
+# `--no-deps` because openWakeWord declares tflite-runtime as a hard dependency on Linux, and
+# tflite-runtime publishes no wheels for Python 3.12+, so pip refuses to install it at all on
+# the Pi. We never load tflite — config/oddball.toml sets framework = "onnx" on both boxes.
+# Its real dependencies are listed at the bottom, which is what makes the flag safe.
+# =======================================================================================
+
+sounddevice>=0.5.5                   # PortAudio bindings — the microphone AND the speaker
+numpy>=2.5.2
+websockets>=17.0.1                   # the face link; websockets.asyncio, not the legacy API
+piper-tts>=1.6.0                     # his voice. Reuses onnxruntime, so ~34MB not a 2nd runtime
+faster-whisper>=1.2.1                # his ears. ctranslate2 ships a cp313 aarch64 wheel
+
+# --- openWakeWord's real dependencies, because it is installed with --no-deps ------------
+onnxruntime>=1.10,<2
+tqdm>=4.0,<5.0
+scipy>=1.3,<2
+scikit-learn>=1,<2
+requests>=2.0,<3
+
+# --- Canvas calendar sync (tools/canvas_sync.py), added 2026-08-23 -----------------------
+# His coursework dates come from a live Canvas .ics feed rather than from syllabus PDFs, so
+# they stay right when a date moves. `requests` is already above, for openWakeWord.
+#
+# Pure Python, no wheels to build, ~200KB. It replaces an LLM call per syllabus with one HTTP
+# GET, which on a 20-request-a-day free tier (D3) pays for itself immediately.
+#
+# The feed URL is a CREDENTIAL and lives in .env as ODDBALL_CANVAS_ICS. See tools/canvas_sync.py.
+icalendar>=6.0,<8
+
+# Syllabus -> vault note (tools/syllabus_to_vault.py), added 2026-08-23.
+#
+# pypdf was already installed here, but only ever TRANSITIVELY, via langchain-community's PDF
+# loaders. That module now imports it by name, so it is declared: a dependency you rely on and
+# do not name is one that disappears when the package that happened to pull it changes.
+pypdf>=4.0
+
+# =======================================================================================
+# OCR — reading the PDFs that carry no text. Added 2026-08-29.
+#
+# `tools/vector_db.py` had always REPORTED image-only PDFs and indexed nothing from them, so
+# an uploaded schematic could be filed, announced as "being indexed", and contribute zero
+# chunks. Three files in data/ were in that state.
+#
+# **pypdfium2 rasterises the PAGE, and that is the whole reason it is here rather than a
+# smarter use of pypdf.** The ESP32 DevKit schematic holds 368 embedded JPEG2000 tiles — the
+# drawing was exported as fragments and a net label is routinely split across two of them, so
+# OCR'ing the embedded images reads half a word at a time. Rendering the composed page reads
+# it whole.
+#
+# Permissively licensed and a self-contained wheel, which is what rules out the alternatives:
+# `pytesseract` needs the Tesseract binary installed separately, `pdf2image` needs poppler,
+# and PyMuPDF is AGPL.
+#
+# rapidocr-onnxruntime reuses the `onnxruntime` already declared above for the wake word and
+# Piper, so the OCR models sit on a runtime that is present rather than adding a second one.
+# It pulls opencv-python back in as its own dependency — that is OCR's, not the gesture
+# system's, and it arrives declared by the package that needs it.
+#
+# 200 dpi, measured rather than assumed: media/data/2026-08-29-ocr-dpi-sweep.csv shows the
+# character count flat from 150 dpi up, because RapidOCR resizes to its detector's input size.
+# Cached under data/.ocr_cache/, because file_manager rebuilds the store on every upload.
+pypdfium2>=4.30                      # rasterises a PDF page. Apache/BSD, no system binary
+rapidocr-onnxruntime>=1.3            # the OCR itself; reuses onnxruntime, pulls opencv
+
+
+# =======================================================================================
+# Gesture approval. Added 2026-08-21.
+#
+# There was briefly a `fastapi` / `uvicorn` / `pywebview` block here, for a floating avatar
+# window. It is gone: the rig in hud/face-preview.html already renders the character, so the
+# ball was a second copy of him sitting in the corner of his own desktop (D17). The rolling
+# and bouncing now animate the real face and need no new dependency at all.
+# =======================================================================================
+
+# Gestures — REMOVED 2026-08-29, along with mediapipe and opencv-python.
+#
+# The camera pointer and the thumbs-up approval gate are gone. LB's call, and the reason is
+# worth keeping: approval by voice already worked, so the camera was a second way to say a
+# word he could already say — and it charged for the privilege. On 2026-08-29 at 19:52 a
+# launch approval waited `gesture read timed out after 20s` on a box with no webcam attached,
+# then completed the moment he said "Yes".
+#
+# What went with them: tools/gesture_control.py, tools/gesture_pointer.py, tools/win_input.py
+# (the virtual mouse), their two harnesses, the live tester, and models/hand_landmarker.task
+# (7.8 MB, gitignored, re-fetchable from the MediaPipe URL in git history).
+#
+# The Pi-era measurement that justified a 400 MB sidecar venv — mediapipe 1.0.1 SIGKILLing at
+# XNNPACK on py3.13, 0.10.18 working on py3.12 at 88 ms/frame, 0.10.20+ publishing no aarch64
+# wheel — is preserved in git history and in docs/DECISIONS.md. It is no longer a dependency
+# question, because there is no longer a dependency.
+#
+# The charts and CSVs in media/ STAY. A feature that was built, measured and then removed is
+# the most useful thing in the repo to have measured, and media/data/2026-08-22-gesture-*.csv
+# is what makes the removal an argument rather than an opinion.
+
+
+# =======================================================================================
+# The face — his window on the desktop (hud/float.py). Added 2026-08-26.
+#
+# PyQt6-WebEngine and NOT pywebview, and the reason is one property rather than taste.
+# `--transparent` is load-bearing: the solo look is the character composited onto the desktop
+# with no rectangle seam, which needs the page transparent AND the window transparent
+# together. pywebview on Windows drives WebView2, whose transparency is a
+# `DefaultBackgroundColor` that does not reliably reach a layered top-level window. Qt does it
+# directly — `WA_TranslucentBackground` plus `page().setBackgroundColor`.
+#
+# It is ~150 MB, which is the single largest thing in this file, and on the Pi that trade
+# could never have been made. It is the first place the new hardware actually bought something.
+#
+# This replaces GTK4 + WebKitGTK, which was never a pip dependency at all — it was
+# `sudo apt install gir1.2-gtk-4.0 gir1.2-webkit-6.0 libwebkitgtk-6.0-4 python3-gi`, because
+# PyGObject is a system package on Debian and building it from source on the Pi is a fight
+# nobody needs. On Windows there is no system package and no fight; it is a wheel.
+# =======================================================================================
+PyQt6>=6.7                           # the window, its flags, and the escape-hatch shortcuts
+PyQt6-WebEngine>=6.7                 # the WebView that renders hud/face-preview.html
+
+# =======================================================================================
+# The GLM / OpenRouter benchmark (tools/benchmark_glm_vs_gemini.py). Added 2026-08-24.
+#
+# NOT INSTALLED BY DEFAULT, AND THAT IS THE ENTRY. That module imports `openai` by name, so it is named here; it is left commented
+# because nothing on the turn path touches it and the Pi should not carry a second SDK for a
+# measurement tool. The benchmark reports it as UNAVAILABLE rather than crashing when absent.
+#
+#     pip install "openai>=2.0"          # only on the box you are benchmarking from
+#
+# `openai` is the CLIENT, not the provider: OpenRouter serves an OpenAI-compatible API, so the
+# whole GLM integration is base_url="https://openrouter.ai/api/v1" plus OPENROUTER_API_KEY.
+# The key is a CREDENTIAL and lives in .env, which is gitignored and excluded from the deploy.
+#
+# openai>=2.0

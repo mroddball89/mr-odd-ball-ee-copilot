@@ -1,0 +1,83 @@
+# Wake-word retraining only. NOT needed to run Mr Odd Ball — `requirements.txt` is that list.
+#
+#     python -m pip install -r requirements-training.txt
+#
+# Verified working together on 2026-09-08: Windows 11 AMD64, Python 3.12, CPU-only torch.
+# The whole pipeline was smoke-tested end to end after this set was installed — four synthetic
+# clips generated and transcribed correctly by base.en as "Hey Mr. Oddball".
+#
+# ## Three of these are NOT the package you would guess, and each cost a failed run
+#
+# **webrtcvad-wheels, not webrtcvad.** `webrtcvad` ships source only and needs a C compiler;
+# `pip install webrtcvad` fails on this box with "Failed to build installable wheels". The
+# -wheels fork publishes a prebuilt cp312 win_amd64 wheel and provides the same `webrtcvad`
+# module, so nothing importing it needs to change.
+#
+# **piper-phonemize-fork, not piper-phonemize.** piper-sample-generator's own requirements.txt
+# pins `piper-phonemize==1.1.0`, which has **no Windows distribution at all** — pip reports
+# "from versions: none". The fork publishes a cp312 win_amd64 wheel and provides the same
+# `piper_phonemize` module with `phonemize_espeak`. Verified: "hey mr odd ball" phonemises to
+# h-ˈe-ɪ m-ˈɪ-s-t-ɚ-ɹ ˈɑ-ː-d b-ˈɔ-ː-l, correctly expanding "mr" to "mister".
+#
+# **acoustics 0.2.6 does not import against scipy 1.17** and there is no fixed release. It is
+# listed anyway because openwakeword.data imports it; `training/oww_compat.py` aliases the one
+# function scipy renamed (`sph_harm` -> `sph_harm_y`) so the real package loads. Do NOT solve
+# this by downgrading scipy — the assistant itself runs on 1.17.
+#
+# ## Two things deliberately absent
+#
+# **tensorflow / onnx-tf.** Only `openwakeword.train.convert_onnx_to_tflite` needs them, and
+# `config/oddball.toml` pins `framework = "onnx"`. Export goes through `torch.onnx.export`
+# directly. That removes the single worst dependency on Python 3.12 + Windows.
+#
+# **datasets.** Listed by openWakeWord's own docs, imported by nothing in the training path.
+# Checked with a grep over the installed package before dropping it.
+#
+# ## torchaudio's version skew, stated rather than tidied
+#
+# torch is 2.13.0+cpu and pip resolved torchaudio 2.11.0+cpu against it, which is not the
+# matched pair the PyTorch index normally gives. It imports and resamples correctly — the
+# generator's own resample ran in the smoke test — so it is left alone and written down here.
+# If audio loading starts behaving strangely, this is the first thing to suspect.
+#
+# Install torchaudio from the CPU index, or pip pulls a CUDA build against a CPU torch:
+#     python -m pip install torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+torch==2.13.0
+torchaudio==2.11.0+cpu
+
+# **Do NOT install torchcodec.** torchaudio 2.11 removed its native I/O backends and routes
+# every `load()` through it, so the obvious fix looks like installing it. It is worse than not
+# having it here: the wheel installs, then fails to load `libtorchcodec_core4.dll` because the
+# FFmpeg shared libraries it needs are not on this box — and once present it poisons the import
+# path, so `torchaudio.load` raises a DLL error instead of a clean ImportError. Tried, measured,
+# uninstalled. `training/oww_compat.patch_torchaudio_load` routes load through soundfile
+# instead, which is enough because everything here is 16 kHz mono WAV.
+soundfile
+
+# openWakeWord's trainer and its data pipeline.
+openwakeword==0.6.0
+torchinfo==1.8.0
+torchmetrics==1.9.0
+audiomentations==0.43.1
+torch-audiomentations==0.12.0
+speechbrain==1.1.1
+mutagen==1.48.1
+acoustics==0.2.6
+pronouncing==0.3.0
+
+# Export. ONNX only — see the note above about tensorflow.
+#
+# `onnxscript` is NOT optional despite reading like a nicety: torch 2.13's `torch.onnx.export`
+# imports it unconditionally, so without it training runs to completion and then dies on the
+# last line. Measured 2026-09-09 — 50,000 steps, then ModuleNotFoundError, and the model was
+# only ever in memory.
+onnx==1.22.0
+onnxscript==0.7.2
+
+# piper-sample-generator v2.0.0, for the synthetic positives. **v2.0.0 and not the tip**:
+# v3.2.0 refactored into a package and removed the top-level `generate_samples.py` that
+# openwakeword.train imports by name, and the checkpoint we use is from the v2.0.0 release, so
+# the code and the weights match. `git checkout v2.0.0` in training/piper-sample-generator.
+webrtcvad-wheels==2.0.14
+piper-phonemize-fork==1.2.0

@@ -1,0 +1,16 @@
+observation,value,units,source,note
+spoken_turns_logged,24,turns,oddball.log 13:19-17:06,"the microphone-fed path, working"
+typed_lines_logged,0,lines,oddball.log 13:19-17:06,"LOG.info('typed question') never fired once"
+session_length,7.98,hours,ps etime on PID 3120,engine uptime at time of measurement
+face_window_start,13:19:27,clock,ps lstart on PID 2651,
+engine_start,13:19:29,clock,systemctl --user show oddball,
+window_starts_before_engine,2,seconds,derived,"so the panel's FIRST connect always fails and retries — the reconnect path is normal here, not an edge case"
+mic_thread_lifetime,0.08,seconds,oddball.log 21:19:50 to 21:19:50.8,"ValueError: no such input device 'C270'"
+typed_channel_lifetime_before_fix,0.08,seconds,derived,"looped on `stop`, which the dying microphone thread sets"
+conversation_window,25.0,seconds,config/oddball.toml listen/conversation_s,"upper bound a typed line could bounce while in_turn stayed SET"
+verify_chat_send_failures_vs_HEAD,7,checks,node tools/verify-chat-send.mjs on git show HEAD,"regression proof: the suite fails on the old rig"
+verify_chat_ordering_failures_vs_HEAD,3,checks,AST checks vs git show HEAD:engine/run_voice.py,"in_turn-before-filter, guarded put_nowait, wrapped loop"
+typed_wake_after_fix,21:23:56,clock,oddball.log,"typed wake: 'hey mr odd ball' — microphone STILL missing"
+typed_question_after_fix,21:24:19,clock,oddball.log,"typed question: 'what time is it'"
+typed_question_route_time,0,ms,oddball.log turn line,"free:time — answered with no API call"
+typed_question_total_time,0.00,seconds,oddball.log turn line,"route 0ms -> utility | agent 0.00s"

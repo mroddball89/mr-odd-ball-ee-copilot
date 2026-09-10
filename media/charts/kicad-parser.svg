@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="470" viewBox="0 0 980 470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="980" height="470" fill="#FFFFFF"/>
+<text x="92" y="34" font-size="19" font-weight="600" fill="#1B2430">Reading a KiCad design: 12 questions, tutorial parser vs. shipped parser</text>
+<text x="92" y="56" font-size="13" fill="#5C6B7F">Questions answered (count). An error sends him to look at the file; a wrong number is one he would order parts from.</text>
+<line x1="92" y1="374.0" x2="950" y2="374.0" stroke="#DCE3EC" stroke-width="1"/>
+<text x="80" y="378.0" font-size="12" fill="#5C6B7F" text-anchor="end">0</text>
+<line x1="92" y1="324.7" x2="950" y2="324.7" stroke="#DCE3EC" stroke-width="1"/>
+<text x="80" y="328.7" font-size="12" fill="#5C6B7F" text-anchor="end">2</text>
+<line x1="92" y1="275.3" x2="950" y2="275.3" stroke="#DCE3EC" stroke-width="1"/>
+<text x="80" y="279.3" font-size="12" fill="#5C6B7F" text-anchor="end">4</text>
+<line x1="92" y1="226.0" x2="950" y2="226.0" stroke="#DCE3EC" stroke-width="1"/>
+<text x="80" y="230.0" font-size="12" fill="#5C6B7F" text-anchor="end">6</text>
+<line x1="92" y1="176.7" x2="950" y2="176.7" stroke="#DCE3EC" stroke-width="1"/>
+<text x="80" y="180.7" font-size="12" fill="#5C6B7F" text-anchor="end">8</text>
+<line x1="92" y1="127.3" x2="950" y2="127.3" stroke="#DCE3EC" stroke-width="1"/>
+<text x="80" y="131.3" font-size="12" fill="#5C6B7F" text-anchor="end">10</text>
+<line x1="92" y1="78.0" x2="950" y2="78.0" stroke="#DCE3EC" stroke-width="1"/>
+<text x="80" y="82.0" font-size="12" fill="#5C6B7F" text-anchor="end">12</text>
+<rect x="136.5" y="324.7" width="96" height="49.3" fill="#3F8F5B" rx="3"/>
+<text x="184.5" y="316.7" font-size="15" font-weight="600" fill="#1B2430" text-anchor="middle">2</text>
+<text x="184.5" y="394.0" font-size="12" fill="#5C6B7F" text-anchor="middle">right</text>
+<rect x="258.5" y="201.3" width="96" height="172.7" fill="#E8A33D" rx="3"/>
+<text x="306.5" y="193.3" font-size="15" font-weight="600" fill="#1B2430" text-anchor="middle">7</text>
+<text x="306.5" y="394.0" font-size="12" fill="#5C6B7F" text-anchor="middle">error</text>
+<rect x="380.5" y="300.0" width="96" height="74.0" fill="#C6413F" rx="3"/>
+<text x="428.5" y="292.0" font-size="15" font-weight="600" fill="#1B2430" text-anchor="middle">3</text>
+<text x="428.5" y="394.0" font-size="12" fill="#5C6B7F" text-anchor="middle">wrong</text>
+<text x="306.5" y="420.0" font-size="14" font-weight="600" fill="#1B2430" text-anchor="middle">before  (the tutorial parser)</text>
+<rect x="565.5" y="78.0" width="96" height="296.0" fill="#3F8F5B" rx="3"/>
+<text x="613.5" y="70.0" font-size="15" font-weight="600" fill="#1B2430" text-anchor="middle">12</text>
+<text x="613.5" y="394.0" font-size="12" fill="#5C6B7F" text-anchor="middle">right</text>
+<rect x="687.5" y="374.0" width="96" height="0.0" fill="#E8A33D" rx="3"/>
+<text x="735.5" y="366.0" font-size="15" font-weight="600" fill="#1B2430" text-anchor="middle">0</text>
+<text x="735.5" y="394.0" font-size="12" fill="#5C6B7F" text-anchor="middle">error</text>
+<rect x="809.5" y="374.0" width="96" height="0.0" fill="#C6413F" rx="3"/>
+<text x="857.5" y="366.0" font-size="15" font-weight="600" fill="#1B2430" text-anchor="middle">0</text>
+<text x="857.5" y="394.0" font-size="12" fill="#5C6B7F" text-anchor="middle">wrong</text>
+<text x="735.5" y="420.0" font-size="14" font-weight="600" fill="#1B2430" text-anchor="middle">after  (2026-08-21)</text>
+<line x1="92" y1="374" x2="950" y2="374" stroke="#1B2430" stroke-width="1.5"/>
+<text x="92" y="448" font-size="12" fill="#5C6B7F">Source: media/data/2026-08-21-kicad-parser.csv — regenerate with media/scripts/measure_kicad_parser.py</text>
+</svg>

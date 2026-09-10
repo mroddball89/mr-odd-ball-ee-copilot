@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="520" viewBox="0 0 940 520" font-family="system-ui, -apple-system, Segoe UI, sans-serif">
+<rect width="940" height="520" fill="#fcfcfb"/>
+<text x="24" y="34" font-size="17" font-weight="600" fill="#0b0b0b">Marking a quiz answer stopped costing a network request</text>
+<text x="24" y="55" font-size="12" fill="#52514e">Median of 30 calls per case. Windows 11, Ryzen 7 5700X, CPU only. Measured 2026-09-02 &#8212; tools/quiz_grade.py.</text>
+<text x="24" y="73" font-size="12" fill="#52514e">The remote bar is CITED from media/data/2026-08-29-turn-latency.csv, not re-measured: re-timing it would spend the quota this change exists to save.</text>
+<text x="24" y="116" font-size="13.5" font-weight="600" fill="#0b0b0b">Latency per answer (log scale, milliseconds)</text>
+<text x="700" y="116" font-size="13.5" font-weight="600" fill="#0b0b0b">API requests, 10-question quiz</text>
+<rect x="210" y="150.0" width="44.3" height="19.8" fill="#2a78d6" rx="2"/>
+<text x="200" y="163.9" font-size="11" text-anchor="end" fill="#52514e">mcq-letter</text>
+<text x="262.3" y="163.9" font-size="11" fill="#52514e">0.005 ms</text>
+<rect x="210" y="177.8" width="186.8" height="19.8" fill="#2a78d6" rx="2"/>
+<text x="200" y="191.7" font-size="11" text-anchor="end" fill="#52514e">mcq-spoken</text>
+<text x="404.8" y="191.7" font-size="11" fill="#52514e">0.890 ms</text>
+<rect x="210" y="205.6" width="248.6" height="19.8" fill="#2a78d6" rx="2"/>
+<text x="200" y="219.4" font-size="11" text-anchor="end" fill="#52514e">numeric</text>
+<text x="466.6" y="219.4" font-size="11" fill="#52514e">8.4 ms</text>
+<rect x="210" y="233.3" width="154.2" height="19.8" fill="#2a78d6" rx="2"/>
+<text x="200" y="247.2" font-size="11" text-anchor="end" fill="#52514e">numeric-range</text>
+<text x="372.2" y="247.2" font-size="11" fill="#52514e">0.272 ms</text>
+<rect x="210" y="261.1" width="194.7" height="19.8" fill="#2a78d6" rx="2"/>
+<text x="200" y="275.0" font-size="11" text-anchor="end" fill="#52514e">symbolic</text>
+<text x="412.7" y="275.0" font-size="11" fill="#52514e">1.2 ms</text>
+<rect x="210" y="288.9" width="265.4" height="19.8" fill="#2a78d6" rx="2"/>
+<text x="200" y="302.8" font-size="11" text-anchor="end" fill="#52514e">symbolic-rearranged</text>
+<text x="483.4" y="302.8" font-size="11" fill="#52514e">15.5 ms</text>
+<rect x="210" y="316.7" width="151.6" height="19.8" fill="#2a78d6" rx="2"/>
+<text x="200" y="330.6" font-size="11" text-anchor="end" fill="#52514e">short-fuzzy</text>
+<text x="369.6" y="330.6" font-size="11" fill="#52514e">0.248 ms</text>
+<rect x="210" y="344.4" width="163.0" height="19.8" fill="#2a78d6" rx="2"/>
+<text x="200" y="358.3" font-size="11" text-anchor="end" fill="#52514e">prose</text>
+<text x="381.0" y="358.3" font-size="11" fill="#52514e">0.375 ms</text>
+<rect x="210" y="372.2" width="374.5" height="19.8" fill="#b8563e" rx="2"/>
+<text x="200" y="386.1" font-size="11" text-anchor="end" fill="#52514e">the old path (one Gemini call)</text>
+<text x="592.5" y="386.1" font-size="11" fill="#52514e">820 ms</text>
+<line x1="273.3" y1="138" x2="273.3" y2="396.0" stroke="#e3e2df" stroke-width="1"/>
+<text x="273.3" y="412.0" font-size="10" text-anchor="middle" fill="#52514e">0.01 ms</text>
+<line x1="400.0" y1="138" x2="400.0" y2="396.0" stroke="#e3e2df" stroke-width="1"/>
+<text x="400.0" y="412.0" font-size="10" text-anchor="middle" fill="#52514e">1 ms</text>
+<line x1="526.7" y1="138" x2="526.7" y2="396.0" stroke="#e3e2df" stroke-width="1"/>
+<text x="526.7" y="412.0" font-size="10" text-anchor="middle" fill="#52514e">100 ms</text>
+<rect x="700" y="398.0" width="62" height="2.0" fill="#2a78d6" rx="2"/>
+<text x="731" y="390.0" font-size="15" font-weight="600" text-anchor="middle" fill="#0b0b0b">0</text>
+<text x="731" y="416.0" font-size="11" text-anchor="middle" fill="#52514e">after</text>
+<rect x="805" y="275.0" width="62" height="125.0" fill="#b8563e" rx="2"/>
+<text x="836" y="267.0" font-size="15" font-weight="600" text-anchor="middle" fill="#0b0b0b">10</text>
+<text x="836" y="416.0" font-size="11" text-anchor="middle" fill="#52514e">before</text>
+<line x1="690" y1="150.0" x2="890" y2="150.0" stroke="#b8563e" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="690" y="144.0" font-size="10.5" fill="#52514e">20/day &#8212; the whole free tier (D3)</text>
+<text x="24" y="486" font-size="11" fill="#52514e">The first answer of a session costs 357 ms, which is <tspan font-style="italic">import sympy</tspan> and is paid once.</text>
+<text x="24" y="506" font-size="11" fill="#52514e">Data: media/data/2026-09-02-quiz-marking.csv &#8212; regenerate with python media/scripts/measure_quiz_marking.py then python media/scripts/plot_quiz_marking.py</text>
+</svg>

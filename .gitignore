@@ -11,15 +11,170 @@ venv/
 # The vector store is a build artifact — rebuild it with `python tools/vector_db.py`.
 chroma_db/
 
-# LB's own data, not source. sd_card_memory.json is the conversation log the 15-day
+# LB's own data, not source. conversation_memory.json is the conversation log the 15-day
 # backup clock watches; quiz_data.json is regenerated with defaults if absent.
+#
+# sd_card_memory.json is its pre-2026-09-04 name and stays ignored on purpose: a rig still
+# running the old code recreates it, and an untracked file is better than a surprise commit.
+conversation_memory.json
+conversation_memory.backup-state.json
 sd_card_memory.json
+# Dated safety copies and the spill past the 40-turn cap, written when the two logs
+# above had to be merged by hand. Still LB's data.
+conversation_memory.*.bak
+sd_card_memory.*.bak
+conversation_memory.archive-*.json
 quiz_data.json
+
+# The Markdown vault is LB's own long-term notes, written by tools/knowledge_vault.py — his
+# data, not source, same call as conversation_memory.json. Deliberately NOT ignored wholesale
+# though: the folder itself is tracked via the .gitkeep, because a vault that vanishes on a
+# fresh clone looks like a missing feature rather than an empty notebook.
+vault/**
+!vault/
+!vault/.gitkeep
+
+# Extracted from LB's syllabi by `python tools/academic_calendar.py`. His coursework, and a
+# rebuildable artifact like chroma_db/ — absent is the normal state, not a broken install.
+data/academic/academic_calendar.json
+
+# Uploaded with the paperclip and not filed yet. A file in here is one Mr Odd Ball has not
+# sorted, which is state rather than source — and it is LB's document either way. The folder
+# itself stays tracked via the .gitkeep, so a fresh clone shows where an upload lands instead
+# of `engine/server.py` creating a directory nobody expected.
+data/inbox/**
+!data/inbox/
+!data/inbox/.gitkeep
+
+# Schematics, boards and gerbers LB uploaded. His designs. Same call as vault/ and for the same
+# reason: tracked folder, ignored contents.
+data/projects/**
+!data/projects/
+!data/projects/.gitkeep
+
+# Question decks built from LB's practice papers by tools/quiz_import.py, and the papers
+# themselves. His coursework, and not ours to redistribute — a professor's review packet is
+# somebody's copyright, and the questions parsed out of it are the same material in another
+# shape. Same call as quiz_data.json two rules up. The folders stay tracked via .gitkeep so a
+# fresh clone shows where an uploaded quiz lands, rather than tools/file_manager.py creating a
+# directory nobody expected. (data/**/*.pdf below already covers the PDFs; the explicit rule
+# here is so the reason is written down next to the deck rule it belongs with.)
+data/quiz/**
+!data/quiz/
+!data/quiz/.gitkeep
+data/quiz_pdfs/**
+!data/quiz_pdfs/
+!data/quiz_pdfs/.gitkeep
+
+# Frames grabbed by tools/screen_capture.py when LB asks what is on his screen. His desktop,
+# which may have anything on it — this is the one ignore rule in the file that is about privacy
+# rather than about size or rebuildability. Kept on disk (see KEEP_FRAMES) so he can open the
+# exact image that was sent to Gemini; never committed.
+data/screen/
 
 # Datasheet PDFs and scratch downloads — large, and not ours to redistribute.
 raw_downloads/
 data/**/*.pdf
 
-# Models and voices are re-downloadable and large (~63MB a voice).
-models/
+# Piper voices are ~63MB each and re-downloadable in seconds:
+#   python -m piper.download_voices en_US-joe-medium --data-dir voices
 voices/
+
+# Whisper models are downloaded on first run. The wake model is NOT ignored — it was trained
+# on Colab from training/hey_mr_odd_ball.ipynb and losing it means retraining.
+models/whisper/
+
+# OCR text for image-only PDFs, keyed by each file's path, size and mtime. A cache of work
+# that is reproducible from the PDFs themselves in a few seconds a page — regenerable, so it
+# is a build artifact rather than something to carry. See tools/pdf_ocr.py.
+data/.ocr_cache/
+
+# pip install logs from the RAG stack — Pi-side, regenerable
+rag_install.log
+vectordb_build.log
+install.log
+
+# =========================================================================================
+# Runtime output — his voice, his logs, his desktop. Added 2026-08-26, and the first two
+# were found by listing what `git add` would actually stage rather than by trusting that
+# nothing new had appeared.
+# =========================================================================================
+
+# RECORDINGS OF LB'S VOICE. `main.py --save-captures` writes one WAV per utterance, and the
+# FILENAME IS A TRANSCRIPT — `162315_family-home--yes--k-t-o-p--3-nsu-5dk-.wav`. So this
+# directory leaks twice over: the audio is his voice, and the file listing is what he said,
+# readable without downloading anything.
+#
+# There were 22 of them sitting untracked when the first push was prepared. Nothing had gone
+# wrong yet; nothing had stopped it either, which is the same position `data/screen/` was in
+# before somebody thought about it.
+#
+# The directory is kept so `--save-captures` has somewhere to write on a fresh clone.
+captures/**
+!captures/
+!captures/.gitkeep
+
+# Runtime logs from config/start_oddball.bat. They carry stack traces, file paths and
+# whatever the assistant printed — none of it useful in a diff, all of it changing on every
+# start, and a log is not source.
+data/oddball.log
+data/face.log
+*.log
+
+# The remembered window size (hud/float.py, Ctrl+/Ctrl-). Per-machine state, and committing
+# it would mean one person's screen deciding everyone else's default.
+data/face_scale
+
+# The unredacted transcripts behind media/data/2026-09-03-wasted-turns.csv. 127 verbatim
+# lines of speech in LB's house, captured by false wakes. The published CSV keeps only the
+# short fragments the analysis rests on. See memory: never-publish-personal-data.
+media/data/*.raw.csv
+
+# Wake-word audio recorded after 2026-09-06. LB's decision: the 35 clips from that session
+# stay on this machine as training material and are NOT published.
+#
+# They are recordings of him speaking in his own house, and the negative set is worse than the
+# positive one for this — "hey mister odd", "hey mr on call", ambient room tone and ordinary
+# speech, captured to teach the model what is NOT the wake word. Same rule as
+# media/data/*.raw.csv above: see memory note never-publish-personal-data, and note that the
+# copilot repo is public.
+#
+# **The 42 clips committed before this line stay tracked**, because .gitignore does not untrack
+# what git already has, and removing them would break `tools/verify_wake.py` for anyone who
+# clones. So the fixture set is deliberately split: a public 42 that the harness runs against
+# on a fresh clone, and a local 77 that this machine measures and trains from. A clone will
+# therefore report DIFFERENT numbers from `media/data/2026-09-07-wake-fixtures.csv`, and that
+# CSV is the record of what the full set does.
+#
+# Adding a fixture that SHOULD be published needs `git add -f`.
+tests/fixtures/wake/**/*.wav
+
+# The same rule, same session, same reasoning: the sleep-phrase and near-miss command clips
+# recorded on 2026-09-06/07 are LB saying "go to sleep", "goodnight", "that's all" and a set of
+# deliberate near-misses in his own house. 14 command fixtures committed before this line stay
+# tracked, for the reason above — `tools/verify_router.py` and `verify_speakable.py` run
+# against them on a clone.
+tests/fixtures/commands/**/*.wav
+
+# Rotated or hand-kept copies of the runtime log. `*.log` above does not match a suffixed name
+# like `oddball.log.2026-09-07`, and the log is the single worst file in the tree to publish by
+# accident: every capture writes `heard '<whatever was said in the room>'`. One 24-hour log
+# measured 215 of those lines.
+*.log.*
+
+# Stderr from the training phases. `*.log` does not match a `.err` name, and these are 6,000
+# lines of tqdm progress bars — not source, not evidence, and regenerated on every run.
+*.err
+
+# Wake-model training working directories. The RECIPE is tracked — splits.json, the config,
+# fetch_corpora.py, oww_compat.py — because those are what make the retrain reproducible.
+# What they produce is not:
+#
+#   piper-sample-generator/  199 MB, a clone of a third-party repo with its own .git. Committing
+#                            a nested repo stores a gitlink nobody can check out.
+#   corpora/                 ~1.6 GB of downloaded features and impulse responses. Re-fetch with
+#                            `python training/fetch_corpora.py`; that script IS the provenance.
+#   output/                  the generated clips and features. ~2.5 GB of synthetic WAV at peak.
+training/piper-sample-generator/
+training/corpora/
+training/output/
