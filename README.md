@@ -71,9 +71,13 @@ but not built. Both are written up in `tasks/todo.md`.
    — whether or not that script knows the mechanism exists. Call `isolate()` explicitly when you
    write a new one; the backstop is there for when you forget.
 
-4. **The 15-day backup reminder is real.** It measures the log file's creation time, not the
-   conversation in it, so it genuinely fires. Copy the file somewhere, then
-   `python tools/memory_manager.py --backed-up` to restart the clock.
+4. **The 15-day clock archives the log; it no longer asks you to.** It measures the log file's
+   creation time, not the conversation in it, so it genuinely fires — and when it does, the turn
+   copies `conversation_memory.json` into `vault/.memory/` and restarts the clock itself. No card
+   and no command. `python tools/memory_manager.py --to-vault` forces one early;
+   `--backed-up` still exists for a copy you made by hand somewhere this machine cannot see.
+   The directory is dotted because `knowledge_vault.notes()` skips dot-directories, which is what
+   keeps an archived transcript from being read back out of the vault as if it were a note.
 
 5. **The free tiers are counted in REQUESTS, not tokens.** Gemini gives 20 per model name per
    day. Anything that turns one question into two calls halves your day, which is why the router
@@ -304,8 +308,16 @@ reminder to copy it somewhere else.
 > to the day and the rolling window put it at 1. **It had never fired once.**
 >
 > Creation time, not modification time — the file is rewritten on every single turn, so a clock
-> built on mtime could never fire either. `python tools/memory_manager.py --backed-up` restarts
-> it, and that command exists because a reminder with no off switch is one you learn to ignore.
+> built on mtime could never fire either.
+>
+> **Then the reminder itself was removed, on 2026-09-08.** A correct reminder fires on every turn
+> from the moment it comes true, which is why it needed an off switch; an off switch needs
+> explaining on the card; and a card with a chore attached is one you learn to ignore. All of that
+> existed only because nothing in the system could watch you copy a file to a drive. The vault is
+> not somewhere else — it is a directory the process can write and then confirm it wrote — so the
+> turn now archives the log into `vault/.memory/` and restarts the clock on the strength of its
+> own copy. The clock is restarted only once the bytes are on disk, so a failed archive stays due
+> and the next turn tries again.
 
 That same function carries three more things in front of the conversation log, and because every
 agent already calls it, every agent gets them. `tools/self_context.py` composes the block.
@@ -621,8 +633,10 @@ the syllabi do not cover, it says it does not know rather than describing what a
 "usually" does. There is no public record of your professor's late policy, so a fluent guess
 would be a fabrication with nothing to check it against.
 
-Anything due within **3 days** is then appended to every answer he gives, on any subject — the
-same way the 15-day backup reminder works. It is shown, never spoken, and costs no API call:
+Anything due within **3 days** is then appended to every answer he gives, on any subject. This is
+now the only such card — the 15-day memory clock used to work the same way and no longer shows
+anything, because archiving to the vault is something the machine can just do, whereas a deadline
+is yours to act on. It is shown, never spoken, and costs no API call:
 the dates were extracted once, and the check is a JSON read. See `docs/DECISIONS.md` (D11).
 
 ## Quiz mode

@@ -124,6 +124,14 @@ class QuizItem:
         kind:        one of KINDS. Chosen at import; decides how `quiz_grade` marks it.
         source:      the filename it was imported from, for "where did this come from".
         page:        1-based page in that file, or 0 when unknown.
+        origin:      "" when a parser read this question off the page, "model" when
+                     `tools/quiz_generate.py` WROTE it from reference material that contained no
+                     questions. **The one field here that is about trust rather than content.**
+                     A parsed question can be checked against the paper it came from; a
+                     generated one is the model's claim about the material and can be wrong in a
+                     way no regex can be. Stored per item, not per deck, because one subject
+                     accumulates both — a professor's practice exam and a generated set off a
+                     datasheet land in the same `electronics.json`.
     """
 
     question: str
@@ -134,6 +142,7 @@ class QuizItem:
     kind: str = "short"
     source: str = ""
     page: int = 0
+    origin: str = ""
 
     @property
     def id(self) -> str:
@@ -153,6 +162,8 @@ class QuizItem:
             d["source"] = self.source
         if self.page:
             d["page"] = self.page
+        if self.origin:
+            d["origin"] = self.origin
         return d
 
     @classmethod
@@ -185,7 +196,8 @@ class QuizItem:
                    explanation=str(raw.get("explanation", "")).strip(),
                    subject=str(raw.get("subject", "")).strip() or subject or "general",
                    kind=kind, source=str(raw.get("source", "")).strip(),
-                   page=int(raw.get("page", 0) or 0))
+                   page=int(raw.get("page", 0) or 0),
+                   origin=str(raw.get("origin", "")).strip().lower())
 
 
 # What may follow a number with NO space between, and the exclusions are the whole point.
@@ -389,7 +401,42 @@ def resolve_subject(spoken: str) -> str:
             return name
 
     hits = [n for n in names if want in subject_slug(n) or subject_slug(n) in want]
-    return hits[0] if len(hits) == 1 else ""
+    if len(hits) == 1:
+        return hits[0]
+    if hits:
+        return ""
+
+    # Loosest pass: one WORD of what he said, inside a deck name.
+    #
+    # A deck named from a filename is named badly — `quiz_import.guess_subject` produced
+    # "Resistorcharts" from `resistorcharts.pdf`, which is nothing anybody says out loud. Every
+    # pass above compares the whole phrase, so "resistors", "resistor charts" and "resistor band
+    # colors" all missed a deck that was sitting right there with twelve questions in it.
+    #
+    # Measured 2026-09-09, and it is the question LB actually asked: "Quiz me on resistor band
+    # colors" -> "No deck for 'resistor band colors'".
+    #
+    # Trailing "s" is dropped because he pluralises where a filename does not. Five characters
+    # minimum, and stopwords excluded, so "the", "my" and "some" cannot reach a deck — and a
+    # word matching TWO decks still returns "" and asks him, exactly as the pass above does.
+    # It runs in BOTH directions, because the abbreviation can be on either side. "resistors"
+    # is longer than the deck word it should find inside `resistorcharts`; "trigonometry" is
+    # longer than the deck named `Trig Limits` that answers it — and Whisper produces both,
+    # having heard LB say "trigonometry" and written "trig? Anometry".
+    stop = {"quiz", "test", "questions", "question", "about", "some", "band", "colour", "color"}
+    spoken_words = {w for w in re.findall(r"[a-z]{5,}", want.replace("_", " "))} - stop
+
+    for token in sorted(spoken_words, key=len, reverse=True):
+        singular = token[:-1] if token.endswith("s") else token
+        found = [n for n in names
+                 if singular in subject_slug(n)
+                 # ...or a word of the DECK's name opens the word he said. Four characters, so
+                 # "calc" reaches "calculus" and no two-letter fragment reaches anything.
+                 or any(len(w) >= 4 and singular.startswith(w)
+                        for w in re.findall(r"[a-z]+", subject_slug(n).replace("_", " ")))]
+        if len(found) == 1:
+            return found[0]
+    return ""
 
 
 # ---------------------------------------------------------------------------------------

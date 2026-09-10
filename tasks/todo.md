@@ -4087,3 +4087,140 @@ when the capture ends, restored when the capture *raises*, and a stub recorder w
 `wait_s` was a property does not crash — it simply does not get the longer wait. That last one is
 the `verify_deafness` lesson (L: a stub without the attribute took the microphone thread down with
 an AttributeError) and it is the one that has actually bitten before.
+
+---
+
+# 2026-09-08 — the 15-day clock archives to the vault instead of asking
+
+Memory and problem-solving were checked first, because the change was conditional on both being
+healthy: `verify_memory_file` 31/31, `verify_agents` 77/77, `verify_router` 267/267, and the rig
+itself had answered a turn 40 minutes earlier. Both up. The reminder was firing at the time — the
+log was created 2026-08-19 and stood at **20 days against a 15-day limit**, so every turn was
+carrying an ERROR card asking LB to copy a file and type a command.
+
+## What changed
+
+`memory_manager.snapshot_to_vault()` copies `conversation_memory.json` into `vault/.memory/` and
+restarts the clock on the strength of its own copy; `snapshot_if_due()` is the one call
+`Engine.ask` makes each turn. `core._with_backup_reminder` became `_snapshot_memory_if_due` and
+shows **nothing** — the acknowledgement dance existed only because nothing in the system could
+watch LB copy a file to a drive, and the vault is a directory the process writes and then confirms.
+
+## The trap this had to avoid
+
+`knowledge_vault.notes()` walks the vault with `rglob("*.md")` and excludes only dot-directories.
+A snapshot in `vault/notes/` — or a tidy-looking `vault/memory/` — is found by `read_from_vault`
+and fed to agents **as a note**, so a model asked about an op-amp pinout could quote a transcript
+of LB asking that question instead of the note that answers it. D22/D23 arriving from inside the
+backup system. The dot is the entire fix, and it reuses the rule `trash_note` already stands on.
+
+`snapshot_dir()` resolves through `knowledge_vault.VAULT_DIR` rather than rebuilding the path from
+`__file__`, so `ODDBALL_VAULT_DIR` isolates the vault and its snapshots together. A second copy of
+that path expression is how a harness ends up isolated for one and not the other — L22, one module
+further along. That import also exposed a latent bug: `memory_manager` had no `__package__` guard,
+so `python tools/memory_manager.py` could never import anything under `tools.` The existing
+`tools.harness_env` import had been failing there silently inside its own `try` since the day it
+was written.
+
+## Verified
+
+`verify_memory_file.py` **42/42** (was 31), new section 7. The checks that matter are the two that
+would not have been written if the dot were treated as cosmetic: a **`.md` decoy placed inside the
+snapshot directory** is invisible to `notes()` and cannot be pulled back out by `read_from_vault`.
+And the failure path — a snapshot onto an impossible path returns None instead of raising, and
+leaves the log **due**, because acknowledging a copy that never landed is how a backup system lies.
+
+`verify_engine` 132/132 (its module stub gained `snapshot_if_due`; the old stub would have raised
+ImportError the moment core called it), `verify_notes` 142/142, `verify_agents` 77/77.
+
+The two hand-made backups in the repo root were **moved**, not deleted, into `vault/.memory/`.
+`vault/**` is gitignored, so no transcript reaches the public repo.
+
+# 2026-09-09 — the quiz bank that never grew, and a filing he only described
+
+LB: *"I TOLD HIM TO ADD THE FILES TO THE QUIZ. HE SAID HE DID BUT HE STILL ONLY HAS THE SAME
+THREE QUESTIONS IN HIS BANK."*
+
+He was right, and it was worse than a bug. Four separate failures were stacked on top of each
+other, and the top one was the assistant claiming work it had not done.
+
+## What was actually wrong
+
+**1. The filing never ran.** `data/oddball.log` 20:37:05 — `no intent matched 'can you file the
+resistor chart and trig limits sheets to quizes'` — routed to GENERAL, and then **not one filing
+line before the reply at 20:39**. No move, no parse, no indexer job. Both PDFs were still in
+`data/inbox/` eighteen hours later with their original timestamps.
+
+What he said was *"Filed resistorcharts.pdf and trig limits 2.pdf as quizzes. They're being
+indexed now and not searchable yet."* — a paraphrase of `file_manager._file_quiz`'s real return
+string, which was sitting in that agent's PREVIOUS CONTEXT from a genuine filing two days
+earlier. Asked to do something, the model reproduced the shape of the last time it was done.
+`tools/memory_manager.py` documents this failure from the other side; here the stakes were not a
+stale answer but a **false confirmation of work**.
+
+**2. `resistorcharts.pdf` can never be parsed into questions.** It is a colour-code chart —
+"Gold Black Brown Red ... 1st Band 2nd Band 3rd Band ... 0 1 2 3". Excellent revision material
+containing not one question. `quiz_import` is an EXTRACTOR; there was nothing to extract.
+
+**3. The review packet's layout was unreadable.** `Trig limits question and answers.pdf`: 35
+questions found, **all 35 dropped** for having no marked answer. Its answers sit on the line
+below each question with no `Answer:` and no key section — a fifth layout the parser did not know.
+
+**4. Nobody could have debugged any of it.** `python tools/quiz_import.py paper.pdf` — the
+invocation in its own docstring — had never once run. A dependency ships a top-level `tools/`
+package into site-packages; with the repo root off `sys.path` the failing import resolves the
+parent package to THAT one and caches it, so the `except ModuleNotFoundError` fallback added the
+right path and then failed identically.
+
+## What changed
+
+- **`orchestrator/file_intent.py`** (new). Filing is now a deterministic intent, free, on its own
+  `file` route. Needs a verb AND a category AND a target resolving to something actually in the
+  inbox — that third clause means an empty inbox cannot match at all, which removes nearly every
+  false positive at once. Also matches the DECLARATION form ("both of the PDFs are quizzes"),
+  which is what LB said when asked the category and which filed nothing.
+- **`Engine._file_turn`**. Every word it speaks is generated from the result of a move that
+  already happened — and success is read from **the inbox listing**, not from the tool's prose,
+  because every `process_inbox_file` return opens with "Filed X" including the ones that then go
+  wrong. Ordered after the note planner: "add to my note about the resistor chart quiz" carries a
+  verb, a category and a resolving name, and would otherwise MOVE A FILE in answer to a request
+  to write two lines in a notebook.
+- **Layout 5** in `quiz_import.py` — numbered question, bare answer beneath. Guarded by "the stem
+  must read as a question", which is what keeps it from inventing answers out of agendas and
+  slide bullets. Also refuses Private-Use-Area glyphs (subsetted maths fonts) and URLs in the
+  answer; without those, one item survived from LB's trig packet reading *"...f(x) = <PUA><PUA>
+  3 sin (kx) x if"* answered *"2; Video Solution: http://www."*
+- **`tools/quiz_generate.py`** (new). When the parser finds nothing, ONE request per document
+  writes questions from the material and stores them marked `origin="model"`. Asking and marking
+  stay local and free forever after. Does **not** inherit `CLOUD_TIMEOUT_S` — that twenty seconds
+  is a budget for a spoken turn, and at twenty seconds this returned 504 DEADLINE_EXCEEDED having
+  already spent the request, which makes the short limit worse for the quota than the long one.
+- **`quiz_bank.resolve_subject`** gained a word-level pass, in both directions. A deck named from
+  a filename is named badly — `Resistorcharts` — and every whole-phrase pass missed it, so "quiz
+  me on resistor band colors" found nothing while twelve questions sat in it.
+- **`tools/verify_router.py`** fixed: it still patched `Engine._with_backup_reminder`, removed by
+  the vault-snapshot work earlier the same day, and had been dying on import since.
+
+## The trap this had to avoid
+
+A layout that infers an answer from POSITION can invent answers out of any numbered list, and a
+bank of invented answers marks LB wrong for being right — strictly worse than the empty bank it
+was written to fix. So the harness spends more checks on what layout 5 REFUSES than on what it
+accepts, and the generator's questions are flagged per item rather than per deck, because one
+subject accumulates both a professor's paper and a generated set off a datasheet.
+
+## Verified
+
+`verify_file_intent.py` **16/16** (new; `--probe` unbinds the planner and 4 checks go red). Its
+section 2 asserts the file is **gone from the inbox and present in `data/quiz_pdfs/`** — the one
+property a fluent false confirmation cannot fake.
+
+`verify_quiz` **129/129** (was 119; new section 3b covers layout 5, its refusals, and the
+resolver), `verify_engine` 132/132, `verify_upload` 187/187, `verify_router` 267/267 (was dying on
+import), `verify_memory_file` 42/42.
+
+End to end on LB's real files: the intent matched his exact failing sentence, routed `file` in
+**0 ms with no API call**, both PDFs moved out of the inbox, and the bank went from **3 questions
+to 27** — `Trig Limits` 12 and `Resistorcharts` 12, both `origin: model`. The resistor chart's
+first attempt hit a transient 503 and was **reported as a failure rather than hidden**, which is
+the behaviour the whole day was about.

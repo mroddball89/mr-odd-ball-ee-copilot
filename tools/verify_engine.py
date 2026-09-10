@@ -98,6 +98,9 @@ import types                                                          # noqa: E4
 _mem = types.ModuleType("tools.memory_manager")
 _mem.add_message = lambda role, content: None
 _mem.check_for_backup_reminder = lambda: False
+# `Engine.ask` archives the log into the vault when the clock is due. Stubbed for the same
+# reason as the writes above: the harness must not deposit its own turns in LB's vault.
+_mem.snapshot_if_due = lambda: None
 _mem.format_memory_for_llm = lambda: "No previous memory."
 sys.modules["tools.memory_manager"] = _mem
 

@@ -70,12 +70,32 @@ from pathlib import Path
 #
 # Guarded rather than an unconditional insert, so importing this module from an agent has no
 # side effect on the interpreter's search path.
+#
+# **And the retry has to evict `tools` from `sys.modules` first, or it fails identically.**
+# Measured 2026-09-09, and it is why `python tools/quiz_import.py paper.pdf` — the invocation
+# at the top of this docstring — had never once run:
+#
+#   ModuleNotFoundError: No module named 'tools.quiz_bank'      <- the try
+#   ModuleNotFoundError: No module named 'tools.quiz_bank'      <- the except, unchanged
+#
+# Some dependency installs a top-level `tools/` package into site-packages (`compute_wer.py`,
+# `g2p.py`, `readme_builder.py` — none of them ours). With the repo root off `sys.path`, the
+# failing import still RESOLVES the parent package `tools` — to that one — and caches it in
+# `sys.modules` before discovering there is no `quiz_bank` inside it. Adding the repo root
+# afterwards changes nothing, because an import of `tools.quiz_bank` consults the cached parent
+# and never searches the path again.
+#
+# So the path insert alone is a fix that cannot work, and the symptom it leaves is a fallback
+# that looks correct and re-raises the same sentence. Dropping the cached entries is what makes
+# the second attempt a genuinely new one.
 try:
     from tools.quiz_bank import QuizItem, infer_kind
 except ModuleNotFoundError:                                           # pragma: no cover
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    for _shadowed in [n for n in sys.modules if n == "tools" or n.startswith("tools.")]:
+        del sys.modules[_shadowed]
     from tools.quiz_bank import QuizItem, infer_kind
 
 LOG = logging.getLogger("oddball.quiz")
@@ -548,16 +568,145 @@ def guess_subject(path: Path, text: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------------------
+# Layout 5 — a numbered question with its answer on the next line and no marker at all
+# ---------------------------------------------------------------------------------------
+#
+# The shape the other four miss, and the most common one in a review packet a professor typed
+# himself rather than exported from a test bank:
+#
+#     1. What is Ohm's law?
+#     V = IR
+#     2. Which band is the multiplier on a 4-band resistor?
+#     The third
+#
+# There is no key section and no "Answer:" marker, so `_parse_numbered` finds the questions,
+# fails to find anything to answer them with, and drops every one. Measured 2026-09-09 on LB's
+# own trig packet: 35 questions found, 35 dropped, a bank left empty.
+#
+# ## Why the stem has to look like a question, and why that rule is the whole safety argument
+#
+# "The last line of the block is the answer" is true of a study guide and false of nearly
+# everything else that is numbered — an agenda, a parts list, a set of lecture bullets, a
+# syllabus. Applied eagerly it does not merely miss; it INVENTS answers, and a bank full of
+# invented answers marks LB wrong for being right. That is strictly worse than the empty bank
+# this is here to fix, so the test is deliberately not "does it parse" but "is this a question".
+#
+# So a block is only read this way when its stem ends in a question mark or opens with an
+# interrogative — the shapes a human writing questions actually uses. Everything else falls
+# through and the document is reported as unreadable, which is the honest outcome.
+#
+# ## What this deliberately does NOT rescue: typeset mathematics
+#
+# LB's trig packet is the reason this module gained a layout and it is still not helped by it,
+# which is worth stating plainly rather than discovering later. `pypdf` flattens a typeset
+# limit into its own pieces:
+#
+#     "1. lim / x→ π / 4 / sin (2x) / 1"        the answer is 1
+#     "7. lim / x→0 / (sinx / 3x / ) / 1 / 3"   the answer is 1/3, over two lines
+#     "6. lim / x→ π / 4 / secx / √ / 2 / 1"    the answer is √2 — and that trailing 1 is the
+#                                               PAGE NUMBER
+#
+# A fraction loses its bar and a radical loses its argument, so "1/3" and "1 then 3" are the
+# same characters and no rule over this text can separate them. A guess here would file a wrong
+# answer against a question LB will be marked on. Those documents go to `tools/quiz_generate.py`
+# instead, where a model reads the soup and writes a question that can be spoken out loud.
+
+# An interrogative opener. Not an exhaustive list of English — the closed set of words a person
+# reaches for when writing a numbered review question.
+_INTERROGATIVE = re.compile(
+    r"^(?:what|which|who|whom|whose|when|where|why|how|name|list|define|state|give|identify|"
+    r"describe|explain|calculate|compute|find|solve|determine|convert|write|true\s+or\s+false)\b",
+    re.I)
+
+
+def _looks_like_a_question(stem: str) -> bool:
+    """Would a person reading this out loud be asking something?"""
+    return stem.endswith("?") or bool(_INTERROGATIVE.match(stem))
+
+
+# A glyph from the Unicode Private Use Area. `pypdf` emits these when a PDF embeds a subsetted
+# maths font — LaTeX's extensible braces and radicals arrive as U+F8F1, U+F8F4, U+F8F2 and
+# friends, which have no meaning outside the font that shipped them.
+#
+# Their presence is the cheapest reliable proof that the line is typeset mathematics rather than
+# prose, which is exactly the material this layout must not guess at. Caught on LB's trig packet:
+# without it, one item survived every other guard reading
+# "Find all non-zero value(s) of k so that f(x) = <PUA><PUA><PUA> 3 sin (kx) x if".
+_PRIVATE_USE = re.compile("[\ue000-\uf8ff]")
+
+# A link in the answer means the sheet is pointing at a worked solution somewhere else, so the
+# text captured is a fragment of a URL rather than the answer. Same packet: "2; Video Solution:
+# http://www." — the marking would have failed LB for saying "2".
+_LINK = re.compile(r"https?://|www\.", re.I)
+
+
+def _parse_bare_answers(text: str, source: str, subject: str, full: str) -> list:
+    """Layout 5. Returns items only; nothing is 'dropped' here.
+
+    A block that does not fit is not a failure to be counted — `_parse_numbered` has already
+    counted it. Reporting it twice would tell LB a 20-question paper dropped 40.
+    """
+    starts = list(_QUESTION_START.finditer(text))
+    if len(starts) < 2:
+        return []
+
+    items = []
+    for index, match in enumerate(starts):
+        end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
+        lines = [ln.strip() for ln in text[match.end():end].splitlines() if ln.strip()]
+        if len(lines) < 2:
+            continue
+
+        # The answer is the last line; everything above it is the question. A question wrapped
+        # over three lines is normal in a PDF and is why this is not "line 1 and line 2".
+        answer = lines[-1].strip(" .;:")
+        stem = _clean_stem(" ".join(lines[:-1]))
+
+        if not _looks_like_a_question(stem):
+            continue
+        if len(stem) < MIN_QUESTION_CHARS or len(stem) > MAX_QUESTION_CHARS:
+            continue
+        # An answer longer than this is the next paragraph, not an answer — the block was
+        # almost certainly prose that happened to start with a number.
+        if not answer or len(answer) > 200:
+            continue
+        # Two questions in a row means the "answer" is question two, and the real answers are
+        # somewhere this layout cannot see.
+        #
+        # **The question MARK, not `_looks_like_a_question`.** Using the full test here rejected
+        # "How far the true value may differ from the marked value" — a correct answer to
+        # "Define tolerance" — because it opens with "how". Answers begin with interrogatives
+        # all the time; only a paper that ends the line with "?" is showing us a second question.
+        if answer.endswith("?"):
+            continue
+        if _PRIVATE_USE.search(stem) or _PRIVATE_USE.search(answer):
+            continue
+        if _LINK.search(answer):
+            continue
+
+        items.append(QuizItem(
+            question=stem, answer=answer, subject=subject,
+            kind=infer_kind(answer, {}), source=source,
+            page=_page_of(full, match.start())))
+    return items
+
+
+# ---------------------------------------------------------------------------------------
 # The entry points
 # ---------------------------------------------------------------------------------------
 
 def parse_questions(text: str, source: str = "", subject: str = "") -> tuple[list, int, str]:
     """Parse already-extracted text. Returns (items, dropped, which layout won).
 
-    Both parsers run and the one that found MORE wins, rather than the first one that found
+    All parsers run and the one that found MORE wins, rather than the first one that found
     anything. A study guide can contain both shapes — a numbered section and a set of Q/A
     definitions — and picking by yield gets the bigger half of it instead of whichever the
     author happened to put first.
+
+    **Layout 5 is tried last and only when the marked layouts found nothing.** It is the one
+    parser here that infers an answer from POSITION rather than from a marker the author wrote,
+    so it must never outvote a document that says where its answers are. A paper with a real
+    answer key and one stray numbered pair is a paper with an answer key.
     """
     key, body = _find_answer_key(text)
     numbered, dropped = _parse_numbered(body, key, source, subject, text)
@@ -565,9 +714,21 @@ def parse_questions(text: str, source: str = "", subject: str = "") -> tuple[lis
 
     if len(pairs) > len(numbered):
         return pairs, 0, "Q/A pairs"
-    layout = ("numbered questions with an answer key" if key
-              else "numbered questions with inline answers")
-    return numbered, dropped, layout
+    if numbered:
+        layout = ("numbered questions with an answer key" if key
+                  else "numbered questions with inline answers")
+        return numbered, dropped, layout
+
+    bare = _parse_bare_answers(body, source, subject, text)
+    if bare:
+        # `_parse_numbered` dropped these same blocks for having no MARKED answer, and this
+        # layout has just answered some of them. Reporting its count unchanged would tell LB a
+        # 35-question paper read 20 and dropped 35; the ones still unaccounted for are the
+        # honest number, and it is reached only when `numbered` is empty.
+        return bare, max(0, dropped - len(bare)), \
+            "numbered questions with the answer on the next line"
+    return numbered, dropped, ("numbered questions with an answer key" if key
+                               else "numbered questions with inline answers")
 
 
 def import_text(text: str, source: str, subject: str = "") -> ImportReport:

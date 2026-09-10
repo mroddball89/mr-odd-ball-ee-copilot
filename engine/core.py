@@ -849,7 +849,7 @@ class Engine:
                 response = self._dispatch(destination, text, t)
             t.agent_s = time.monotonic() - t0
 
-        response = self._with_backup_reminder(response, t)
+        response = self._snapshot_memory_if_due(response, t)
         response = self._with_deadline_reminder(response, t)
         add_message("assistant", response.raw or response.speech)
         return response
@@ -965,7 +965,7 @@ class Engine:
         Returns:
             A `Response`, or None when nothing free applies.
         """
-        from orchestrator import launch_intent, note_intent
+        from orchestrator import file_intent, launch_intent, note_intent
         from orchestrator.instant import Router as InstantRouter
 
         try:
@@ -978,7 +978,15 @@ class Engine:
             # offered "a new note" as an application name. It resolves to nothing today and the
             # turn would fall through — but the day LB installs something called Notes, asking
             # to start a note would start a program instead. Ordering settles it structurally.
+            #
+            # **File comes after note, and that ordering is load-bearing too.** "add to my note
+            # about the resistor chart quiz" carries a filing verb, a category word and a
+            # document name that resolves against the inbox, so the file planner would take it
+            # and MOVE A FILE in answer to a request to write two lines in a notebook. The note
+            # planner demands the word "note"; letting it look first settles the overlap
+            # structurally rather than by making either matcher warier.
             reply = InstantRouter(planners={"note": note_intent.look_up,
+                                            "file": file_intent.look_up,
                                             "launch": launch_intent.look_up}).route(text)
         except Exception:                                              # noqa: BLE001
             LOG.exception("free tier failed; falling back to the router")
@@ -987,6 +995,9 @@ class Engine:
         request = reply.action
         if isinstance(request, note_intent.NoteRequest):
             return self._note_turn(request, t)
+
+        if isinstance(request, file_intent.FileRequest):
+            return self._file_turn(request, t)
 
         if isinstance(request, launch_intent.LaunchRequest):
             from agents.os_agent import propose_launch
@@ -1097,31 +1108,31 @@ class Engine:
         LOG.info("route %r -> firmware (corpus, no api call)", text)
         return hit
 
-    def _with_backup_reminder(self, response: Response, t: Turnlog) -> Response:
-        """The 15-day clock. Appended to the SHOWN half, never the spoken one: a system alarm
-        read aloud in the middle of an answer is startling, and this is a reminder rather than
-        an emergency. It stays on screen until LB deals with it.
+    def _snapshot_memory_if_due(self, response: Response, t: Turnlog) -> Response:
+        """Archive the conversation log into the vault when the 15-day clock comes due.
 
-        Applies to free turns too — a reminder that only fires when he happens to make an API
-        call is a reminder that stops firing on exactly the days he is being careful with quota.
+        **Silent, and no longer a card.** This used to append an ERROR card asking LB to copy
+        `conversation_memory.json` somewhere and then type `--backed-up`. It asked because
+        nothing in the system could watch him do it, and so the card needed an off switch, and
+        the off switch needed explaining on the card itself.
 
-        **The card now names the command that silences it**, which it did not need to when the
-        clock was measured off the rolling 40-turn window and could therefore never fire at all.
-        A reminder that appears on every turn with no stated way out is one LB learns to ignore,
-        and then he ignores the next one too. See `memory_manager.acknowledge_backup`.
+        The vault is inside the system. `snapshot_if_due` writes the file and knows it landed, so
+        there is nothing left to ask him for and no card worth showing. A reminder that fires on
+        every turn with a chore attached is one he learns to ignore, and then he ignores the next
+        one too.
+
+        The response is returned untouched. The turn log still records the archive, so the day it
+        happens is visible in `data/oddball.log` without anything interrupting an answer.
+
+        Never raises: `snapshot_if_due` swallows its own failures and returns None. A failed
+        archive must not cost him the answer he actually asked for.
         """
-        from tools.memory_manager import check_for_backup_reminder
+        from tools.memory_manager import snapshot_if_due
 
-        if not check_for_backup_reminder():
-            return response
-        t.extras.append("backup reminder")
-        return Response(
-            speech=response.speech,
-            cards=list(response.cards) + [Card(
-                CardKind.ERROR, "Back up your memory",
-                "conversation_memory.json has gone more than 15 days without a backup. Copy "
-                "it somewhere else, then run: python tools/memory_manager.py --backed-up")],
-            route=response.route, pending=response.pending, raw=response.raw)
+        target = snapshot_if_due()
+        if target is not None:
+            t.extras.append(f"memory snapshotted to vault ({target.name})")
+        return response
 
     # How far ahead a deadline has to be before it stops being LB's problem today. His number.
     DEADLINE_WARNING_DAYS = 3
@@ -1134,7 +1145,8 @@ class Engine:
         only when he was already thinking about his coursework. A deadline reminder that fires
         when you are debugging firmware at 2am is the one that earns its place.
 
-        Shown, never spoken, for the same reason as `_with_backup_reminder`: an alarm read
+        Shown, never spoken, and unlike the memory snapshot above this one is LB's to act
+        on, so it stays a card: an alarm read
         aloud in the middle of an unrelated answer is startling, and this is a reminder rather
         than an emergency. It costs a JSON read and no API call, which is the property that
         lets it sit on the turn path at all — see `tools/academic_calendar.py`.
@@ -1233,6 +1245,102 @@ class Engine:
         t.extras.append(f"instant miss ({reply.intent}) -> persona")
         from agents.persona_agent import run_persona_agent
         return split(run_persona_agent(text), route=AgentRoute.PERSONA.value)
+
+    # --- filing what he uploaded -------------------------------------------------------
+
+    FILE_ROUTE = "file"
+
+    # (singular, plural) for the spoken line. A table rather than a suffix rule, because "quiz"
+    # pluralises to "quizzes" and "coursework" does not pluralise at all — and because he SAYS
+    # this sentence, where "filed two file(s) as quiz" is the kind of thing that makes a machine
+    # sound like a form.
+    _CATEGORY_NOUN = {
+        "quiz": ("a quiz", "quizzes"),
+        "academic": ("coursework", "coursework"),
+        "datasheet": ("a datasheet", "datasheets"),
+        "schematic": ("a schematic", "schematics"),
+    }
+
+    @staticmethod
+    def _and_list(names) -> str:
+        """"a", "a and b", "a, b and c" — a spoken list, not a printed one.
+
+        A comma before "and" is a typographic argument nobody can hear, and `piper` reads a bare
+        comma-separated list as a stall. Two files is the common case here and it wants "and".
+        """
+        names = list(names)
+        if len(names) <= 1:
+            return names[0] if names else "nothing"
+        return ", ".join(names[:-1]) + f" and {names[-1]}"
+
+    def _file_turn(self, request, t: Turnlog) -> Response:
+        """File the documents `orchestrator/file_intent.py` recognised. Costs zero API calls.
+
+        **Every word spoken here is generated from the RESULT of a move that already happened.**
+        That is the entire point of the route existing, and it is worth stating as a rule rather
+        than leaving as a property of the code, because the bug it replaces was not a crash.
+
+        On 2026-09-08 LB asked for two PDFs to be filed as quizzes. The request missed every
+        matcher, went to the general agent, and came back "Filed resistorcharts.pdf and trig
+        limits 2.pdf as quizzes. They're being indexed now" — a fluent paraphrase of the real
+        tool's return string, which was in that agent's PREVIOUS CONTEXT from a genuine filing
+        two days earlier. Both files were still in the inbox the next morning. Nothing in the log
+        between the request and the reply. He had described the work instead of doing it.
+
+        A reply built from `process_inbox_file`'s return value cannot do that: the sentence does
+        not exist unless the move did. When the move fails, what LB hears is the failure.
+
+        The parse and any question generation still run on the indexer's background thread — a
+        scanned paper is seconds of OCR — so this says what was filed and where the rest of the
+        story will appear, and never guesses at the outcome of a job that has not finished.
+        """
+        from tools.file_manager import inbox_files, process_inbox_file
+
+        t.route = self.FILE_ROUTE
+        t.extras.append(f"free file ({request.category}: {len(request.filenames)})")
+
+        before = {p.name for p in inbox_files()}
+        detail = []
+        for name in request.filenames:
+            try:
+                detail.append(str(process_inbox_file.invoke(
+                    {"filename": name, "category": request.category})))
+            except Exception as exc:                                  # noqa: BLE001
+                # One unfilable document must not cost the others. `process_inbox_file` already
+                # returns its own errors as text; this catches the ones that escape it, and says
+                # which file rather than abandoning the turn.
+                LOG.exception("could not file %s", name)
+                detail.append(f"I could not file {name}: {type(exc).__name__}.")
+
+        # **The spoken line is built from the INBOX, not from what the tool said about itself.**
+        #
+        # Every sentence `process_inbox_file` returns opens with "Filed X to ..." — including,
+        # necessarily, the ones where something later went wrong. Reading success out of that
+        # text would make this route trust exactly the kind of fluent claim it exists to stop
+        # trusting. A file that left `data/inbox/` was moved and a file still sitting in it was
+        # not, and that is a fact about the disk rather than a sentence anybody composed.
+        moved = [n for n in request.filenames if n not in {p.name for p in inbox_files()}
+                 and n in before]
+        stuck = [n for n in request.filenames if n not in moved]
+
+        if not moved:
+            speech = ("I could not file " + self._and_list(stuck) + ". "
+                      + ("They are" if len(stuck) != 1 else "It is") + " still in the inbox.")
+        else:
+            one, many = self._CATEGORY_NOUN.get(request.category,
+                                                (f"a {request.category}", request.category))
+            plural = len(moved) != 1
+            speech = f"Filed {self._and_list(moved)} as {many if plural else one}."
+            if request.category == "quiz":
+                speech += (f" I am reading the questions out of {'them' if plural else 'it'} "
+                           f"now — ask me for the index status in a minute.")
+            if stuck:
+                speech += f" I could not move {self._and_list(stuck)}."
+
+        cards = [Card(kind=CardKind.MARKDOWN, title="Filed", body="\n\n".join(detail))] \
+            if detail else []
+        return Response(speech=speech, cards=cards, route=self.FILE_ROUTE,
+                        raw="\n\n".join(detail) or speech)
 
     # --- the notebook ------------------------------------------------------------------
     #

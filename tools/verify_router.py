@@ -503,7 +503,7 @@ def s8_engine() -> None:
     real_router = router.router_agent
     real_core_router = core.router_agent
     real_dispatch = core.Engine._dispatch
-    real_backup = core.Engine._with_backup_reminder
+    real_snapshot = core.Engine._snapshot_memory_if_due
     real_deadline = core.Engine._with_deadline_reminder
     real_add = mem.add_message
 
@@ -515,7 +515,7 @@ def s8_engine() -> None:
         return Response(speech="(agent)", route=route.value, raw="(agent)")
 
     core.Engine._dispatch = fake_dispatch
-    core.Engine._with_backup_reminder = lambda self, r, t: r
+    core.Engine._snapshot_memory_if_due = lambda self, r, t: r
     core.Engine._with_deadline_reminder = lambda self, r, t: r
     mem.add_message = lambda *a, **k: None
 
@@ -630,7 +630,7 @@ def s8_engine() -> None:
         router.router_agent = real_router
         core.router_agent = real_core_router
         core.Engine._dispatch = real_dispatch
-        core.Engine._with_backup_reminder = real_backup
+        core.Engine._snapshot_memory_if_due = real_snapshot
         core.Engine._with_deadline_reminder = real_deadline
         mem.add_message = real_add
 

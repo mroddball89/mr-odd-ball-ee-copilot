@@ -293,6 +293,78 @@ def main() -> int:
               "...but the raw transcript is still on record, unedited",
               "`said` is the record of record; only the derived Rule was corrected")
 
+    section("7. the clock now ARCHIVES instead of nagging, and the archive cannot be read back "
+            "as a note")
+
+    work = Path(tempfile.mkdtemp(prefix="oddball-mem-vault-"))
+    _point_at(work)
+    from tools import knowledge_vault as kv
+
+    # Rebind rather than trusting the environment. `snapshot_dir` does `from
+    # tools.knowledge_vault import VAULT_DIR` at CALL time, which re-reads the module attribute,
+    # so this reaches it — and a harness that wrote snapshots into LB's real vault would be the
+    # exact leak `harness_env` exists to prevent, arriving through the module that closes it.
+    real_vault, kv.VAULT_DIR = kv.VAULT_DIR, work / "vault"
+
+    try:
+        log = Path(memory_manager.MEMORY_FILE)
+        _write_log(log, turns=4, minutes_ago=2)
+        _age_file(log, days=memory_manager.BACKUP_DAYS_LIMIT + 5)
+
+        check(memory_manager.snapshot_dir().name == ".memory",
+              "snapshots go to a DOT-directory inside the vault",
+              str(memory_manager.snapshot_dir()))
+        check(memory_manager.snapshot_dir().parent == kv.VAULT_DIR,
+              "...resolved through knowledge_vault.VAULT_DIR, not rebuilt from __file__",
+              "one definition of where the vault is, so isolating one isolates both")
+
+        check(memory_manager.check_for_backup_reminder() is True,
+              "an overdue log is due before the turn runs")
+        target = memory_manager.snapshot_if_due()
+        check(target is not None and target.exists(),
+              "...and snapshot_if_due archives it into the vault",
+              str(target))
+        check(target is not None and target.read_bytes() == log.read_bytes(),
+              "...byte for byte", "an archive that differs from the log is not an archive")
+        check(memory_manager.check_for_backup_reminder() is False,
+              "...and the clock is restarted by the copy itself",
+              "nothing to ask LB for: the code that did the work recorded that it happened")
+
+        check(memory_manager.snapshot_if_due() is None,
+              "a log that is not due is not snapshotted again",
+              "otherwise every turn writes another copy for the next fifteen days")
+
+        # The reason for the dot, stated as a check. A .md is the worst case: `notes()` collects
+        # exactly that suffix, so if the dot-rule were ever dropped this is what would leak.
+        snap = memory_manager.snapshot_dir()
+        decoy = snap / "decoy_transcript.md"
+        decoy.write_text("USER: op amp pinout? ASSISTANT: stale transcript answer",
+                         encoding="utf-8")
+        seen = [q.name for q in kv.notes()]
+        check(decoy.name not in seen,
+              "a MARKDOWN file inside the snapshot directory is invisible to vault search",
+              "notes() skips dot-directories; that rule is the whole reason the folder is dotted")
+        leaked = str(kv.read_from_vault.invoke({"search_term": "op amp pinout"}))
+        check("stale transcript answer" not in leaked,
+              "...so read_from_vault cannot feed a transcript to an agent as a note",
+              "D22/D23 - two versions of one fact reaching one model - from inside the backup")
+
+        # A snapshot that cannot be written must leave the log DUE, or one bad day silently ends
+        # the archiving forever.
+        blocker = work / "blocker"
+        blocker.write_text("not a directory", encoding="utf-8")
+        kv.VAULT_DIR = blocker / "vault"
+        _age_file(log, days=memory_manager.BACKUP_DAYS_LIMIT + 5)
+        check(memory_manager.snapshot_to_vault() is None,
+              "a snapshot onto an impossible path returns None instead of raising",
+              "this runs inside a live turn; a failed archive must not cost LB his answer")
+        check(memory_manager.check_for_backup_reminder() is True,
+              "...and leaves the log due, so the next turn tries again",
+              "acknowledging a copy that never landed is how a backup system lies")
+    finally:
+        kv.VAULT_DIR = real_vault
+        shutil.rmtree(work, ignore_errors=True)
+
     return 0 if _tally.failed == 0 else 1
 
 

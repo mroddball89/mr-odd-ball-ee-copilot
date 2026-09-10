@@ -1685,3 +1685,78 @@ mechanism. Read the function again before quoting a number from it.
 **Say so plainly when the framing was wrong, before building.** The correction changes what gets
 built, so it belongs in front of the user at the moment the plan is presented - not in a commit
 message afterwards, where the decision has already been made on a bad number.
+
+## L54
+
+**A process that is running is not the same as a process that was started correctly. Restart the
+rig the way the rig is started — `config/start_oddball.vbs` — not by reconstructing its argv.**
+
+2026-09-08. Asked to restart so the vault-snapshot change would take effect, I read the live
+command line off `Win32_Process`, reproduced it byte for byte with `Start-Process pythonw …`, and
+watched port 8765 come up. It looked like a clean restart. `data/oddball.log` never grew by a
+single line, and I only caught it because I went looking for the startup banner to prove the new
+code had loaded.
+
+`--log ""` is not an oversight to be preserved verbatim; it is a switch that **disables**
+`run_voice`'s FileHandler on purpose, because `config/start_oddball.bat` is the single writer to
+`data/oddball.log` and does it with a shell redirect: `cmd /c "… >> log 2>&1"`. `pythonw.exe` has
+no console, so with no redirection its stdout and stderr have nowhere to go. The `.bat`'s own
+comments describe this exact failure — "the program said exactly what was wrong and the plumbing
+threw it away" — and I walked into it from the other direction, having read the argv and not the
+launcher.
+
+**Copying a command line copies the arguments and none of the plumbing.** Redirection, working
+directory, and the second process the launcher also starts are not in `CommandLine`. If a repo
+ships a launcher, the launcher is the interface; argv is an implementation detail of it.
+
+The tell was there before the diagnosis: the log's last line was timestamped *before* the restart
+while the port was live. A running process writing nothing where it used to write every few
+minutes is not "quiet", it is misconfigured — check the observable it should be producing, not
+just the one that says it is alive.
+
+## L55
+
+**A model will describe work instead of doing it, and the description is indistinguishable from
+success. Verify the world, not the sentence.**
+
+2026-09-08, LB's rig. He asked for two PDFs to be filed as quizzes. What came back:
+
+    Filed resistorcharts.pdf and trig limits 2.pdf as quizzes. They're being indexed now and
+    not searchable yet.
+
+Both files were still in `data/inbox/` the next afternoon. `data/oddball.log` has the request at
+20:37:05, `no intent matched`, a route to GENERAL — and then **nothing at all** until the reply.
+No move, no parse, no indexer job. The tool was bound to that route and was simply never called.
+
+The sentence was a paraphrase of the real tool's return string, which was in that agent's
+PREVIOUS CONTEXT from a genuine filing two days earlier. Asked to act, it reproduced the shape of
+the last time the action had happened.
+
+**Nothing could have gone red.** A false confirmation is a well-formed, fluent, plausible answer.
+There is no exception, no stack trace, no malformed output — the only evidence against it was a
+directory listing, and LB had no reason to check one because he had been told the work was done.
+He found out eighteen hours later by asking to be quizzed and getting the same three questions.
+
+Three things follow, and the third is the one I got wrong first:
+
+**Where it matters that something HAPPENED, do not leave the decision to a model.** A prompt makes
+a tool call likelier and never makes it certain. `orchestrator/file_intent.py` is a pure function
+of a string that decides what was asked for; the engine does the filing. Free, deterministic, and
+it cannot forget.
+
+**Build the reply from the result, not around it.** `Engine._file_turn` speaks only after the move,
+and reads success from the INBOX rather than from what the tool said about itself — every
+`process_inbox_file` return opens with "Filed X to ..." including the ones that later fail. A file
+that left the directory was moved; that is a fact about the disk rather than a sentence somebody
+composed.
+
+**And test the disk.** My first harness for this asserted on the reply text, which is exactly the
+artefact that lied. `verify_file_intent.py` section 2 now asserts the file is gone from the inbox
+and present in the destination, and `--probe` unbinds the planner to prove those checks bite. When
+the failure mode is a convincing sentence, a check that reads sentences is not a check.
+
+Related: `tools/memory_manager.py` documents the other end of this — the conversation log is
+injected into every agent prompt, so a model reaching for something to say has a stack of
+plausible past answers to hand. L54 is the same shape one level down: a process that is running is
+not a process that was started correctly, and the observable it should be producing is the thing
+to check.

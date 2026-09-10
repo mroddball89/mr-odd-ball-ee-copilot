@@ -384,6 +384,63 @@ def _sections(workspace: Path, probe: bool, probe_pacing: bool = False) -> None:
           "a question with NO answer is dropped, not stored blank", str(dropped[1]))
 
     # =====================================================================================
+    section("3b. layout 5 — the answer on the next line, with no marker saying so")
+    # =====================================================================================
+    #
+    # LB's own review packets are shaped like this and the importer read NONE of them. Measured
+    # 2026-09-09 on `Trig limits question and answers.pdf`: 35 questions found, 35 dropped for
+    # having no marked answer, bank left empty, and the failure reported only into a background
+    # job nobody was reading.
+    #
+    # The risk this layout carries is the opposite of the one above it. Every other parser waits
+    # for the author to SAY where the answer is; this one infers it from position, so it can
+    # invent answers out of any numbered list. A bank of invented answers marks LB wrong for
+    # being right, which is strictly worse than the empty bank it is here to fix — hence the
+    # refusals below matter more than the acceptances.
+    bare_pdf = write_text_pdf(workspace / "eegr105_review_sheet.pdf", [[
+        "EEGR 105 Review Sheet",
+        "1. What is Ohm's law?",
+        "V = IR",
+        "2. Which resistor band is the multiplier on a four-band resistor?",
+        "The third band",
+        "3. Define tolerance for a resistor.",
+        "How far the true value may differ from the marked value",
+    ]])
+    report = import_pdf(bare_pdf, write=False)
+    check(len(report) == 3, "a bare-answer review sheet parses at last", report.sentence())
+    check(report.items[0].answer == "V = IR", "...the line under the question is the answer",
+          report.items[0].answer)
+    check("next line" in report.layout, "...and the layout is named as such", report.layout)
+    # The answer to "Define tolerance" opens with "How", and an earlier version of this parser
+    # threw it away for looking like a question. Answers begin with interrogatives constantly;
+    # only a trailing "?" means a second question.
+    check(report.items[2].answer.startswith("How far"),
+          "an ANSWER that opens with an interrogative is kept — only a trailing '?' rejects one",
+          report.items[2].answer)
+
+    check(len(import_pdf(write_text_pdf(workspace / "slides_again.pdf", SLIDES_PAPER),
+                         write=False)) == 0,
+          "lecture slides STILL yield nothing once layout 5 exists — the guard that matters")
+    unanswered = write_text_pdf(workspace / "unanswered.pdf", [[
+        "1. What is the first band?", "2. What is the second band?", "3. What is a multiplier?"]])
+    check(len(import_pdf(unanswered, write=False)) == 0,
+          "three questions in a row answer each other in NO layout — each would be the next "
+          "one's answer")
+
+    # A deck named off a filename is named badly, and every whole-phrase pass missed it. This is
+    # the question LB actually asked, verbatim, the day after the deck should have existed.
+    saved = quiz_bank.add_items([
+        QuizItem(question="Which band is the multiplier?", answer="The third",
+                 subject="Resistorcharts")])
+    check(bool(saved), "a deck named from a filename can be written", str(saved))
+    check(quiz_bank.resolve_subject("resistor band colors") == "Resistorcharts",
+          "'resistor band colors' REACHES the deck called Resistorcharts",
+          quiz_bank.resolve_subject("resistor band colors"))
+    check(quiz_bank.resolve_subject("resistors") == "Resistorcharts",
+          "...and so does the plural he actually says")
+    check(quiz_bank.resolve_subject("something else entirely") == "",
+          "...while a subject with no deck still returns nothing rather than guessing")
+
     section("4. the session — no repeats, a score, skipping, and the deck running out")
     # =====================================================================================
     from engine.core import Engine, QuizSession, quiz_subject_of      # noqa: PLC0415

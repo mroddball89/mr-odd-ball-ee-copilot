@@ -1,8 +1,20 @@
 import os
 import json
 import logging
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Run directly as `python tools/memory_manager.py`, this file is not inside a package and the
+# repo root is not on the path, so every `from tools.… import` below fails with
+# ModuleNotFoundError. Same guard, same reason, as the head of `tools/knowledge_vault.py`.
+#
+# It has been needed since this module first imported `tools.harness_env`, where the failure was
+# invisible: that import sits in a `try` whose except clause degrades to the real log, which is
+# what a CLI diagnostic wanted anyway. `snapshot_dir` is the import that made it visible.
+if __package__ in (None, ""):                                          # pragma: no cover
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # The conversation log — the last 40 turns, injected into EVERY agent prompt as PREVIOUS
 # CONTEXT by `format_memory_for_llm`.
@@ -112,8 +124,12 @@ MEMORY_FILE = _default_memory_file()
 if not os.environ.get("ODDBALL_MEMORY_FILE"):
     _adopt_legacy_file(MEMORY_FILE)
 
-# How long the log may go without being copied somewhere else before he says so. Fifteen days is
-# the Pi-era number and it is kept: what it measures has changed, not how often LB wants asking.
+# How long the log may go without being archived. Fifteen days is the Pi-era number and it is
+# kept: what it measures has changed twice now, but not how often LB wants it dealt with.
+#
+# **It is no longer how often he is ASKED.** Since 2026-09-08 the engine archives the log into
+# the vault itself when this comes due (`snapshot_if_due`), so this is the interval between
+# automatic snapshots rather than the interval between reminders. See `snapshot_to_vault`.
 BACKUP_DAYS_LIMIT = 15
 
 def load_history():
@@ -232,6 +248,88 @@ def acknowledge_backup() -> bool:
         logging.getLogger("oddball.memory").exception("could not record the backup")
         return False
 
+# Where a snapshot goes inside the vault. **Dotted, and that dot is the whole design.**
+#
+# `knowledge_vault.notes()` walks the vault with `rglob("*.md")` and skips only dot-directories —
+# the same general rule that made `trash_note` safe to build. A snapshot under `vault/notes/`, or
+# even a tidy-looking `vault/memory/`, would be found by `read_from_vault` and fed into agent
+# prompts as a note: a model asked "what did I say about the op-amp pinout" could then quote a
+# transcript of LB ASKING that question back at him instead of the note that answers it. That is
+# D22/D23 — two versions of one fact reaching one model — arriving from inside the backup system.
+#
+# Writing JSON rather than Markdown makes it doubly safe, since the walk only collects `*.md`.
+# The dot is what the guarantee actually rests on, because the archive of a Markdown vault will
+# not always be JSON.
+SNAPSHOT_DIRNAME = ".memory"
+
+
+def snapshot_dir() -> Path:
+    """Where snapshots are written. Honours `ODDBALL_VAULT_DIR`.
+
+    Resolved through `knowledge_vault.VAULT_DIR` rather than rebuilt from `__file__`, so there is
+    exactly ONE definition of where the vault is. A second copy of that path expression is how a
+    harness ends up isolated for the vault and not for its snapshots, which is L22 arriving one
+    module further along.
+
+    Imported lazily: `knowledge_vault` pulls in langchain and `engine.server`, and paying that at
+    `memory_manager` import time would put it in front of all seven agents.
+    """
+    from tools.knowledge_vault import VAULT_DIR
+    return VAULT_DIR / SNAPSHOT_DIRNAME
+
+
+def snapshot_to_vault() -> Path | None:
+    """Copy the conversation log into the vault and restart the clock. **Never raises.**
+
+    Returns the path written, or None when there was nothing to copy or the copy failed. This
+    runs inside a live turn, so a failed archive must cost nothing but a log line.
+
+    ## Why this replaced a reminder
+
+    The old card asked LB to copy the file somewhere and then type `--backed-up`, and it had to
+    ask because nothing in the system could see him do it. The vault is not somewhere else: it is
+    a directory this process can write and then confirm it wrote. The acknowledgement therefore
+    has no job left — the code doing the work records that it happened.
+
+    The clock is restarted only once the bytes are on disk, so a failed snapshot leaves the log
+    due and the next turn tries again.
+    """
+    log = Path(MEMORY_FILE)
+    try:
+        if not log.exists() or log.stat().st_size == 0:
+            return None
+    except OSError:
+        return None
+
+    try:
+        target_dir = snapshot_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = target_dir / f"{log.stem}.{stamp}.json"
+        # copy2 rather than a read/write pair: it preserves mtime, so the snapshots sort by when
+        # the conversation happened and not by when the archive ran.
+        shutil.copy2(log, target)
+    except Exception:                                                     # noqa: BLE001
+        logging.getLogger("oddball.memory").exception(
+            "could not snapshot the conversation log into the vault")
+        return None
+
+    acknowledge_backup()
+    logging.getLogger("oddball.memory").info("conversation log snapshotted to %s", target)
+    return target
+
+
+def snapshot_if_due() -> Path | None:
+    """Snapshot only when the clock says so. The one call the engine makes each turn.
+
+    Kept separate from `snapshot_to_vault` so `--to-vault` can force one on demand without having
+    to lie about the clock first.
+    """
+    if not check_for_backup_reminder():
+        return None
+    return snapshot_to_vault()
+
+
 def format_memory_for_llm() -> str:
     """Formats the history so the LLM can read it as context.
 
@@ -277,7 +375,17 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="the conversation log and its backup clock")
     ap.add_argument("--backed-up", action="store_true",
                     help="record that you have copied the log somewhere; restarts the clock")
+    ap.add_argument("--to-vault", action="store_true",
+                    help="snapshot the log into the vault now and restart the clock")
     args = ap.parse_args(argv)
+
+    if args.to_vault:
+        target = snapshot_to_vault()
+        if target is None:
+            print("  nothing to snapshot")
+            return 1
+        print(f"  snapshotted to {target}")
+        return 0
 
     if args.backed_up:
         if not acknowledge_backup():
@@ -299,10 +407,12 @@ def main(argv: list[str] | None = None) -> int:
     days = (datetime.now() - started).days
     source = "last backup" if _state_path().exists() else "file created"
     print(f"  {source}: {started.isoformat(timespec='seconds')} ({days} days ago)")
+    print(f"  snapshots: {snapshot_dir()}")
     if check_for_backup_reminder():
-        print(f"  BACKUP DUE — over {BACKUP_DAYS_LIMIT} days. Copy it, then --backed-up.")
+        print(f"  SNAPSHOT DUE — over {BACKUP_DAYS_LIMIT} days. The next turn takes one "
+              f"automatically, or run --to-vault now.")
     else:
-        print(f"  backup due in {BACKUP_DAYS_LIMIT - days} days")
+        print(f"  next snapshot in {BACKUP_DAYS_LIMIT - days} days")
     return 0
 
 

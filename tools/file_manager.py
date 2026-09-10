@@ -529,44 +529,98 @@ class _Indexer:
             return False, f"The syllabus conversion failed: {type(exc).__name__}: {exc}"
 
     def _import_quizzes(self, sources: set[str]) -> tuple[bool, str]:
-        """Parse newly filed practice papers into the question bank. **No API calls at all.**
+        """Parse newly filed practice papers into the question bank.
 
         On the background thread for one reason only, and it is not the network: a scanned
         paper goes through `tools/pdf_ocr.py`, which is 2-6 seconds a page with the OCR model
         to load first. That is the same freeze the vector rebuild was moved off the turn path
         to avoid, and this is reached from inside an agent turn in exactly the same way.
 
-        Unlike `_convert_syllabi` next door, this costs nothing per document — the parser is
-        regex over extracted text — so the only budget being spent is wall-clock.
+        ## The parser runs first, always, and usually that is the end of it
+
+        `tools/quiz_import.py` is regex over extracted text: free, offline, deterministic, and
+        auditable against the paper it came from. A practice exam has its questions written
+        down, so reading them is the right and the cheap thing, and nothing below changes that.
+
+        ## And when the parser finds NOTHING, one call writes questions instead
+
+        Added 2026-09-09. Reference material — LB's resistor colour-code chart is the case that
+        forced it — is excellent revision material containing not one question, so there is
+        nothing for a parser to extract and the old behaviour was to file the document and
+        report a failure. Twice, silently, into a background job nobody was reading.
+
+        `tools/quiz_generate.py` spends ONE request per document, at filing time, and writes
+        what it produces to disk marked `origin="model"`. Asking and marking stay local and free
+        forever after — `tools/quiz_grade.py` never needed a model and still does not — so the
+        cost is one request per upload rather than one per revision session.
+
+        **Only on an empty parse.** A paper the parser read is a paper whose questions are the
+        professor's, and spending a request to second-guess it would be strictly worse: it costs
+        quota to replace audited questions with generated ones.
         """
         try:
             from tools.quiz_import import import_pdf                  # noqa: PLC0415
 
             t0 = time.monotonic()
-            done, empty = [], []
+            # Three outcomes, three lists, and they do not overlap: questions READ off the page,
+            # questions WRITTEN because the page had none, and documents that yielded neither.
+            # LB is owed a different sentence for each.
+            parsed, written, failed = [], [], []
             for name in sorted(sources):
                 report = import_pdf(QUIZ_PDF_DIR / Path(name).name)
                 LOG.info("  quiz: %s", report.sentence())
-                (done if len(report) else empty).append(report)
+                if len(report):
+                    parsed.append(report)
+                    continue
+                # Nothing was written down to read. Write some.
+                made = self._generate_quizzes(QUIZ_PDF_DIR / Path(name).name)
+                (written if len(made) else failed).append(made)
 
             took = f" in {time.monotonic() - t0:.0f}s"
-            total = sum(len(r) for r in done)
-            if not done:
+            read_count = sum(len(r) for r in parsed)
+            if not parsed and not written:
                 # A paper that yields nothing is reported as a FAILURE, not a quiet skip. The
                 # likely cause is a layout this parser does not read, and "nothing happened" is
                 # indistinguishable from "it worked" unless somebody says which — the same
                 # reasoning as the image-only syllabus case above.
                 return False, ("No questions could be read out of "
-                               + ", ".join(r.source for r in empty) + ". "
-                               + " ".join(r.sentence() for r in empty[:2]))
-            head = f"Read {total} question(s) into the bank{took}."
-            if empty:
-                head += (" Nothing came out of "
-                         + ", ".join(r.source for r in empty) + ".")
-            return True, head
+                               + ", ".join(r.source for r in failed) + ". "
+                               + " ".join(r.sentence() for r in failed[:2]))
+
+            parts = []
+            if parsed:
+                parts.append(f"Read {read_count} question(s) into the bank{took}.")
+            # Named separately from the parsed count, deliberately. "12 questions" and "12
+            # questions I wrote myself" are different claims, and the second one is the one that
+            # tells LB to go and check them.
+            parts.extend(r.sentence() for r in written[:2])
+            if failed:
+                parts.append("Nothing came out of "
+                             + ", ".join(r.source for r in failed) + ".")
+            return True, " ".join(parts)
         except Exception as exc:                                      # noqa: BLE001
             LOG.exception("the quiz import failed")
             return False, f"The quiz import failed: {type(exc).__name__}: {exc}"
+
+    def _generate_quizzes(self, path: Path):
+        """One document the parser could not read, handed to the generator. Never raises.
+
+        Returns a `GenerateReport` whatever happens, so the caller can sort it into "written" or
+        "failed" on its length alone and never has to catch anything itself.
+        """
+        from tools.quiz_generate import GenerateReport, generate_from_pdf   # noqa: PLC0415
+
+        if path.suffix.lower() != ".pdf":
+            return GenerateReport(source=path.name,
+                                  note="I only write questions from PDFs.")
+        try:
+            report = generate_from_pdf(path)
+        except Exception as exc:                                      # noqa: BLE001
+            LOG.exception("could not generate questions from %s", path.name)
+            return GenerateReport(source=path.name,
+                                  note=f"Writing questions failed: {type(exc).__name__}.")
+        LOG.info("  quiz: %s", report.sentence())
+        return report
 
     def status(self) -> _IndexState:
         with self._lock:
