@@ -130,6 +130,13 @@ data/face_scale
 # short fragments the analysis rests on. See memory: never-publish-personal-data.
 media/data/*.raw.csv
 
+# The router gym's corpus, assembled by tools/router_gym_corpus.py. It is built FROM
+# media/data/*.raw.csv above and inherits the same problem: 82 of its rows are verbatim speech
+# in LB's house, captured by false wakes. Ignored for the same reason and under the same memory
+# note (never-publish-personal-data), and this line is why the gym writes its results twice —
+# a redacted CSV that is committed and a *.raw.csv that is not.
+data/router_gym_corpus.jsonl
+
 # Wake-word audio recorded after 2026-09-06. LB's decision: the 35 clips from that session
 # stay on this machine as training material and are NOT published.
 #

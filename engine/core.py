@@ -809,8 +809,15 @@ class Engine:
                 # the date, a conversion and a launch all keep working — the point of the latch.
                 from engine import quota
                 from engine.models import ROUTER_MODEL
+                from router import router_provider
 
-                if quota.exhausted(ROUTER_MODEL):
+                # **A local router has no quota, so the latch must not silence it.** Added
+                # 2026-09-10 with `orchestrator/local_router.py`. Without this line, exhausting
+                # `flash-lite`'s twenty a day would skip a router that costs nothing and never
+                # sends a request — taking the rig off the air for the rest of the day over a
+                # budget it is no longer spending. Escaping that budget is the entire reason
+                # the local router exists, so this is not an edge case, it is the feature.
+                if quota.exhausted(ROUTER_MODEL) and router_provider() == "google":
                     t.extras.append("router quota latched — not calling")
                     LOG.info("skipping the router: %s is out of quota until %s",
                              ROUTER_MODEL, quota.status().get(ROUTER_MODEL, "?"))
@@ -833,7 +840,23 @@ class Engine:
                                 ROUTER_DEADLINE_S, text)
                 else:
                     t.route = decision.destination.value
-                    LOG.info("route %r -> %s (%s)", text, t.route, decision.reasoning)
+                    # **The line has to say who decided, and this is not cosmetic.**
+                    # `tools/router_gym_corpus.py` harvests this exact format as its ground
+                    # truth — the routes Gemini chose, to score a local candidate against. An
+                    # unmarked local decision would be harvested as Gemini's, and the gym would
+                    # then be scoring qwen2.5:1.5b against qwen2.5:1.5b's own past answers and
+                    # reporting the 100% that follows. A green that means nothing is worse than
+                    # a red, and this is the one-word difference between them.
+                    #
+                    # "no api call" is the marker every free branch in this file already ends
+                    # with (`:1076`, `:1108`), so the gym filters all three with one rule and
+                    # `tools/verify_local_router.py` asserts the contract on all four lines.
+                    from router import router_provider
+                    if router_provider() == "local":
+                        LOG.info("route %r -> %s (%s — local, no api call)",
+                                 text, t.route, decision.reasoning)
+                    else:
+                        LOG.info("route %r -> %s (%s)", text, t.route, decision.reasoning)
                     destination = decision.destination
 
             t0 = time.monotonic()
