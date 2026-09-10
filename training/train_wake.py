@@ -45,6 +45,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import os
 import runpy
 import shutil
 import subprocess
@@ -258,8 +259,15 @@ def run_all() -> int:
                 print(f"    {cleared} unusable feature file(s) cleared before augmenting")
 
         phase_started = datetime.now()
+        # **PYTHONIOENCODING is load-bearing, not tidiness.** torch's ONNX exporter prints a
+        # check-mark emoji when it finishes optimising the graph. A detached process on Windows
+        # writes to a cp1252 stream, so that one character raises UnicodeEncodeError and kills
+        # the export — AFTER all 50,000 training steps have run. Measured: the run of
+        # 2026-09-09 trained to completion (accuracy 0.872, recall 0.743, 0.354 false accepts
+        # per hour) and then lost the model to a tick.
+        env = dict(os.environ, PYTHONIOENCODING="utf-8")
         result = subprocess.run([sys.executable, str(Path(__file__).resolve()), f"--{flag}"],
-                                cwd=str(REPO))
+                                cwd=str(REPO), env=env)
         took = datetime.now() - phase_started
 
         # **Exit code 0 is not proof the phase did its job.** See check_features.
@@ -324,6 +332,15 @@ def main(argv: list[str] | None = None) -> int:
                     help="run all three phases back to back, stopping at the first failure")
     args = ap.parse_args(argv)
 
+    # Same reason as the subprocess env in run_all: a lone `--train_model` launched detached
+    # would lose the export to an emoji. Reconfiguring is a no-op when the stream is already
+    # utf-8, and is guarded because a redirected stream may not support it.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
     if args.freeze_background:
         return freeze_background()
 
@@ -340,7 +357,8 @@ def main(argv: list[str] | None = None) -> int:
                  "a live captures/ can hit a half-written WAV hours into the run.")
 
     from training.oww_compat import (patch, patch_torch_load,          # noqa: PLC0415
-                                     patch_torchaudio_load, patch_trim_mmap)
+                                     patch_torchaudio_load, patch_trim_mmap,
+                                     patch_dataloader)
 
     patch()
     # Needed by --generate_clips: the trainer imports piper-sample-generator, which loads a
@@ -356,6 +374,10 @@ def main(argv: list[str] | None = None) -> int:
     # holds open, which POSIX allows and Windows does not. It killed augmentation AFTER
     # all 80,300 positive clips had been featurised.
     patch_trim_mmap()
+    # Needed by --train_model: its DataLoaders spawn workers, and on Windows a spawned
+    # worker re-imports openwakeword.train in a fresh interpreter that has none of these
+    # patches, so it dies on the acoustics import.
+    patch_dataloader()
 
     # Rebuilt rather than forwarded wholesale: the trainer parses argv itself, and it must not
     # see `--freeze-background`, which is ours.

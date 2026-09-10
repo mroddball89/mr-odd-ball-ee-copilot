@@ -1,0 +1,38 @@
+{
+  "what": "The 2026-08-11 wake model and the 2026-09-09 retrain, scored over the same 77 fixtures, so the band is a property of the pair rather than of either file.",
+  "why": "config/oddball.toml records a threshold hand-tuned 0.30 -> 0.50 -> 0.76 -> 0.53 -> 0.76 and reverted twice. None of those moves could work: the old model's loudest NEGATIVE scored 0.7571, above 26 of LB's 47 real calls. This is the measurement that decides whether the retrain removed that overlap.",
+  "how": "python media/scripts/compare_wake_models.py — peak raw score per clip per model. RAW peak, not the live detector's reading: WakeDetector resets on firing, so its own number is capped at the firing frame and understates every positive.",
+  "conditions": {
+    "box": "Windows 11 AMD64, CPU only",
+    "old_model": "models/hey_mr_odd_ball.2026-08-11.onnx — 197,121 params, trained on synthesised speech, no hard negatives from LB's room",
+    "new_model": "models/hey_mr_odd_ball.onnx — 50,403 params, trained 2026-09-09 from training/hey_mr_odd_ball.yaml",
+    "fixtures": "77 clips; 35 of them gitignored and local to LB's machine, so a clone cannot reproduce these numbers",
+    "held_out": "training/splits.json, frozen 2026-09-08 BEFORE any training data existed"
+  },
+  "headline": "The band separated. The loudest negative fell from 0.7571 to 0.0342 — 22x quieter — and hey-mister-odd-03.wav, a deliberate non-wake-word that sat 0.0029 under the old trigger, went 0.7571 to 0.0012, a 630x drop. The threshold is no longer a compromise between two overlapping distributions; it is a margin over the noise floor.",
+  "results": {
+    "all_77": {
+      "old_loudest_negative": 0.7571,
+      "new_loudest_negative": 0.0342,
+      "old_positives_above_it": "21/47",
+      "new_positives_above_it": "27/47"
+    },
+    "held_out_test": {
+      "old_at_0.76_its_only_usable_threshold": "5/15 positives, 0 false",
+      "new_at_0.20": "9/15 positives, 0 false"
+    },
+    "the_clips_LB_complained_about": {
+      "midsentence-05.wav": "0.6276 -> 0.9220",
+      "normal-07.wav": "0.5456 -> 0.9442",
+      "normal-09.wav": "0.5927 -> 0.7480",
+      "normal-10.wav": "0.1323 -> 0.4870"
+    }
+  },
+  "caveats": [
+    "**Recall per threshold went DOWN, not up.** At 0.10 the old model fires on 28/47 and the new on 25/47. The new model wins only because the old one cannot be RUN at 0.10 — it would take 4 false wakes from the fixtures alone. Comparing them at a shared threshold flatters the old model and is the wrong comparison.",
+    "**22 of 47 positives still score near zero** — most off-axis, most across-the-room, one mid-sentence. They are not improved, they are unreachable: the model does not hear the phrase in them at all. Far field is still broken.",
+    "tools/verify_wake.py is 65/92 green, up from 62/92. All 27 reds are those unreachable clips plus the four band checks derived from them. No negative fires at 0.20.",
+    "openWakeWord's own validation: accuracy 0.862, recall 0.724, 0.44 false accepts per hour against the 0.2 target in the config. The model is imperfect on its own terms."
+  ],
+  "next": "Far field. The lever is the two-stage whisper confirmation costed 2026-09-07 — whisper transcribes quiet-marginal-01 perfectly where the OLD model scored it 0.0277 — not another threshold move. LB has deferred it until far field becomes a bottleneck."
+}

@@ -67,7 +67,13 @@ acoustics==0.2.6
 pronouncing==0.3.0
 
 # Export. ONNX only — see the note above about tensorflow.
+#
+# `onnxscript` is NOT optional despite reading like a nicety: torch 2.13's `torch.onnx.export`
+# imports it unconditionally, so without it training runs to completion and then dies on the
+# last line. Measured 2026-09-09 — 50,000 steps, then ModuleNotFoundError, and the model was
+# only ever in memory.
 onnx==1.22.0
+onnxscript==0.7.2
 
 # piper-sample-generator v2.0.0, for the synthetic positives. **v2.0.0 and not the tip**:
 # v3.2.0 refactored into a package and removed the top-level `generate_samples.py` that

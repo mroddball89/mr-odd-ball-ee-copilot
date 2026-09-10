@@ -194,7 +194,71 @@ model = "models/hey_mr_odd_ball.onnx"
 # material the 2026-08-11 model never had.
 #
 # Revert with one number if quiet calls turn out to matter more than the false wakes.
-threshold = 0.76
+# ============================================================================================
+# 0.76 -> 0.20 on 2026-09-09, AND THE MODEL UNDERNEATH IT CHANGED. Everything above this block
+# argues about a threshold for the 2026-08-11 model and is superseded — kept because the whole
+# sequence is a record of tuning a number that could not work, and that is the lesson.
+# ============================================================================================
+#
+# The old model was BIMODAL and no threshold separated it. Measured over 77 fixtures
+# (media/data/2026-09-07-wake-fixtures.csv):
+#
+#     loudest NEGATIVE                0.7571   hey-mister-odd-03.wav  "Hey, Mr. Ollie."
+#     positives clearing it           21 / 47
+#
+# A deliberate non-wake-word sat 0.0029 under the trigger. That is why this number went
+# 0.30 -> 0.50 -> 0.76 -> 0.53 -> 0.76 and reverted twice: every move traded LB's quiet calls
+# against his television, because the two overlapped.
+#
+# ## The retrained model, and the number that matters
+#
+# `models/hey_mr_odd_ball.onnx` retrained 2026-09-09 from training/hey_mr_odd_ball.yaml on
+# 40,000 synthetic positives, ~177 hours of ACAV100M negatives, 270 room impulse responses, and
+# — the half the 2026-08-11 model never had — adversarial variants of the phrases LB's own room
+# produces, plus 20 minutes of that room as background.
+#
+# media/data/2026-09-09-wake-retrain-compare.csv, same 77 clips, both models:
+#
+#                            old       new
+#     loudest negative     0.7571    0.0342      22x quieter
+#     positives above it    21/47     27/47
+#
+# **The band separated.** hey-mister-odd-03 went 0.7571 -> 0.0012, a 630x drop. Every negative
+# in the set now sits below 0.035, so the threshold is no longer a compromise between two
+# overlapping distributions — it is simply a margin over the noise.
+#
+# ## Why 0.20 and not lower or higher
+#
+# Swept on the 23 HELD-OUT clips, frozen in training/splits.json before any training data was
+# generated — these are clips the model has never seen:
+#
+#     threshold   positives firing   FALSE wakes
+#        0.10          9 / 15             0
+#        0.20          9 / 15             0        <- now
+#        0.30          9 / 15             0
+#        0.50          8 / 15             0
+#        0.76          7 / 15             0        (the old model managed 5/15 here,
+#                                                  and 0.76 was the LOWEST it could use)
+#
+# 0.20 is ~6x the loudest negative (0.0342) and costs nothing against 0.10: the same 9 of 15
+# fire. Taking the margin rather than the last fraction of recall is the right way round here,
+# because the complaint that started this was false wakes — *"i have not used him at all today
+# but have heard him wake up multiple times."*
+#
+# WHAT THIS DOES NOT FIX, stated plainly rather than discovered later. **22 of 47 positives
+# still score near zero** — most off-axis, most across-the-room, and one mid-sentence clip. They
+# are not improved, they are unreachable: the model does not hear the phrase in them at all. Far
+# field is still broken, and the next lever for it is the two-stage whisper confirmation costed
+# on 2026-09-07, not this number. openWakeWord's own validation agrees the model is imperfect:
+# accuracy 0.862, recall 0.724, 0.44 false accepts per hour against a 0.2 target.
+#
+# What it DOES fix is the thing that made the old model unusable: the clips LB actually
+# complained about. normal-07 0.5456 -> 0.9442, midsentence-05 0.6276 -> 0.9220, normal-09
+# 0.5927 -> 0.7480, normal-10 0.1323 -> 0.4870.
+#
+# Roll back with two lines: put this to 0.76 and point `model` at
+# `models/hey_mr_odd_ball.2026-08-11.onnx`, which is kept for exactly that.
+threshold = 0.20
 
 # Score below which a wake is answered with SILENCE instead of the spoken greeting. 2026-09-06.
 #
@@ -222,7 +286,31 @@ threshold = 0.76
 # It only declines to SPEAK before there is a reason to.
 #
 # Set to 0 to greet unconditionally, which is the behaviour up to 2026-09-06.
-greet_threshold = 0.90
+#
+# ============================================================================================
+# 0.90 -> 0.0 on 2026-09-09, because the retrain took away both its calibration AND its job.
+# ============================================================================================
+#
+# **Its calibration is gone.** 0.90 was chosen against the 2026-08-11 model, whose real calls
+# fired between 0.769 and 0.964 — so 0.90 sat just under LB's ordinary range. The retrained
+# model's firing positives spread from 0.487 to 0.966, so the same number now sits in the
+# MIDDLE of his real calls and would swallow the greeting on most of them. Left at 0.90 this
+# becomes a regression nobody asked for, on a turn where he woke the machine and said nothing
+# and therefore most needs prompting.
+#
+# **And its job is gone.** It existed because a false wake was answered out loud: the room made
+# a noise, he woke, nobody spoke, and he asked the empty room what it wanted — 27 times on
+# 2026-08-31. That was a consequence of a model whose negatives reached 0.7571. The retrained
+# model's loudest negative over all 77 fixtures is 0.0342, which is six times BELOW the 0.20
+# trigger. A wake that fires at all is now almost certainly LB.
+#
+# So the discrimination moved to where it belongs — the model — and this goes back to greeting
+# unconditionally, which is what it should do when a wake can be trusted.
+#
+# If live false wakes return, this is the cheap mitigation to bring back BEFORE touching
+# `threshold`: it silences the room without costing a single real call its trigger. Set it to
+# roughly 1.5x whatever the false wakes are measured to peak at.
+greet_threshold = 0.0
 
 # Seconds to ignore further detections after one fires. Without this, a single utterance
 # triggers on several consecutive frames, because the phrase spans more than one 80ms window.
