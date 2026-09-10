@@ -162,6 +162,10 @@ tests/fixtures/commands/**/*.wav
 # measured 215 of those lines.
 *.log.*
 
+# Stderr from the training phases. `*.log` does not match a `.err` name, and these are 6,000
+# lines of tqdm progress bars — not source, not evidence, and regenerated on every run.
+*.err
+
 # Wake-model training working directories. The RECIPE is tracked — splits.json, the config,
 # fetch_corpora.py, oww_compat.py — because those are what make the retrain reproducible.
 # What they produce is not:
