@@ -179,14 +179,23 @@ for mod_name, attr in TOOLS.items():
 # so a new top-level package does not silently become a "missing dependency".
 _root = Path(__file__).resolve().parents[1]
 
-# BOTH files. `requirements-rag.txt` is the optional vector-store extra, and reading only the
-# main file reported `langchain_chroma` — declared there, used by tools/vector_db.py — as an
+# ALL THREE files. `requirements-rag.txt` is the optional vector-store extra, and reading only
+# the main file reported `langchain_chroma` — declared there, used by tools/vector_db.py — as an
 # undeclared dependency. A check that cries wolf about a package that IS declared gets muted,
 # and a muted check is the one that misses the real one next to it.
+#
+# **Then it happened again.** `requirements-training.txt` arrived on 2026-09-08 and this tuple
+# was not updated, so the check went red about torch, torchaudio, soundfile and acoustics —
+# all four declared there, with pins and reasons, and all four imported by
+# `training/oww_compat.py` exactly as intended. Same bug as the rag one, one file later.
+#
+# The split is deliberate and must stay: torch alone is ~2.5 GB and the assistant's RUNTIME
+# needs none of it, so training deps do not belong in requirements.txt. Which means the fix is
+# for this check to read every requirements file, not for the training extras to move.
+# Globbed rather than listed, so the next extra is read the day it is written.
 _reqs = "\n".join(
-    (_root / name).read_text(encoding="utf-8")
-    for name in ("requirements.txt", "requirements-rag.txt")
-    if (_root / name).exists())
+    path.read_text(encoding="utf-8")
+    for path in sorted(_root.glob("requirements*.txt")))
 
 def _norm_dist(name: str) -> str:
     """pip is case-insensitive and treats `-` and `_` as the same character."""
@@ -243,7 +252,23 @@ _IMPORT_TO_DIST = {
 # declared two lines above it. A synonym table is a second copy of the truth; keep it minimal
 # and let the normal rule do the work.
 
-_local = {p.name for p in _root.iterdir() if p.is_dir() and (p / "__init__.py").exists()}
+# A local package is any top-level directory this repo can import from, and `__init__.py` is
+# NOT what decides that. `training/` has none, yet `training/train_wake.py:359` does
+#
+#     from training.oww_compat import patch, patch_torch_load, ...
+#
+# which resolves because line 58 puts the repo root on sys.path and Python 3 treats the
+# directory as a namespace package. Requiring `__init__.py` reported `training` — this repo's
+# own code — as an undeclared third-party dependency.
+#
+# Adding an empty `training/__init__.py` would also have silenced it, and was not done:
+# train_wake.py drives openWakeWord through `runpy`, and making the directory a regular
+# package changes how a module inside it resolves when run that way. Adding a file to
+# production code to satisfy a checker is the wrong direction — the checker was wrong.
+#
+# `hud/` and `raw_downloads/` are in the same position and would have tripped this next.
+_local = {p.name for p in _root.iterdir()
+          if p.is_dir() and not p.name.startswith(".") and any(p.glob("*.py"))}
 _local |= {p.stem for p in _root.glob("*.py")}
 
 # Parsed with `ast`, NOT with a regex over the source. The regex version was written first and
@@ -252,12 +277,27 @@ _local |= {p.stem for p in _root.glob("*.py")}
 # as undeclared dependencies. A module name is a thing the parser knows and a pattern only
 # guesses at, and in a codebase whose comments outnumber its statements the guess loses.
 _undeclared: set[str] = set()
+
+# A file that does not parse is a file that declares nothing, and `except SyntaxError: continue`
+# made that INVISIBLE — the scan skipped it and the check stayed green, so a module could hide
+# from the dependency sweep entirely by failing to parse.
+#
+# The way that actually happens here is a BOM. `Set-Content -Encoding utf8` on Windows
+# PowerShell 5.1 — the shell this repo is driven from — writes UTF-8 **with** a BOM, and
+# reading that back as plain "utf-8" leaves U+FEFF as the first character:
+#
+#     SyntaxError: invalid non-printable character U+FEFF
+#
+# So `utf-8-sig` is used to READ (it strips a BOM when there is one and is plain utf-8 when
+# there is not), and anything that still refuses to parse is REPORTED rather than skipped.
+_unparseable: list[str] = []
 for _py in sorted(_root.glob("*.py")) + sorted(_root.glob("*/*.py")):
     if "verify_" in _py.name or _py.parent.name in ("tests", "raw_downloads", "media"):
         continue
     try:
-        _tree = ast.parse(_py.read_text(encoding="utf-8", errors="replace"))
-    except SyntaxError:
+        _tree = ast.parse(_py.read_text(encoding="utf-8-sig", errors="replace"))
+    except SyntaxError as _exc:
+        _unparseable.append(f"{_py.relative_to(_root)} ({_exc.msg})")
         continue
     _mods: set[str] = set()
     for _node in ast.walk(_tree):
@@ -271,6 +311,11 @@ for _py in sorted(_root.glob("*.py")) + sorted(_root.glob("*/*.py")):
         _dist = _IMPORT_TO_DIST.get(_mod, _mod).lower().replace("-", "_")
         if _dist not in _declared:
             _undeclared.add(f"{_mod} (in {_py.relative_to(_root)})")
+
+check(not _unparseable,
+      "every scanned .py file parses, so none can hide from the dependency sweep",
+      "" if not _unparseable else
+      f"WOULD NOT PARSE, so its imports were never checked: {', '.join(_unparseable[:4])}")
 
 check(not _undeclared,
       "every third-party module the code imports is declared in requirements.txt",

@@ -122,11 +122,31 @@ def _free_paths():
     """
     try:
         from engine.core import Engine                                 # noqa: PLC0415
+        from orchestrator import file_intent, launch_intent, note_intent  # noqa: PLC0415
         from orchestrator.instant import Router as InstantRouter       # noqa: PLC0415
         from orchestrator.route_hint import look_up                    # noqa: PLC0415
     except Exception:                                                  # noqa: BLE001
         return None, None, frozenset()
-    return look_up, InstantRouter(), Engine.FREE_INTENTS
+
+    # **The router must be built the way `Engine` builds it, or this annotation is fiction.**
+    #
+    # This used to be a bare `InstantRouter()`. `engine/core.py:1011` passes three planners,
+    # and without them `instant.route` cannot recognise a note, a file request or a launch —
+    # so every one of them was annotated `reachable=True` and scored against the router.
+    #
+    # Measured in the 2026-09-10 gym: seventeen `os` rows, eleven of them ordinary vault
+    # notes that `note_intent` answers for nothing. They were counted as router errors, and
+    # the conclusion drawn from them was that the ROUTER's prompt needed rewriting — a change
+    # that would have moved free work onto a paid path to fix a number this function got wrong.
+    planners = {"note": note_intent.look_up, "file": file_intent.look_up,
+                "launch": launch_intent.look_up}
+
+    # `Engine.FREE_INTENTS` is not the whole free set either. A dismissal is handled at
+    # `engine/core.py:1050` by its own branch ABOVE the FREE_INTENTS check, so "sleep" never
+    # appears in that frozenset — and "Go to sleep." was therefore scored as a routing miss.
+    # The planner keys are read off the dict rather than retyped, so the two cannot drift.
+    free = frozenset(Engine.FREE_INTENTS) | {Engine.SLEEP_ROUTE} | set(planners)
+    return look_up, InstantRouter(planners=planners), free
 
 
 def reachable_today(utterance: str, paths=None) -> tuple[bool, str]:

@@ -140,6 +140,18 @@ NOTE_WORDS: tuple[str, ...] = ("note", "notes")
 FILLER: frozenset[str] = frozenset({
     "please", "can", "could", "would", "you", "u", "hey", "ok", "okay", "so", "now",
     "just", "quickly", "quick", "for", "me", "lets", "let", "will", "and", "then",
+    # **"no" is here and it is also in CANCELS, and that is not a contradiction.**
+    #
+    # Measured in the 2026-09-10 router gym: "No. Can you save a note to the vault for me?"
+    # reached the paid router. The leading "no" is LB rejecting the previous answer and then
+    # asking for something — the reject is over by the time the request starts.
+    #
+    # The two lists never meet. `is_cancel` matches against `_CANCEL_FILLER`, not this set,
+    # and it is END-ANCHORED (`_is_bare`): a bare "no" IS the utterance and still cancels.
+    # A "no" with a request after it is not bare, so it was never a cancel to begin with.
+    # Stripping it here cannot reach the cancel path, and the empty remainder a bare "no"
+    # leaves matches no opener, so `look_up` still returns None for it.
+    "no",
 })
 
 # Indirect openings — the polite preamble LB actually uses in front of the imperative.
@@ -174,6 +186,17 @@ _PREAMBLE: tuple[str, ...] = (
     # "show me" is deliberately NOT here for that same reason: `_LIST` already carries "show me
     # my notes" and "show me the notes" in full, and a preamble would eat their openers.
     "tell me",
+
+    # **The subjectless forms, added 2026-09-10.** Dictated speech drops the pronoun, and the
+    # gym caught it: "and need you to save my thoughts to the vault." "and" is already FILLER,
+    # so what reaches the preamble is "need you to save…" — and the table had only the "i…"
+    # forms above it.
+    #
+    # Safe for the reason the module docstring gives about `_PREAMBLE` generally: stripping a
+    # preamble does not match anything on its own. An opener still has to match what is left,
+    # so a preamble that is too generous fails closed. "need to check the voltage" strips to
+    # "check the voltage", which is in no opener table, and the utterance routes as it did.
+    "need to", "need you to",
 )
 
 # "…that you have for me", "…you have saved for me". LB describing the LISTENER'S possession
@@ -264,6 +287,30 @@ _NEW: tuple[str, ...] = (
     "write down", "jot this down", "jot that down", "jot down", "jot this", "save a note",
     "save this note", "save a new note", "add a note", "add a new note", "log this",
     "log that", "put this in my notes", "put that in my notes", "keep a note",
+
+    # --- added 2026-09-10, off the router gym's own failures -------------------------------
+    #
+    # Three shapes reached the PAID router because the table had the verb but not this form
+    # of it. All three are imperatives that name the object, so anchor 1 still refuses the
+    # question forms ("how do I write a note in Python" opens with "how").
+    #
+    # 1. "write a note" — the table had "write this down" and "write down" but never
+    #    "write a note", so "I want to write a note." missed on the noun form of a verb it
+    #    already knew.
+    "write a note", "write a new note",
+    #
+    # 2. The indirect object. "I need you to save me a note." reduces to "save me a note",
+    #    and "me" is only stripped from the FRONT — `_drop_filler` runs before the opener is
+    #    found and cannot reach a word sitting inside the phrase. Listed per verb rather than
+    #    by teaching the matcher to skip an infix "me", because a skipped word is a rule that
+    #    applies everywhere and these are four fixed phrases.
+    "save me a note", "write me a note", "make me a note", "take me a note",
+    #
+    # 3. "save my thoughts" — LB's own words, 2026-09-10: "and need you to save my thoughts
+    #    to the vault." NOT solved by adding "thoughts" to NOTE_WORDS: that set is anchor 2,
+    #    and widening it would make "delete my thoughts" and "read my thoughts" fire on a
+    #    word he uses conversationally. As an opener it stays confined to dictating a new one.
+    "save my thoughts", "save my thought",
 )
 
 # Starting from the FOLDER rather than from the note — "make a new folder called amp board and

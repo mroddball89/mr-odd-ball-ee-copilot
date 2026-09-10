@@ -83,6 +83,25 @@ DATA_DIR = REPO_ROOT / "media" / "data"
 DEFAULT_MODEL = os.environ.get("ODDBALL_LOCAL_ROUTER", "").strip() or "qwen2.5:1.5b"
 
 
+# Routes that are spelled differently and do the same thing. Kept as a list of SETS rather than
+# a flat alias map, so adding a future pair does not require picking which name is canonical —
+# and so this file never has to claim one of them is "the real" route.
+#
+# Deliberately only the one pair. Every other route reaches a different agent with different
+# tools, and folding any of them together would hide a real failure: `hardware` -> `firmware`
+# is a wrong answer even though both are engineering, because they call different modules.
+_EQUIVALENT: tuple[frozenset[str], ...] = (
+    frozenset({"persona", "general"}),
+)
+
+
+def _same_destination(got: str, expected: str) -> bool:
+    """True when both labels reach the same agent. Exact match, or a known equivalence."""
+    if got == expected:
+        return True
+    return any(got in group and expected in group for group in _EQUIVALENT)
+
+
 class Result:
     """One replayed utterance: what was expected, what came back, and what it cost."""
 
@@ -96,8 +115,24 @@ class Result:
 
     @property
     def ok(self) -> bool:
-        """Agreed with the label. False for a crash too — but `crashed` distinguishes them."""
-        return not self.error and self.got == self.example.route
+        """Agreed with the label. False for a crash too — but `crashed` distinguishes them.
+
+        **Scored on where the turn LANDS, not on the word.** `engine/core.py:1252` ends with
+
+            # PERSONA and GENERAL both go to the character.
+            from agents.persona_agent import run_persona_agent
+            return split(run_persona_agent(text), route=route.value)
+
+        so the two routes are one branch: same module, same function, same spoken answer.
+        `tools/verify_agents.py` says the same thing from the other side, skipping GENERAL in
+        its dispatch sweep because it "falls through to persona by design".
+
+        Counting them as different cost the 2026-09-10 gym eighteen of its forty-four headline
+        errors — a fifth of the whole corpus scored wrong for a distinction the user cannot
+        hear. A router metric exists to predict what LB experiences; where two labels produce
+        one behaviour, one behaviour is what gets measured.
+        """
+        return not self.error and _same_destination(self.got, self.example.route)
 
     @property
     def crashed(self) -> bool:
@@ -245,9 +280,17 @@ def report(results: list[Result], model: str) -> int:
         print("\n  Where it sent them (rows = the label, columns = what Qwen said):\n")
         for expected in sorted(confusion):
             total = sum(confusion[expected].values())
-            hits = confusion[expected][expected]
-            spread = "  ".join(f"{got}:{n}" for got, n in confusion[expected].most_common()
-                               if got != expected)
+            # Counted with the same rule the headline uses, or the table contradicts the
+            # number above it — `persona 2/20` printed under a headline that scores those
+            # eighteen as agreeing is a report arguing with itself.
+            hits = sum(n for got, n in confusion[expected].items()
+                       if _same_destination(got, expected))
+            # The spread still lists an equivalent route, marked, because the raw confusion is
+            # the diagnostic: hiding it would make the pair invisible the day it stops being
+            # harmless.
+            spread = "  ".join(
+                f"{got}:{n}{'=' if got != expected and _same_destination(got, expected) else ''}"
+                for got, n in confusion[expected].most_common() if got != expected)
             print(f"    {expected:<10} {hits:>3}/{total:<3}  {spread}")
 
     disagreements = [r for r in scored + seeds if not r.ok and not r.crashed]
