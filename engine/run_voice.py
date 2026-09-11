@@ -88,6 +88,27 @@ def _warm_embeddings() -> None:
              time.monotonic() - began)
 
 
+def _warm_local_router() -> None:
+    """Load the routing model into RAM now, so the first QUESTION does not pay for it.
+
+    Measured in the 2026-09-10 gym: 468ms median once resident, 7,563ms on the cold call.
+    `ROUTER_DEADLINE_S` is 20s, so a cold load does not miss the deadline and fall through to
+    GENERAL — it simply makes the first question of the day take sixteen times longer than
+    every one after it, which is the difference LB would actually notice.
+
+    Imported inside the function for the same reason `_warm_embeddings` does it: a harness that
+    imports `engine/run_voice` should not have to reach Ollama.
+
+    `local_router.warm()` returns None and logs rather than raising when
+    `ODDBALL_LOCAL_ROUTER` is unset or `ollama serve` is not up, so this is a no-op on a box
+    with the switch off and a warning on a box where it is on and Ollama is not — never a
+    reason the rig fails to start.
+    """
+    from orchestrator.local_router import warm                        # noqa: PLC0415
+
+    warm()
+
+
 def _listen_thread(
     detector: WakeDetector,
     device: str,
@@ -529,6 +550,13 @@ async def main(argv: list[str] | None = None) -> int:
     # until LB asks a corpus question, which is seconds away at the very best. `warm()` never
     # raises, so a machine that cannot load it starts exactly as it did before.
     threading.Thread(target=_warm_embeddings, name="warm-embeddings", daemon=True).start()
+
+    # The routing model, on its own daemon thread for the same reasons — and a SECOND thread
+    # rather than a queue behind the first, because the two loads barely compete: warming the
+    # router is a POST that Ollama services in its own process, so this thread spends its life
+    # waiting on a socket while the embedding thread is the one doing work here. Sequencing them
+    # would add the router's load time to the embedding's for no benefit.
+    threading.Thread(target=_warm_local_router, name="warm-local-router", daemon=True).start()
 
     if full_turn:
         listen_cfg, stt_cfg = cfg["listen"], cfg["stt"]
