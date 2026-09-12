@@ -2191,21 +2191,30 @@ def _speakable_question(item, options: bool = True) -> str:
                  reading four of them again is about twenty seconds of speech at the measured
                  160 wpm, and it would arrive just as he was about to answer.
     """
-    text = getattr(item, "question", "") or ""
+    from orchestrator.math_notation import to_speech
+
+    # Through `to_speech` because Piper reads "sin" as the English noun, so a trig question
+    # arrived as a sentence about wrongdoing. LB, 2026-09-12: the questions were hard to
+    # follow "because of how it's displayed and spoken". This is the spoken half.
+    text = to_speech(getattr(item, "question", "") or "")
     choices = getattr(item, "choices", {}) or {}
     if not choices or not options:
         return text
-    spoken = ". ".join(f"{letter}, {body}" for letter, body in sorted(choices.items()))
+    spoken = ". ".join(f"{letter}, {to_speech(body)}" for letter, body in sorted(choices.items()))
     return f"{text} Your options are: {spoken}."
 
 
 def _question_card(item, scope: str = "") -> str:
     """The question as Markdown, for the chat panel."""
-    lines = [f"**Q:** {getattr(item, 'question', '')}"]
+    from orchestrator.math_notation import to_unicode
+
+    # `to_unicode` BEFORE the markdown wrapper, never after: it converts "*" between operands
+    # and the "**Q:**" added here is emphasis, not multiplication.
+    lines = [f"**Q:** {to_unicode(getattr(item, 'question', ''))}"]
     choices = getattr(item, "choices", {}) or {}
     if choices:
         lines.append("")
-        lines += [f"- **{letter})** {body}" for letter, body in sorted(choices.items())]
+        lines += [f"- **{letter})** {to_unicode(body)}" for letter, body in sorted(choices.items())]
 
     # Where it came from, because a question LB thinks is wrong is one he will want to check
     # against the paper — and "page 4 of the review packet" is what makes that a ten-second job
@@ -2227,8 +2236,13 @@ def _mark_title(result) -> str:
 
 def _marking_card(item, result) -> str:
     """What was asked, what the answer was, and how it was marked — as Markdown."""
-    lines = [f"**Q:** {getattr(item, 'question', '')}", "",
-             f"**Answer:** {getattr(item, 'answer', '')}", "",
+    from orchestrator.math_notation import to_unicode
+
+    # The ANSWER matters as much as the question here — the trig deck stores one as
+    # "0 < sin(t) < √2√(1 - cos(t)) < t", which is the line LB is checking his own work
+    # against.
+    lines = [f"**Q:** {to_unicode(getattr(item, 'question', ''))}", "",
+             f"**Answer:** {to_unicode(getattr(item, 'answer', ''))}", "",
              getattr(result, "why", "")]
     if getattr(result, "verdict", "") != "correct":
         lines += ["", "*Say 'explain that' for the working.*"]
